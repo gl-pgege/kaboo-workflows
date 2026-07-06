@@ -10,10 +10,10 @@ import asyncio
 
 from strands import Agent, tool
 
-from strands_compose.config import load_session, resolve_infra
-from strands_compose.config.schema import AppConfig
-from strands_compose.types import EventType
-from strands_compose.wire import make_event_queue
+from kaboo_workflows.config import load_session, resolve_infra
+from kaboo_workflows.config.schema import AppConfig
+from kaboo_workflows.types import EventType
+from kaboo_workflows.wire import make_event_queue
 from tests.factories import agent_def
 from tests.fakes import BoomModel, FakeModel, ToolThenTextModel
 

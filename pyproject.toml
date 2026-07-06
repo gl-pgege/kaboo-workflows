@@ -1,7 +1,7 @@
 [project]
-name = "strands-compose"
+name = "kaboo-workflows"
 version = "0.9.0"
-description = "Zero-code YAML-driven agent orchestration over strands-agents"
+description = "YAML-driven multi-agent orchestration with AG-UI/CopilotKit support, built on strands-agents"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.scripts]
-strands-compose = "strands_compose.cli:main"
+kaboo-workflows = "kaboo_workflows.cli:main"
 
 [project.optional-dependencies]
 agentcore-memory = [
@@ -73,17 +73,17 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/strands_compose"]
+packages = ["src/kaboo_workflows"]
 
 [tool.bandit]
-targets = ["src/strands_compose"]
+targets = ["src/kaboo_workflows"]
 
 [tool.bandit.assert_used]
 skips = ['*_test.py', '*/test_*.py']
 
 [tool.coverage.run]
 branch = true
-source = ["src/strands_compose"]
+source = ["src/kaboo_workflows"]
 omit = ["__main__.py"]
 
 [tool.pytest.ini_options]

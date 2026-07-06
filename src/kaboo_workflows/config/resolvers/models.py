@@ -20,7 +20,7 @@ def resolve_model(model_def: ModelDef) -> Model:
     """Resolve a ModelDef to a strands model instance.
 
     Built-in providers (``"ollama"``, ``"bedrock"``, ``"openai"``,
-    ``"gemini"``) are dispatched via :func:`~strands_compose.models.create_model`.
+    ``"gemini"``) are dispatched via :func:`~kaboo_workflows.models.create_model`.
     Any other ``provider`` value is treated as an import spec
     (``module.path:ClassName``) for a custom :class:`~strands.models.Model`
     subclass.

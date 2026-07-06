@@ -33,19 +33,19 @@ def fake_runtime() -> Iterator[None]:
     with contextlib.ExitStack() as stack:
         stack.enter_context(
             patch(
-                "strands_compose.config.resolvers.config.resolve_model",
+                "kaboo_workflows.config.resolvers.config.resolve_model",
                 lambda model_def: FakeModel(),
             )
         )
         stack.enter_context(
             patch(
-                "strands_compose.config.resolvers.config.resolve_mcp_server",
+                "kaboo_workflows.config.resolvers.config.resolve_mcp_server",
                 lambda *a, **k: FakeMCPServer(),
             )
         )
         stack.enter_context(
             patch(
-                "strands_compose.config.resolvers.config.resolve_mcp_client",
+                "kaboo_workflows.config.resolvers.config.resolve_mcp_client",
                 lambda *a, **k: FakeMCPClient(),
             )
         )

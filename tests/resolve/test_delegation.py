@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from strands import Agent
 
-from strands_compose.tools import node_as_async_tool, node_as_tool
+from kaboo_workflows.tools import node_as_async_tool, node_as_tool
 from tests.fakes import FakeModel
 
 

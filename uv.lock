@@ -813,6 +813,78 @@ wheels = [
 ]
 
 [[package]]
+name = "kaboo-workflows"
+version = "0.9.0"
+source = { editable = "." }
+dependencies = [
+    { name = "mcp" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "strands-agents" },
+]
+
+[package.optional-dependencies]
+agentcore-memory = [
+    { name = "bedrock-agentcore" },
+]
+gemini = [
+    { name = "strands-agents", extra = ["gemini"] },
+]
+ollama = [
+    { name = "strands-agents", extra = ["ollama"] },
+]
+openai = [
+    { name = "strands-agents", extra = ["openai"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "bandit" },
+    { name = "commitizen" },
+    { name = "coverage" },
+    { name = "hypothesis" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "rust-just" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bedrock-agentcore", marker = "extra == 'agentcore-memory'", specifier = ">=1.4.0" },
+    { name = "mcp", specifier = ">=1.24.0" },
+    { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "pyyaml", specifier = ">=6.0.0" },
+    { name = "strands-agents", specifier = ">=1.35.0,<2.0.0" },
+    { name = "strands-agents", extras = ["gemini"], marker = "extra == 'gemini'", specifier = ">=1.35.0,<2.0.0" },
+    { name = "strands-agents", extras = ["ollama"], marker = "extra == 'ollama'", specifier = ">=1.35.0,<2.0.0" },
+    { name = "strands-agents", extras = ["openai"], marker = "extra == 'openai'", specifier = ">=1.35.0,<2.0.0" },
+]
+provides-extras = ["agentcore-memory", "ollama", "openai", "gemini"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bandit", specifier = ">=1.9.2" },
+    { name = "commitizen", specifier = ">=4.8.4" },
+    { name = "coverage", specifier = ">=7.12.0" },
+    { name = "hypothesis", specifier = ">=6.155.7" },
+    { name = "pre-commit", specifier = ">=4.3.0" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-asyncio", specifier = ">=1.2.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-mock", specifier = ">=3.15.1" },
+    { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "ruff", specifier = ">=0.14.8" },
+    { name = "rust-just", specifier = ">=1.42.4" },
+    { name = "ty", specifier = ">=0.0.29" },
+]
+
+[[package]]
 name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1801,78 +1873,6 @@ ollama = [
 openai = [
     { name = "aws-bedrock-token-generator" },
     { name = "openai" },
-]
-
-[[package]]
-name = "strands-compose"
-version = "0.9.0"
-source = { editable = "." }
-dependencies = [
-    { name = "mcp" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "strands-agents" },
-]
-
-[package.optional-dependencies]
-agentcore-memory = [
-    { name = "bedrock-agentcore" },
-]
-gemini = [
-    { name = "strands-agents", extra = ["gemini"] },
-]
-ollama = [
-    { name = "strands-agents", extra = ["ollama"] },
-]
-openai = [
-    { name = "strands-agents", extra = ["openai"] },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "bandit" },
-    { name = "commitizen" },
-    { name = "coverage" },
-    { name = "hypothesis" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-mock" },
-    { name = "pytest-xdist" },
-    { name = "ruff" },
-    { name = "rust-just" },
-    { name = "ty" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "bedrock-agentcore", marker = "extra == 'agentcore-memory'", specifier = ">=1.4.0" },
-    { name = "mcp", specifier = ">=1.24.0" },
-    { name = "pydantic", specifier = ">=2.12.5" },
-    { name = "pyyaml", specifier = ">=6.0.0" },
-    { name = "strands-agents", specifier = ">=1.35.0,<2.0.0" },
-    { name = "strands-agents", extras = ["gemini"], marker = "extra == 'gemini'", specifier = ">=1.35.0,<2.0.0" },
-    { name = "strands-agents", extras = ["ollama"], marker = "extra == 'ollama'", specifier = ">=1.35.0,<2.0.0" },
-    { name = "strands-agents", extras = ["openai"], marker = "extra == 'openai'", specifier = ">=1.35.0,<2.0.0" },
-]
-provides-extras = ["agentcore-memory", "ollama", "openai", "gemini"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "bandit", specifier = ">=1.9.2" },
-    { name = "commitizen", specifier = ">=4.8.4" },
-    { name = "coverage", specifier = ">=7.12.0" },
-    { name = "hypothesis", specifier = ">=6.155.7" },
-    { name = "pre-commit", specifier = ">=4.3.0" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "pytest-asyncio", specifier = ">=1.2.0" },
-    { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "pytest-mock", specifier = ">=3.15.1" },
-    { name = "pytest-xdist", specifier = ">=3.8.0" },
-    { name = "ruff", specifier = ">=0.14.8" },
-    { name = "rust-just", specifier = ">=1.42.4" },
-    { name = "ty", specifier = ">=0.0.29" },
 ]
 
 [[package]]

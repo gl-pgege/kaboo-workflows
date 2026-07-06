@@ -1,11 +1,11 @@
-"""Zero-dependency ANSI renderer for :class:`~strands_compose.wire.StreamEvent` objects.
+"""Zero-dependency ANSI renderer for :class:`~kaboo_workflows.wire.StreamEvent` objects.
 
 Colour codes are automatically suppressed when stdout is not a TTY
 (piped / redirected output).
 
 Usage::
 
-    from strands_compose import AnsiRenderer
+    from kaboo_workflows import AnsiRenderer
 
     renderer = AnsiRenderer()
     while (event := await queue.get()) is not None:

@@ -64,9 +64,9 @@ class StreamEvent:
     ``TOOL_START``, ``TOOL_END``, ``INTERRUPT``, ``AGENT_COMPLETE``, ``ERROR``,
     ``NODE_START``, ``NODE_STOP``, ``HANDOFF``, ``MULTIAGENT_START``,
     ``MULTIAGENT_COMPLETE``) is produced by
-    :class:`~strands_compose.hooks.EventPublisher`. Session-level events
+    :class:`~kaboo_workflows.hooks.EventPublisher`. Session-level events
     (``SESSION_START``, ``SESSION_END``) are produced by the queue/wiring
-    layer in :mod:`strands_compose.wire`.
+    layer in :mod:`kaboo_workflows.wire`.
 
     Attributes:
         type: Event type identifier (one of the :class:`EventType` values).

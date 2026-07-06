@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from strands_compose.config.loaders.helpers import (
+from kaboo_workflows.config.loaders.helpers import (
     is_fs_spec,
     make_absolute,
     merge_raw_configs,

@@ -7,7 +7,7 @@ import textwrap
 import pytest
 from strands.types.tools import AgentTool
 
-from strands_compose.tools import (
+from kaboo_workflows.tools import (
     load_tool_function,
     load_tools_from_directory,
     load_tools_from_file,

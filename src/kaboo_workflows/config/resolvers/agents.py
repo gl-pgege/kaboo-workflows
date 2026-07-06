@@ -42,7 +42,7 @@ def build_agent_from_def(
 
     This is the canonical way to construct an agent from its YAML definition.
     Used by both :func:`resolve_agents` (to build all declared agents) and
-    by :func:`~strands_compose.config.resolvers.orchestrations.builders.build_delegate`
+    by :func:`~kaboo_workflows.config.resolvers.orchestrations.builders.build_delegate`
     (to fork an agent with delegate tools).
 
     Args:

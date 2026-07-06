@@ -1,4 +1,4 @@
-"""Command-line interface for strands-compose.
+"""Command-line interface for kaboo-workflows.
 
 Exposes two sub-commands:
 
@@ -13,10 +13,10 @@ Exposes two sub-commands:
 
 Usage::
 
-    strands-compose check config.yaml
-    strands-compose check base.yaml agents.yaml   # multi-file merge
-    strands-compose load  config.yaml [--json]
-    strands-compose load  config.yaml [--quiet]
+    kaboo-workflows check config.yaml
+    kaboo-workflows check base.yaml agents.yaml   # multi-file merge
+    kaboo-workflows load  config.yaml [--json]
+    kaboo-workflows load  config.yaml [--quiet]
 
 Exit codes: ``0`` on success, ``1`` on any error or critical health failure.
 """
@@ -77,10 +77,10 @@ def _get_version() -> str:
         Version string from package metadata, or ``"unknown"`` as fallback.
     """
     try:
-        return pkg_version("strands-compose")
+        return pkg_version("kaboo-workflows")
     except Exception:
         logger.warning(
-            "package=<strands-compose> | failed to read installed version", exc_info=True
+            "package=<kaboo-workflows> | failed to read installed version", exc_info=True
         )
         return "unknown"
 
@@ -357,10 +357,10 @@ def _build_parser() -> argparse.ArgumentParser:
         Configured :class:`argparse.ArgumentParser`.
     """
     parser = argparse.ArgumentParser(
-        prog="strands-compose",
+        prog="kaboo-workflows",
         description=textwrap.dedent(
             """\
-            strands-compose — YAML-driven multi-agent orchestration
+            kaboo-workflows — YAML-driven multi-agent orchestration
 
             Sub-commands:
               check   Validate config (no side-effects, safe for CI)
@@ -420,7 +420,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    """CLI entry point for the ``strands-compose`` command.
+    """CLI entry point for the ``kaboo-workflows`` command.
 
     Dispatches to :func:`_cmd_check` or :func:`_cmd_load` based on the
     sub-command supplied on the command line.

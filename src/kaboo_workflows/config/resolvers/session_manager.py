@@ -46,7 +46,7 @@ def _resolve_bedrock_agentcore_session_manager(
     except ImportError:
         raise ImportError(
             "The 'agentcore' session manager requires the agentcore-memory extra:\n"
-            "  pip install strands-compose[agentcore-memory]"
+            "  pip install kaboo-workflows[agentcore-memory]"
         ) from None
 
     config_fields = {

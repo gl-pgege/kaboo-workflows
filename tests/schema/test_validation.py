@@ -8,9 +8,9 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from strands_compose.config.loaders import load_config
-from strands_compose.config.schema import AppConfig, MCPClientDef, OrchestrationDef
-from strands_compose.exceptions import SchemaValidationError
+from kaboo_workflows.config.loaders import load_config
+from kaboo_workflows.config.schema import AppConfig, MCPClientDef, OrchestrationDef
+from kaboo_workflows.exceptions import SchemaValidationError
 from tests.factories import agent_def, app_config
 
 # ── AppConfig cross-field validators ───────────────────────────────────────
@@ -80,7 +80,7 @@ def test_orchestration_unknown_mode_raises():
 
 
 def test_graph_edge_accepts_from_to_aliases():
-    from strands_compose.config.schema import GraphEdgeDef
+    from kaboo_workflows.config.schema import GraphEdgeDef
 
     edge = GraphEdgeDef(**{"from": "a", "to": "b"})
     assert (edge.from_agent, edge.to_agent) == ("a", "b")

@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-from strands_compose.mcp.lifecycle import MCPLifecycle
+from kaboo_workflows.mcp.lifecycle import MCPLifecycle
 from tests.fakes import FakeMCPClient, FakeMCPServer
 
 

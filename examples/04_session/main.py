@@ -16,7 +16,7 @@ STARTER = "My name is Alice and I work as a data engineer."
 
 
 def main() -> None:
-    from strands_compose import load
+    from kaboo_workflows import load
 
     resolved = load(CONFIG)
     agent = resolved.entry
@@ -41,7 +41,7 @@ def main() -> None:
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    from strands_compose import cli_errors
+    from kaboo_workflows import cli_errors
 
     with cli_errors():
         main()

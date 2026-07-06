@@ -11,8 +11,8 @@ from strands import Agent
 from strands.multiagent import Swarm
 from strands.multiagent.graph import Graph
 
-from strands_compose.config import ResolvedConfig, load
-from strands_compose.mcp import MCPLifecycle
+from kaboo_workflows.config import ResolvedConfig, load
+from kaboo_workflows.mcp import MCPLifecycle
 
 pytestmark = pytest.mark.integration
 

@@ -19,13 +19,13 @@ agents:
     hooks:
       # Two-phase tool-call cap: first violation tells the LLM to stop and write
       # a final answer; if it ignores that and calls another tool, the loop is terminated.
-      - type: strands_compose.hooks:MaxToolCallsGuard
+      - type: kaboo_workflows.hooks:MaxToolCallsGuard
         params:
           max_calls: 5
 
       # Some models inject extra tokens into tool names (e.g. "search<|x|>" instead of "search").
       # Strands can't look up the tool when that happens — this hook strips the artifacts.
-      - type: strands_compose.hooks:ToolNameSanitizer
+      - type: kaboo_workflows.hooks:ToolNameSanitizer
 
       # Custom hook — counts tool calls and prints a summary after each invocation.
       # Shows how to write and wire your own HookProvider from a local file.

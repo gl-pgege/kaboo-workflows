@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import threading
 
-from strands_compose.types import EventType, StreamEvent
-from strands_compose.wire import EventQueue
+from kaboo_workflows.types import EventType, StreamEvent
+from kaboo_workflows.wire import EventQueue
 
 
 def _event(text: str = "hi") -> StreamEvent:

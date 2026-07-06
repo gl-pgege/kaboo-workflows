@@ -14,7 +14,7 @@ def resolve_hook(hook_def: HookDef) -> HookProvider:
     ``type`` must be one of:
 
     - ``"module.path:ClassName"`` -- full import path (e.g.
-      ``"strands_compose.hooks:StopGuard"``)
+      ``"kaboo_workflows.hooks:StopGuard"``)
     - ``"./path/to/hooks.py:ClassName"`` -- file-based import
 
     No short-name aliases are supported.  Use the full import path so that
@@ -35,7 +35,7 @@ def resolve_hook(hook_def: HookDef) -> HookProvider:
     if ":" not in type_str:
         raise ValueError(
             f"Hook type {type_str!r} is not a valid import spec.\n"
-            f"Use 'module.path:ClassName' (e.g. 'strands_compose.hooks:StopGuard') "
+            f"Use 'module.path:ClassName' (e.g. 'kaboo_workflows.hooks:StopGuard') "
             f"or './path/to/file.py:ClassName'."
         )
 

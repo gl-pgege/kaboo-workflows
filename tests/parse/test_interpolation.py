@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from strands_compose.config.interpolation import interpolate, strip_anchors
+from kaboo_workflows.config.interpolation import interpolate, strip_anchors
 
 
 def test_var_resolves_from_variables_block():

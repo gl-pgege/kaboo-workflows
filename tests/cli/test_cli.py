@@ -10,12 +10,12 @@ import json
 
 import pytest
 
-from strands_compose.cli import main
+from kaboo_workflows.cli import main
 from tests.factories import write_config
 
 
 def _run(argv, monkeypatch):
-    monkeypatch.setattr("sys.argv", ["strands-compose", *argv])
+    monkeypatch.setattr("sys.argv", ["kaboo-workflows", *argv])
     main()
 
 

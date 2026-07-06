@@ -6,20 +6,20 @@ import pytest
 from strands.agent.conversation_manager import ConversationManager
 from strands.hooks import HookProvider
 
-from strands_compose.config.resolvers.conversation_manager import resolve_conversation_manager
-from strands_compose.config.resolvers.hooks import resolve_hook, resolve_hook_entry
-from strands_compose.config.schema import ConversationManagerDef, HookDef
+from kaboo_workflows.config.resolvers.conversation_manager import resolve_conversation_manager
+from kaboo_workflows.config.resolvers.hooks import resolve_hook, resolve_hook_entry
+from kaboo_workflows.config.schema import ConversationManagerDef, HookDef
 
 
 def test_builtin_hook_resolves_to_hook_provider():
     hook = resolve_hook(
-        HookDef(type="strands_compose.hooks:MaxToolCallsGuard", params={"max_calls": 5})
+        HookDef(type="kaboo_workflows.hooks:MaxToolCallsGuard", params={"max_calls": 5})
     )
     assert isinstance(hook, HookProvider)
 
 
 def test_string_entry_is_treated_as_import_spec():
-    hook = resolve_hook_entry("strands_compose.hooks:ToolNameSanitizer")
+    hook = resolve_hook_entry("kaboo_workflows.hooks:ToolNameSanitizer")
     assert isinstance(hook, HookProvider)
 
 

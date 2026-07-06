@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from strands_compose.config.resolvers import ResolvedInfra
-from strands_compose.startup.report import CheckResult, StartupError, StartupReport
-from strands_compose.startup.validator import validate_mcp
+from kaboo_workflows.config.resolvers import ResolvedInfra
+from kaboo_workflows.startup.report import CheckResult, StartupError, StartupReport
+from kaboo_workflows.startup.validator import validate_mcp
 
 
 def test_report_ok_when_no_critical_checks():

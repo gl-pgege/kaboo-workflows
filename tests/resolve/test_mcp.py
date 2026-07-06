@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from strands_compose.config.resolvers.mcp import resolve_mcp_client, resolve_mcp_server
-from strands_compose.config.schema import MCPClientDef, MCPServerDef
+from kaboo_workflows.config.resolvers.mcp import resolve_mcp_client, resolve_mcp_server
+from kaboo_workflows.config.schema import MCPClientDef, MCPServerDef
 
 
 def test_server_factory_returning_non_server_raises_type_error():

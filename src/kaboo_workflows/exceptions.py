@@ -1,10 +1,10 @@
-"""Shared exception types for strands-compose configuration errors."""
+"""Shared exception types for kaboo-workflows configuration errors."""
 
 from __future__ import annotations
 
 
 class ConfigurationError(ValueError):
-    """Raised when a strands-compose configuration is invalid.
+    """Raised when a kaboo-workflows configuration is invalid.
 
     Subclasses ``ValueError`` so callers that catch ``ValueError`` still work,
     but allows more specific ``except ConfigurationError`` handling.

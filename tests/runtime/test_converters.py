@@ -6,9 +6,9 @@ here are legitimate — but we assert on shape/fields, not exact prose.
 
 from __future__ import annotations
 
-from strands_compose.converters.openai import OpenAIStreamConverter
-from strands_compose.converters.raw import RawStreamConverter
-from strands_compose.types import EventType, StreamEvent
+from kaboo_workflows.converters.openai import OpenAIStreamConverter
+from kaboo_workflows.converters.raw import RawStreamConverter
+from kaboo_workflows.types import EventType, StreamEvent
 
 
 def _openai() -> OpenAIStreamConverter:

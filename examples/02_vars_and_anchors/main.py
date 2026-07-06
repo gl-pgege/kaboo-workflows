@@ -18,7 +18,7 @@ CONFIG = Path(__file__).parent / "config.yaml"
 
 
 def main() -> None:
-    from strands_compose import load, load_config
+    from kaboo_workflows import load, load_config
 
     # ── Show the resolved var and anchor values before running ───────────────
     config = load_config(CONFIG)
@@ -53,7 +53,7 @@ def main() -> None:
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    from strands_compose import cli_errors
+    from kaboo_workflows import cli_errors
 
     with cli_errors():
         main()

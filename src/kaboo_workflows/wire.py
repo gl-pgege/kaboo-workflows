@@ -1,13 +1,13 @@
 """Event queue wiring for streaming agent activities.
 
-:class:`~strands_compose.types.StreamEvent` is the core event produced by
-:class:`~strands_compose.hooks.EventPublisher` for all agent activity.
+:class:`~kaboo_workflows.types.StreamEvent` is the core event produced by
+:class:`~kaboo_workflows.hooks.EventPublisher` for all agent activity.
 
 :class:`EventQueue` is a thin async queue wrapper that hides the sentinel
 pattern from callers and brackets every invocation with a SESSION_START
 event (carrying the session manifest) and a SESSION_END event.
 
-:func:`make_event_queue` attaches :class:`~strands_compose.hooks.EventPublisher`
+:func:`make_event_queue` attaches :class:`~kaboo_workflows.hooks.EventPublisher`
 hooks to every agent so all per-agent events (TOKEN, REASONING, TOOL_START,
 TOOL_END, INTERRUPT, AGENT_COMPLETE, and — for Swarm/Graph — NODE_START, NODE_STOP,
 HANDOFF, MULTIAGENT_COMPLETE) flow into the shared queue.
@@ -82,7 +82,7 @@ class EventQueue:
     def _put(self, event: StreamEvent | object) -> None:
         """Place an item on the queue (non-blocking).
 
-        Used as the :class:`~strands_compose.hooks.EventPublisher` callback.
+        Used as the :class:`~kaboo_workflows.hooks.EventPublisher` callback.
         Drops the event with a warning when the queue is full.
         """
         try:
@@ -195,7 +195,7 @@ def make_event_queue(
     entry_name: str | None = None,
     session_id: str | None = None,
 ) -> EventQueue:
-    """Attach :class:`~strands_compose.hooks.EventPublisher` hooks to agents.
+    """Attach :class:`~kaboo_workflows.hooks.EventPublisher` hooks to agents.
 
     Every agent in *agents* receives an :class:`.EventPublisher` hook and a
     matching ``callback_handler`` so all per-agent event types flow into the
@@ -204,7 +204,7 @@ def make_event_queue(
     HANDOFF, and MULTIAGENT_COMPLETE events.
 
     This function does **not** emit SESSION_START.  Callers that own a
-    :class:`~strands_compose.types.SessionManifest` should call
+    :class:`~kaboo_workflows.types.SessionManifest` should call
     :meth:`EventQueue.emit_session_start` themselves; the common
     :class:`ResolvedConfig` workflow does this for you via
     :meth:`ResolvedConfig.wire_event_queue`.

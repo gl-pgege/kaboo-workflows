@@ -9,5 +9,5 @@ test-coverage cov_fail_under="70":
 
 # run mutation testing (requires: pip install mutmut)
 [group('test')]
-test-mutation module="src/strands_compose/hooks/event_publisher.py":
+test-mutation module="src/kaboo_workflows/hooks/event_publisher.py":
     uv run mutmut run --paths-to-mutate={{module}} --tests-dir={{TESTS}} --runner="python -m pytest -x -q"

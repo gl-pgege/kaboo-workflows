@@ -6,13 +6,13 @@ import pytest
 from strands.session import FileSessionManager
 from strands.session.session_manager import SessionManager
 
-from strands_compose.config import load_session, resolve_infra
-from strands_compose.config.resolvers.session_manager import (
+from kaboo_workflows.config import load_session, resolve_infra
+from kaboo_workflows.config.resolvers.session_manager import (
     resolve_leaf_session_manager,
     resolve_session_manager,
 )
-from strands_compose.config.schema import AppConfig, SessionManagerDef
-from strands_compose.manifest import build_manifest
+from kaboo_workflows.config.schema import AppConfig, SessionManagerDef
+from kaboo_workflows.manifest import build_manifest
 from tests.factories import agent_def, model_def
 
 

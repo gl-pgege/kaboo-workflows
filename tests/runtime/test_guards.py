@@ -15,7 +15,7 @@ from strands.hooks import HookRegistry
 from strands.hooks.events import AfterModelCallEvent, BeforeToolCallEvent
 from strands.types.content import Message
 
-from strands_compose.hooks import MaxToolCallsGuard, StopGuard, ToolNameSanitizer
+from kaboo_workflows.hooks import MaxToolCallsGuard, StopGuard, ToolNameSanitizer
 from tests.fakes import FakeModel
 
 

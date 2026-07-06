@@ -1,4 +1,4 @@
-"""strands-compose — Zero-code YAML-driven agent orchestration over strands-agents."""
+"""kaboo-workflows — YAML-driven multi-agent orchestration with AG-UI/CopilotKit support."""
 
 from __future__ import annotations
 

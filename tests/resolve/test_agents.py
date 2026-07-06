@@ -8,9 +8,9 @@ from __future__ import annotations
 import pytest
 from strands import Agent
 
-from strands_compose.config.resolvers.agents import build_agent_from_def, resolve_agents
-from strands_compose.config.schema import SessionManagerDef
-from strands_compose.exceptions import ConfigurationError
+from kaboo_workflows.config.resolvers.agents import build_agent_from_def, resolve_agents
+from kaboo_workflows.config.schema import SessionManagerDef
+from kaboo_workflows.exceptions import ConfigurationError
 from tests.factories import agent_def
 from tests.fakes import FakeModel
 

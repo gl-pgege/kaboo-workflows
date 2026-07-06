@@ -1,6 +1,6 @@
 """Build session manifests from resolved runtime objects.
 
-A :class:`~strands_compose.types.SessionManifest` describes the wired session
+A :class:`~kaboo_workflows.types.SessionManifest` describes the wired session
 topology, model/provider info, and storage locations.  It is constructed from
 runtime ``strands.Agent``, ``Swarm``, ``Graph``, and ``SessionManager``
 instances at invocation time and serialised into the SESSION_START event

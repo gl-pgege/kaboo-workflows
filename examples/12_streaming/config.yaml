@@ -2,7 +2,7 @@
 #
 # A delegate orchestration with three agents: researcher, analyst, coordinator.
 # The example shows how to stream all agent lifecycle events in real time
-# using wire_event_queue() from strands_compose.
+# using wire_event_queue() from kaboo_workflows.
 #
 # Run:
 #   uv run python examples/12_streaming/main.py
@@ -16,7 +16,7 @@ agents:
   researcher:
     model: default
     hooks:
-      - type: strands_compose.hooks:ToolNameSanitizer
+      - type: kaboo_workflows.hooks:ToolNameSanitizer
     system_prompt: |
       You are a research analyst. Given a topic:
         1. Identify the 5-7 most relevant facts.
@@ -26,7 +26,7 @@ agents:
   analyst:
     model: default
     hooks:
-      - type: strands_compose.hooks:ToolNameSanitizer
+      - type: kaboo_workflows.hooks:ToolNameSanitizer
     system_prompt: |
       You are an insights analyst. Given a research briefing:
         1. Surface 2-3 actionable insights or emerging trends.
@@ -36,7 +36,7 @@ agents:
   coordinator:
     model: default
     hooks:
-      - type: strands_compose.hooks:ToolNameSanitizer
+      - type: kaboo_workflows.hooks:ToolNameSanitizer
     system_prompt: |
       You orchestrate a two-step research -> analysis.
       For every request:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from strands.models import Model
 
-from strands_compose.config.resolvers.models import resolve_model
+from kaboo_workflows.config.resolvers.models import resolve_model
 from tests.factories import model_def
 
 
@@ -25,7 +25,7 @@ def test_custom_provider_not_a_model_subclass_raises():
 
 
 def test_create_model_unknown_provider_raises():
-    from strands_compose.models import create_model
+    from kaboo_workflows.models import create_model
 
     with pytest.raises(ValueError, match="provider"):
         create_model("nonesuch", "m")

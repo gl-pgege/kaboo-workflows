@@ -15,7 +15,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from strands_compose import types
+from kaboo_workflows import types
 
 BASELINE = Path(__file__).parent / "shape_baseline.json"
 

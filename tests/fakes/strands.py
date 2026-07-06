@@ -13,7 +13,7 @@ from typing import Any
 
 from strands.models import Model
 
-from strands_compose.mcp.server import MCPServer
+from kaboo_workflows.mcp.server import MCPServer
 
 
 class FakeModel(Model):

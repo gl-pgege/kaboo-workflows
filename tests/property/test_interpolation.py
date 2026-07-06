@@ -5,7 +5,7 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
-from strands_compose.config.interpolation import interpolate
+from kaboo_workflows.config.interpolation import interpolate
 
 # Identifier-like variable names (no ':' / '}' / '$' which have interpolation meaning).
 _names = st.text(

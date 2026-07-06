@@ -10,7 +10,7 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-from strands_compose.config.schema import (
+from kaboo_workflows.config.schema import (
     AgentDef,
     AppConfig,
     DelegateConnectionDef,

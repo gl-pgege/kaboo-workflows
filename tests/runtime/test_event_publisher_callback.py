@@ -6,8 +6,8 @@ We drive it directly and observe the emitted StreamEvents — no private handler
 
 from __future__ import annotations
 
-from strands_compose.hooks import EventPublisher
-from strands_compose.types import EventType
+from kaboo_workflows.hooks import EventPublisher
+from kaboo_workflows.types import EventType
 
 
 def _publisher() -> tuple[EventPublisher, list]:

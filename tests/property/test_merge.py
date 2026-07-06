@@ -6,7 +6,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from strands_compose.config.loaders.helpers import merge_raw_configs
+from kaboo_workflows.config.loaders.helpers import merge_raw_configs
 
 _names = st.text(alphabet="abcdefghijklmnopqrstuvwxyz_", min_size=1, max_size=8)
 

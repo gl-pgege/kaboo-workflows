@@ -7,8 +7,8 @@ set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 
 # VARIABLES
 
-PACKAGE    := "strands-compose"
-SOURCES    := "src/strands_compose"
+PACKAGE    := "kaboo-workflows"
+SOURCES    := "src/kaboo_workflows"
 TESTS      := "tests"
 EXAMPLES   := "examples"
 

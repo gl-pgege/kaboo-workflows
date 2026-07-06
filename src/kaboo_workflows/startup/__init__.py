@@ -2,7 +2,7 @@
 
 Usage::
 
-    from strands_compose.startup import validate_mcp, StartupReport
+    from kaboo_workflows.startup import validate_mcp, StartupReport
 
     report = await validate_mcp(infra)  # or validate_mcp(resolved_config)
     report.print_summary()

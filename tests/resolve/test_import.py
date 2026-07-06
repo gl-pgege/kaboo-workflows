@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from strands_compose.exceptions import ImportResolutionError
-from strands_compose.utils import load_object
+from kaboo_workflows.exceptions import ImportResolutionError
+from kaboo_workflows.utils import load_object
 
 
 def test_loads_object_from_module_spec():
-    obj = load_object("strands_compose.hooks:StopGuard")
+    obj = load_object("kaboo_workflows.hooks:StopGuard")
     assert obj.__name__ == "StopGuard"
 
 
@@ -21,7 +21,7 @@ def test_loads_object_from_file_spec(tmp_path):
 
 def test_spec_without_colon_raises_import_resolution_error():
     with pytest.raises(ImportResolutionError):
-        load_object("strands_compose.hooks")
+        load_object("kaboo_workflows.hooks")
 
 
 def test_missing_module_raises_import_resolution_error():
@@ -31,7 +31,7 @@ def test_missing_module_raises_import_resolution_error():
 
 def test_missing_attribute_raises_import_resolution_error():
     with pytest.raises(ImportResolutionError):
-        load_object("strands_compose.hooks:DoesNotExist")
+        load_object("kaboo_workflows.hooks:DoesNotExist")
 
 
 def test_missing_file_attribute_raises_import_resolution_error(tmp_path):

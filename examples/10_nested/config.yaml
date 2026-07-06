@@ -15,9 +15,9 @@ models:
     model_id: openai.gpt-oss-20b-1:0
 
 x-hooks: &hooks
-  - type: strands_compose.hooks:MaxToolCallsGuard
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
     params: { max_calls: 20 }
-  - type: strands_compose.hooks:ToolNameSanitizer
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
 
 agents:
   # ── Content production swarm agents ──────────────────────────────────────

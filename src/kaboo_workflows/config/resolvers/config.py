@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class ResolvedConfig:
     """Fully resolved config — lifecycle started, agents ready.
 
-    After calling :func:`~strands_compose.config.loaders.load`, use
+    After calling :func:`~kaboo_workflows.config.loaders.load`, use
     :meth:`wire_event_queue` to set up event streaming::
 
         resolved = load("config.yaml")
@@ -51,11 +51,11 @@ class ResolvedConfig:
 
         This is the recommended way to set up event streaming.  It:
 
-        1. Builds a :class:`~strands_compose.types.SessionManifest` from the
+        1. Builds a :class:`~kaboo_workflows.types.SessionManifest` from the
            resolved runtime objects.
         2. Wires every agent (and orchestrator) with an
-           :class:`~strands_compose.hooks.EventPublisher` via
-           :func:`~strands_compose.wire.make_event_queue`.
+           :class:`~kaboo_workflows.hooks.EventPublisher` via
+           :func:`~kaboo_workflows.wire.make_event_queue`.
         3. Emits a SESSION_START event carrying the manifest as the first
            event on the queue.
 
@@ -70,7 +70,7 @@ class ResolvedConfig:
             tool_labels: Optional tool name → display label mapping.
 
         Returns:
-            A ready-to-use :class:`~strands_compose.wire.EventQueue` with
+            A ready-to-use :class:`~kaboo_workflows.wire.EventQueue` with
             SESSION_START already on it.
 
         Raises:
@@ -99,7 +99,7 @@ class ResolvedInfra:
     orchestration at session time, from ``config.session_manager`` (the global
     def) plus ``effective_session_id`` computed by ``load_session``.
 
-    Use :func:`~strands_compose.config.loaders.load` for a fully
+    Use :func:`~kaboo_workflows.config.loaders.load` for a fully
     activated system, or manually::
 
         infra = resolve_infra(config)

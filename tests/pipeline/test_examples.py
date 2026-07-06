@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from strands_compose.config import ResolvedConfig, load
+from kaboo_workflows.config import ResolvedConfig, load
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES_DIR = REPO_ROOT / "examples"

@@ -14,10 +14,10 @@ from strands.agent.agent_result import AgentResult
 from strands.telemetry.metrics import EventLoopMetrics
 from strands.types.content import Message
 
-from strands_compose.config import load_session, resolve_infra
-from strands_compose.config.schema import AppConfig
-from strands_compose.tools import serialize_multiagent_result
-from strands_compose.tools.extractors import extract_last_message, extract_text
+from kaboo_workflows.config import load_session, resolve_infra
+from kaboo_workflows.config.schema import AppConfig
+from kaboo_workflows.tools import serialize_multiagent_result
+from kaboo_workflows.tools.extractors import extract_last_message, extract_text
 from tests.factories import (
     agent_def,
     graph_orchestration,

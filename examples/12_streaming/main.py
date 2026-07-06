@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from strands_compose import AnsiRenderer, cli_errors, load
+from kaboo_workflows import AnsiRenderer, cli_errors, load
 
 CONFIG = Path(__file__).parent / "config.yaml"
 STARTER = "Analyse the impact of large language models on software engineering."

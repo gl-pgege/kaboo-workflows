@@ -5,7 +5,7 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
-from strands_compose.config.loaders.helpers import sanitize_name
+from kaboo_workflows.config.loaders.helpers import sanitize_name
 
 _SAFE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 

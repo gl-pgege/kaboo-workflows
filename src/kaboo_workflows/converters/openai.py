@@ -26,7 +26,7 @@ class _ToolCallFrame:
 
 
 class OpenAIStreamConverter(StreamConverter):
-    """Stateful converter from :class:`~strands_compose.wire.StreamEvent` to OpenAI ``chat.completion.chunk`` dicts.
+    """Stateful converter from :class:`~kaboo_workflows.wire.StreamEvent` to OpenAI ``chat.completion.chunk`` dicts.
 
     Targets Open WebUI and LibreChat.  Translates strands events into the
     OpenAI Chat Completions streaming protocol (v1) with reasoning extensions
@@ -102,7 +102,7 @@ class OpenAIStreamConverter(StreamConverter):
     # ── Public API ────────────────────────────────────────────────────────────
 
     def convert(self, event: StreamEvent) -> list[dict[str, Any]]:
-        """Convert one :class:`~strands_compose.wire.StreamEvent` into OpenAI chunk(s).
+        """Convert one :class:`~kaboo_workflows.wire.StreamEvent` into OpenAI chunk(s).
 
         Args:
             event: The event to convert.

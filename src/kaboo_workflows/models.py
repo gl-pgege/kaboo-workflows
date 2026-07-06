@@ -36,7 +36,7 @@ def create_model(provider: str, model_id: str, **params: Any) -> Model:
             except ImportError:
                 raise ImportError(
                     "The 'ollama' provider requires the ollama extra:\n"
-                    "  pip install strands-compose[ollama]\n"
+                    "  pip install kaboo-workflows[ollama]\n"
                     "Or install directly: pip install strands-agents[ollama]"
                 ) from None
             return OllamaModel(model_id=model_id, **params)
@@ -47,7 +47,7 @@ def create_model(provider: str, model_id: str, **params: Any) -> Model:
             except ImportError:
                 raise ImportError(
                     "The 'openai' provider requires the openai extra:\n"
-                    "  pip install strands-compose[openai]\n"
+                    "  pip install kaboo-workflows[openai]\n"
                     "Or install directly: pip install strands-agents[openai]"
                 ) from None
             return OpenAIModel(model_id=model_id, **params)
@@ -58,7 +58,7 @@ def create_model(provider: str, model_id: str, **params: Any) -> Model:
             except ImportError:
                 raise ImportError(
                     "The 'gemini' provider requires the gemini extra:\n"
-                    "  pip install strands-compose[gemini]\n"
+                    "  pip install kaboo-workflows[gemini]\n"
                     "Or install directly: pip install strands-agents[gemini]"
                 ) from None
             return GeminiModel(model_id=model_id, **params)

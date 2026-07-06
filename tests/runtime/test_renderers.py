@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import io
 
-from strands_compose.renderers import AnsiRenderer
-from strands_compose.types import EntryDescriptor, EventType, SessionManifest, StreamEvent
+from kaboo_workflows.renderers import AnsiRenderer
+from kaboo_workflows.types import EntryDescriptor, EventType, SessionManifest, StreamEvent
 
 
 def _render(*events: StreamEvent) -> str:

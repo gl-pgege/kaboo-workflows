@@ -23,7 +23,7 @@ MCP_TRANSPORT = Literal["stdio", "sse", "streamable-http"]
 """All MCP transport types (client and server)."""
 
 MCP_SERVER_TRANSPORT = Literal["sse", "streamable-http"]
-"""Transport types valid for :class:`~strands_compose.mcp.server.MCPServer`.
+"""Transport types valid for :class:`~kaboo_workflows.mcp.server.MCPServer`.
 
 ``stdio`` is excluded because it is a client-side transport where the
 client spawns the server as a subprocess and communicates over

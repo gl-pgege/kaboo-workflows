@@ -20,7 +20,7 @@ AGENTS = Path(__file__).parent / "agents.yaml"
 
 
 def main() -> None:
-    from strands_compose import load
+    from kaboo_workflows import load
 
     resolved = load([BASE, AGENTS])
     agent = resolved.entry
@@ -44,7 +44,7 @@ def main() -> None:
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    from strands_compose import cli_errors
+    from kaboo_workflows import cli_errors
 
     with cli_errors():
         main()

@@ -11,10 +11,10 @@ from strands import Agent
 from strands.multiagent import Swarm
 from strands.multiagent.graph import Graph
 
-from strands_compose.config import load_session, resolve_infra
-from strands_compose.config.resolvers.orchestrations.builders import build_swarm
-from strands_compose.config.schema import AppConfig
-from strands_compose.exceptions import ConfigurationError
+from kaboo_workflows.config import load_session, resolve_infra
+from kaboo_workflows.config.resolvers.orchestrations.builders import build_swarm
+from kaboo_workflows.config.schema import AppConfig
+from kaboo_workflows.exceptions import ConfigurationError
 from tests.factories import (
     agent_def,
     delegate_orchestration,

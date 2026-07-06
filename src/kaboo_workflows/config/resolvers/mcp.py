@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 def resolve_tools(tool_specs: list[str]) -> list[Any]:
     """Resolve tool specification strings to tool objects.
 
-    Delegates to :func:``~strands_compose.tools.resolve_tool_specs``,
+    Delegates to :func:``~kaboo_workflows.tools.resolve_tool_specs``,
     which understands module paths, file paths, and directory paths.
 
     Args:
@@ -70,7 +70,7 @@ def resolve_mcp_client(
 ) -> StrandsMCPClient:
     """Resolve an MCPClientDef to a strands MCPClient.
 
-    Uses :func:``~strands_compose.mcp.client.create_mcp_client``.
+    Uses :func:``~kaboo_workflows.mcp.client.create_mcp_client``.
     Resolves server reference to actual MCPServer instance.
 
     Args:

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from strands_compose.config.resolvers.orchestrations.planner import topological_sort
-from strands_compose.exceptions import CircularDependencyError
+from kaboo_workflows.config.resolvers.orchestrations.planner import topological_sort
+from kaboo_workflows.exceptions import CircularDependencyError
 from tests.factories import delegate_orchestration, swarm_orchestration
 
 

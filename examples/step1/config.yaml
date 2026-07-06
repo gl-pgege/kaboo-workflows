@@ -1,0 +1,30 @@
+# step1 — Fork Baseline Verification
+#
+# Minimal kaboo-workflows config with OpenRouter via the openai provider.
+# Requires OPENROUTER_API_KEY set in environment.
+#
+# Run:
+#   uv run python examples/step1/main.py
+
+vars:
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+
+models:
+  default:
+    provider: openai
+    model_id: anthropic/claude-sonnet-4
+    params:
+      client_args:
+        base_url: https://openrouter.ai/api/v1
+        api_key: ${OPENROUTER_API_KEY}
+
+agents:
+  assistant:
+    model: default
+    system_prompt: |
+      You are a helpful assistant.
+      Use the calculator tool when asked math questions.
+    tools:
+      - ./tools/calculator_tool.py
+
+entry: assistant

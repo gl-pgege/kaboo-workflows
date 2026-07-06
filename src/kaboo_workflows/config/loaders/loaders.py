@@ -2,7 +2,7 @@
 
 Usage::
 
-    from strands_compose.config import load
+    from kaboo_workflows.config import load
 
     # Single file
     resolved = load("config.yaml")
@@ -72,8 +72,8 @@ def normalize(raw: dict) -> dict:
         case _:
             raise ValueError(
                 f"This config declares schema version '{version}', but this "
-                f"strands-compose version only supports version '1'.\n"
-                f"Upgrade: pip install --upgrade strands-compose"
+                f"kaboo-workflows version only supports version '1'.\n"
+                f"Upgrade: pip install --upgrade kaboo-workflows"
             )
     raw["version"] = "1"
     return raw
@@ -132,7 +132,7 @@ def load(config: ConfigInput | list[ConfigInput]) -> ResolvedConfig:
     """
     app_config = load_config(config)
 
-    logging.getLogger("strands_compose").setLevel(app_config.log_level.upper())
+    logging.getLogger("kaboo_workflows").setLevel(app_config.log_level.upper())
 
     infra = resolve_infra(app_config)
 

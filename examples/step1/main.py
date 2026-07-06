@@ -1,9 +1,9 @@
-"""01_minimal — Hello, Agent.
+"""step1 — Fork Baseline Verification.
 
-Load a single agent from config.yaml with load() and start an interactive REPL.
+Minimal agent with a calculator tool using OpenRouter.
 
 Usage:
-    uv run python examples/01_minimal/main.py
+    OPENROUTER_API_KEY=... uv run python examples/step1/main.py
 """
 
 from __future__ import annotations
@@ -11,18 +11,16 @@ from __future__ import annotations
 from pathlib import Path
 
 CONFIG = Path(__file__).parent / "config.yaml"
+STARTER = "What is 15 * 23?"
 
 
 def main() -> None:
-    """Load agent from config.yaml and run an interactive REPL."""
     from kaboo_workflows import load
 
-    # Load the agent config
     resolved = load(CONFIG)
     agent = resolved.entry
-
-    # ── Run ────────────────────────────────────────────────────────────────────
     print(f"\n{52 * '-'}")
+    print(f"Try: {STARTER}\n")
     print("Type a message and press Enter. Empty line to exit.\n")
     try:
         while True:
@@ -37,8 +35,6 @@ def main() -> None:
     finally:
         resolved.mcp_lifecycle.stop()
 
-
-# ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     from kaboo_workflows import cli_errors

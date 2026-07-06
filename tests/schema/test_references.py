@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import pytest
 
-from strands_compose.config.loaders.validators import validate_references
-from strands_compose.config.schema import AppConfig, MCPClientDef, MCPServerDef
-from strands_compose.exceptions import UnresolvedReferenceError
+from kaboo_workflows.config.loaders.validators import validate_references
+from kaboo_workflows.config.schema import AppConfig, MCPClientDef, MCPServerDef
+from kaboo_workflows.exceptions import UnresolvedReferenceError
 from tests.factories import (
     agent_def,
     app_config,

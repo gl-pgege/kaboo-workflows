@@ -1,4 +1,4 @@
-"""Shared low-level utilities for the strands_compose package."""
+"""Shared low-level utilities for the kaboo_workflows package."""
 
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def load_module_from_file(path: str | Path) -> ModuleType:
         raise FileNotFoundError(f"File not found: {file_path}")
 
     path_hash = hashlib.md5(str(file_path).encode(), usedforsecurity=False).hexdigest()[:12]
-    module_name = f"_strands_compose_{file_path.stem}_{path_hash}"
+    module_name = f"_kaboo_workflows_{file_path.stem}_{path_hash}"
 
     spec = importlib.util.spec_from_file_location(module_name, file_path)
     if spec is None or spec.loader is None:

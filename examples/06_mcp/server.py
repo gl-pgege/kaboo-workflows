@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from strands_compose.mcp import MCPServer
+from kaboo_workflows.mcp import MCPServer
 
 
 class CalculatorServer(MCPServer):

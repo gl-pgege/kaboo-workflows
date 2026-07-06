@@ -16,7 +16,7 @@ STARTER = "Write a blog post about why Rust is gaining popularity among Python d
 
 
 def main() -> None:
-    from strands_compose import load
+    from kaboo_workflows import load
 
     resolved = load(CONFIG)
     graph = resolved.entry
@@ -41,7 +41,7 @@ def main() -> None:
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    from strands_compose import cli_errors
+    from kaboo_workflows import cli_errors
 
     with cli_errors():
         main()

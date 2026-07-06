@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 
 class MCPServer(ABC):
-    """Abstract base for strands_compose MCP servers."""
+    """Abstract base for kaboo_workflows MCP servers."""
 
     #: Seconds to wait for uvicorn graceful drain after ``should_exit``.
     STOP_TIMEOUT: float = 5
