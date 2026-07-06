@@ -64,7 +64,7 @@ def calculator(expression: str) -> str:
 ### 4. Start the server
 
 ```bash
-OPENROUTER_API_KEY=sk-... kaboo-serve config.yaml
+OPENROUTER_API_KEY=sk-... uv run kaboo-serve config.yaml
 ```
 
 That's it. Your agent is now serving AG-UI SSE on `http://localhost:8080/invocations`.
@@ -210,10 +210,10 @@ entry: pipeline
 
 | Command | What it does |
 |---------|-------------|
-| `kaboo-serve config.yaml` | Start AG-UI SSE server (port 8080) |
-| `kaboo-serve config.yaml --port 9000` | Custom port |
-| `kaboo-workflows check config.yaml` | Validate config (no side-effects) |
-| `kaboo-workflows load config.yaml` | Full load + MCP health check |
+| `uv run kaboo-serve config.yaml` | Start AG-UI SSE server (port 8080) |
+| `uv run kaboo-serve config.yaml --port 9000` | Custom port |
+| `uv run kaboo-workflows check config.yaml` | Validate config (no side-effects) |
+| `uv run kaboo-workflows load config.yaml` | Full load + MCP health check |
 
 ---
 
@@ -237,7 +237,7 @@ app = create_agui_app("config.yaml")
 
 ```bash
 # Serve any example
-OPENROUTER_API_KEY=... kaboo-serve examples/step1/config.yaml
+OPENROUTER_API_KEY=... uv run kaboo-serve examples/step1/config.yaml
 
 # Or run as a REPL
 OPENROUTER_API_KEY=... uv run python examples/step1/main.py
