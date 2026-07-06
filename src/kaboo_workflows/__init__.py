@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-import os as _os
-
-_os.environ["OTEL_SDK_DISABLED"] = "true"
-_os.environ["OTEL_PYTHON_DISABLED_INSTRUMENTATIONS"] = "all"
-
 from .config import (
     AppConfig,
     ConfigInput,
