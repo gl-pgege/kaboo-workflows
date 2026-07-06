@@ -1,10 +1,13 @@
-# step1 — Fork Baseline Verification
+# step1 — Minimal Agent
 #
-# Minimal kaboo-workflows config with OpenRouter via the openai provider.
+# One agent, one tool, OpenRouter model.
 # Requires OPENROUTER_API_KEY set in environment.
 #
-# Run:
-#   uv run python examples/step1/main.py
+# Serve:
+#   OPENROUTER_API_KEY=... kaboo-serve examples/step1/config.yaml
+#
+# REPL:
+#   OPENROUTER_API_KEY=... uv run python examples/step1/main.py
 
 vars:
   OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}

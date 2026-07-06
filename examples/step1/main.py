@@ -1,6 +1,7 @@
-"""step1 — Fork Baseline Verification.
+"""step1 — Minimal Agent (REPL mode).
 
-Minimal agent with a calculator tool using OpenRouter.
+Interactive REPL for testing the agent locally without starting a server.
+For AG-UI SSE serving, use: kaboo-serve examples/step1/config.yaml
 
 Usage:
     OPENROUTER_API_KEY=... uv run python examples/step1/main.py

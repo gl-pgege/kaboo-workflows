@@ -12,7 +12,7 @@ def calculator(expression: str) -> str:
         The computed result as a string, or an error message.
     """
     try:
-        result = eval(expression)  # noqa: S307
+        result = eval(expression)  # noqa: S307 # nosec B307
         return f"Result: {result}"
     except Exception as e:
         return f"Error: {e}"

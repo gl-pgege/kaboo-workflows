@@ -3,7 +3,7 @@ name = "kaboo-workflows"
 version = "0.9.0"
 description = "YAML-driven multi-agent orchestration with AG-UI/CopilotKit support, built on strands-agents"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "Apache-2.0"
 authors = [
     { name = "Michal Galuszka", email = "michal.galuszka1@gmail.com" },
@@ -14,7 +14,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
@@ -25,10 +24,15 @@ dependencies = [
     "pydantic>=2.12.5",
     "pyyaml>=6.0.0",
     "mcp>=1.24.0",
+    "ag-ui-strands>=0.2.0",
+    "ag-ui-protocol>=0.1.19",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
 ]
 
 [project.scripts]
 kaboo-workflows = "kaboo_workflows.cli:main"
+kaboo-serve = "kaboo_workflows.serve:main"
 
 [project.optional-dependencies]
 agentcore-memory = [
