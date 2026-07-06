@@ -11,6 +11,10 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import os
+
+os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+os.environ.setdefault("OTEL_PYTHON_DISABLED_INSTRUMENTATIONS", "all")
 
 import uvicorn
 
