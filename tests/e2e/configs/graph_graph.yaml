@@ -1,0 +1,46 @@
+# Graph nested inside a graph node:
+#   outer_start → inner_graph (g1 → g2) → outer_end
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  outer_start:
+    stream: {title: "Outer start"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Outer start done."}
+  g1:
+    stream: {title: "Inner 1"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Inner 1 done."}
+  g2:
+    stream: {title: "Inner 2"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Inner 2 done."}
+  outer_end:
+    stream: {title: "Outer end"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Outer end final report."}
+
+orchestrations:
+  inner_graph:
+    mode: graph
+    entry_name: g1
+    chat_output: g2
+    edges:
+      - {from: g1, to: g2}
+  pipeline:
+    mode: graph
+    entry_name: outer_start
+    chat_output: outer_end
+    edges:
+      - {from: outer_start, to: inner_graph}
+      - {from: inner_graph, to: outer_end}
+
+entry: pipeline

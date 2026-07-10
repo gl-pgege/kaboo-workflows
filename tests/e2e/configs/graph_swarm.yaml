@@ -1,0 +1,46 @@
+# Swarm nested inside a graph node (graph is the intended nesting vehicle):
+#   strategist → research_team (swarm: a → b) → editor
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  strategist:
+    stream: {title: "Strategy"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Outline ready."}
+  a:
+    stream: {title: "Swarm A"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {handoff: b, message: "Your turn."}
+  b:
+    stream: {title: "Swarm B"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Swarm produced findings."}
+  editor:
+    stream: {title: "Editing"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Edited final report."}
+
+orchestrations:
+  research_team:
+    mode: swarm
+    agents: [a, b]
+    entry_name: a
+  pipeline:
+    mode: graph
+    entry_name: strategist
+    chat_output: editor
+    edges:
+      - {from: strategist, to: research_team}
+      - {from: research_team, to: editor}
+
+entry: pipeline

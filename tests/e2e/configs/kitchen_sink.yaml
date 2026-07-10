@@ -1,0 +1,77 @@
+# Kitchen sink — a graph whose parallel batch mixes a swarm AND a delegate:
+#   strategist → [ research_team (swarm: a → b),
+#                  audit_team  (delegate: auditor ─▶ checker) ] → editor
+#
+# Exercises mixed nesting (swarm + delegate side by side) and a parallel batch
+# inside a first-class graph entry, all in one run.
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  strategist:
+    stream: {title: "Strategy"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Outline ready."}
+
+  # swarm members
+  a:
+    stream: {title: "Swarm A"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {handoff: b, message: "Your turn."}
+  b:
+    stream: {title: "Swarm B"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Swarm findings."}
+
+  # delegate members
+  auditor:
+    stream: {title: "Auditing"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: checker, input: "check the numbers"}
+        final_text: "Audit complete."
+  checker:
+    stream: {title: "Checking"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Numbers check out."}
+
+  editor:
+    stream: {title: "Editing"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Edited final report."}
+
+orchestrations:
+  research_team:
+    mode: swarm
+    agents: [a, b]
+    entry_name: a
+  audit_team:
+    mode: delegate
+    entry_name: auditor
+    connections:
+      - {agent: checker, description: "Check the numbers"}
+  pipeline:
+    mode: graph
+    entry_name: strategist
+    chat_output: editor
+    edges:
+      - {from: strategist, to: research_team}
+      - {from: strategist, to: audit_team}
+      - {from: research_team, to: editor}
+      - {from: audit_team, to: editor}
+
+entry: pipeline

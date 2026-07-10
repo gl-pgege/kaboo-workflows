@@ -1,0 +1,31 @@
+# Delegate whose sub-agent remembers across turns via client-driven history.
+# `memo` has history enabled, so its transcript is seeded from
+# state.kaboo_history and captured back into the outgoing snapshot.
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: memo, input: "record this note"}
+        final_text: "Coordinator done."
+  memo:
+    stream: {title: "Memo"}
+    history: true
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Noted."}
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: memo, description: "Records notes across turns"}
+
+entry: team

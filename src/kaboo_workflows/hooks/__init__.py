@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from .event_publisher import EventPublisher
+from .history_hook import HistoryHook
+from .interrupt_hook import InterruptHook
 from .max_calls_guard import MaxToolCallsGuard
 from .stop_guard import MultiAgentStopGuard, StopGuard, stop_guard_from_event
 from .tool_name_sanitizer import ToolNameSanitizer
 
 __all__ = [
     "EventPublisher",
+    "HistoryHook",
+    "InterruptHook",
     "MaxToolCallsGuard",
     "MultiAgentStopGuard",
     "StopGuard",

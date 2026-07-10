@@ -1,0 +1,17 @@
+# HITL interrupt on a PLAIN ENTRY agent. The entry agent asks the user a
+# question (ask_user), pausing the run; on resume it continues to its answer.
+# Requires the entry node's hook providers to be forwarded to the per-thread
+# clone ag-ui-strands executes (see create_agui_app / get_agent_hook_providers).
+agents:
+  assistant:
+    stream: {title: "Assistant"}
+    interrupt: true
+    model:
+      provider: tests.fakes.scripted_model:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - {tool: ask_user, input: {question: "Approve this action?", options: ["yes", "no"]}}
+        final_text: "Proceeding after approval."
+
+entry: assistant

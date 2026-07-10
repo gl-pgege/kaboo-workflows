@@ -1,0 +1,44 @@
+# Delegate nested in delegate (2 levels):
+#   coordinator ─▶ research_team (delegate: lead ─▶ fact_checker)
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: research_team, input: "research the topic"}
+        final_text: "Coordinator wrapped up."
+  lead:
+    stream: {title: "Team lead"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: fact_checker, input: "verify the claims"}
+        final_text: "Lead assembled the findings."
+  fact_checker:
+    stream: {title: "Fact checking"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        final_text: "Claims verified."
+
+orchestrations:
+  research_team:
+    mode: delegate
+    entry_name: lead
+    connections:
+      - {agent: fact_checker, description: "Verify findings"}
+  top:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: research_team, description: "Research and verify"}
+
+entry: top

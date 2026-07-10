@@ -7,40 +7,32 @@ Key Features:
     - Sync and async tool wrappers for Agent and MultiAgentBase nodes
     - Automatic tool name resolution from agent_id or node id
     - Message content preservation from single-agent and multi-agent results
+    - Native strands interrupt propagation via tool_context.interrupt()
 """
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from strands import Agent
+from strands.agent.agent_result import AgentResult
 from strands.tools.decorator import DecoratedFunctionTool, tool
 from strands.types.content import Message
+from strands.types.tools import ToolContext
 
+from .._context import delegation_context
 from .extractors import extract_last_message, extract_text
 
 if TYPE_CHECKING:
     from ..types import Node
 
+logger = logging.getLogger(__name__)
 
-# ToolResultContent only accepts these 4 keys (subset of ContentBlock's 10).
-# Passing model-only keys (toolUse, reasoningContent, …) would produce malformed content.
 _TOOL_RESULT_CONTENT_KEYS = ("document", "image", "json", "text")
 
 
 def _resolve_tool_name(node: Node, name: str | None) -> str:
-    """Resolve the tool name for a node.
-
-    For ``Agent`` nodes, defaults to ``agent.agent_id``.
-    For ``MultiAgentBase`` nodes, defaults to ``node.id`` or ``"sub_orchestration"``.
-
-    Args:
-        node: Agent or MultiAgentBase instance.
-        name: Explicit tool name override, or ``None`` to use the default.
-
-    Returns:
-        The resolved tool name string.
-    """
     if name is not None:
         return name
     if isinstance(node, Agent):
@@ -49,20 +41,6 @@ def _resolve_tool_name(node: Node, name: str | None) -> str:
 
 
 def _message_to_tool_result(message: Message) -> dict[str, Any]:
-    """Map a ``Message`` to a ``ToolResult`` dict (``strands.types.tools.ToolResult``).
-
-    Returning a pre-shaped ``{"status": ..., "content": [...]}`` dict bypasses
-    ``DecoratedFunctionTool._wrap_tool_result``'s plain-text auto-wrapping, so
-    non-text blocks (``image``, ``document``, ``json``) are preserved across
-    the delegation boundary. Only ``ToolResultContent`` keys are kept — model-
-    only blocks such as ``toolUse`` and ``reasoningContent`` are dropped.
-
-    Args:
-        message: The final ``Message`` returned by a sub-agent or orchestration.
-
-    Returns:
-        A ``ToolResult``-shaped dict ready for the Strands decorator to pass through.
-    """
     content: list[dict[str, Any]] = []
     for block in message.get("content", []):
         source_block = cast(dict[str, Any], block)
@@ -78,34 +56,96 @@ def _message_to_tool_result(message: Message) -> dict[str, Any]:
     return {"status": "success", "content": [{"text": extract_text(message)}]}
 
 
+def _pending_interrupt_responses(
+    node: Node, tool_context: ToolContext
+) -> list[dict[str, Any]] | None:
+    """Propagate a delegate's already-active interrupts up to the coordinator.
+
+    When a delegate node is resuming (its interrupt state is still activated
+    from a prior turn), forward each unresolved interrupt through
+    ``tool_context.interrupt`` so the coordinator captures the human response,
+    then return the strands resume payload. Returns ``None`` for a fresh call.
+    """
+    istate = getattr(node, "_interrupt_state", None)
+    if not (istate and istate.activated and istate.interrupts):
+        return None
+    pending = {iid: intr for iid, intr in istate.interrupts.items() if intr.response is None}
+    logger.debug("delegate resuming with %d pending interrupt(s)", len(pending))
+    responses: list[dict[str, Any]] = []
+    for intr_id, intr in pending.items():
+        user_response = tool_context.interrupt(intr_id, reason=intr.reason)
+        responses.append({"interruptResponse": {"interruptId": intr_id, "response": user_response}})
+    return responses
+
+
+def _interrupt_responses_from_result(
+    result: AgentResult, tool_context: ToolContext
+) -> list[dict[str, Any]]:
+    """Forward interrupts raised mid-run up to the coordinator and collect responses."""
+    responses: list[dict[str, Any]] = []
+    for intr in result.interrupts:
+        user_response = tool_context.interrupt(intr.id, reason=intr.reason)
+        responses.append({"interruptResponse": {"interruptId": intr.id, "response": user_response}})
+    return responses
+
+
+def _node_as_tool(
+    node: Node,
+    *,
+    name: str | None,
+    description: str,
+    is_async: bool,
+) -> DecoratedFunctionTool:
+    """Shared implementation for :func:`node_as_tool` / :func:`node_as_async_tool`.
+
+    Uses strands-native ``tool_context.interrupt()`` for human-in-the-loop; the
+    coordinator handles all interrupt state management automatically.
+    """
+    tool_name = _resolve_tool_name(node, name)
+
+    if is_async:
+
+        @tool(name=tool_name, description=description, context=True)
+        async def delegate(tool_context: ToolContext, input: str) -> dict[str, Any]:
+            with delegation_context(tool_context.tool_use.get("toolUseId")):
+                resume = _pending_interrupt_responses(node, tool_context)
+                result = await node.invoke_async(resume if resume is not None else input)
+                while (
+                    isinstance(result, AgentResult)
+                    and result.stop_reason == "interrupt"
+                    and result.interrupts
+                ):
+                    responses = _interrupt_responses_from_result(result, tool_context)
+                    result = await node.invoke_async(responses)
+                return _message_to_tool_result(extract_last_message(result))
+
+    else:
+
+        @tool(name=tool_name, description=description, context=True)
+        def delegate(tool_context: ToolContext, input: str) -> dict[str, Any]:
+            with delegation_context(tool_context.tool_use.get("toolUseId")):
+                resume = _pending_interrupt_responses(node, tool_context)
+                result = node(resume if resume is not None else input)
+                while (
+                    isinstance(result, AgentResult)
+                    and result.stop_reason == "interrupt"
+                    and result.interrupts
+                ):
+                    responses = _interrupt_responses_from_result(result, tool_context)
+                    result = node(responses)
+                return _message_to_tool_result(extract_last_message(result))
+
+    return delegate
+
+
 def node_as_tool(
     node: Node,
     *,
     name: str | None = None,
     description: str,
 ) -> DecoratedFunctionTool:
-    """Wrap an Agent or MultiAgentBase as an ``AgentTool`` for delegation.
-
-    For Agent nodes, invokes the agent and returns the final message content
-    as a Strands tool result. For MultiAgentBase nodes (Swarm, Graph),
-    resolves the last executed node and returns its final message content.
-
-    Args:
-        node: Agent or MultiAgentBase instance.
-        name: Tool name (defaults to node id).
-        description: Tool description for the parent LLM.
-
-    Returns:
-        An ``AgentTool`` (``DecoratedFunctionTool``) wrapping the node.
-    """
-    tool_name = _resolve_tool_name(node, name)
-
-    @tool(name=tool_name, description=description)
-    def delegate(input: str) -> dict[str, Any]:
-        result = node(input)
-        return _message_to_tool_result(extract_last_message(result))
-
-    return delegate
+    """Wrap an Agent or MultiAgentBase as a sync ``AgentTool`` for delegation."""
+    return _node_as_tool(node, name=name, description=description, is_async=False)
 
 
 def node_as_async_tool(
@@ -114,26 +154,5 @@ def node_as_async_tool(
     name: str | None = None,
     description: str,
 ) -> DecoratedFunctionTool:
-    """Wrap an Agent or MultiAgentBase as an async ``AgentTool`` for delegation.
-
-    For Agent nodes, uses ``invoke_async`` for live event streaming. For
-    MultiAgentBase nodes, awaits ``invoke_async``. In both cases the final
-    message content is returned as a Strands tool result so non-text blocks
-    such as images and documents are preserved when possible.
-
-    Args:
-        node: Agent or MultiAgentBase instance.
-        name: Tool name.
-        description: Tool description for the parent LLM.
-
-    Returns:
-        An ``AgentTool`` (``DecoratedFunctionTool``) wrapping the node.
-    """
-    tool_name = _resolve_tool_name(node, name)
-
-    @tool(name=tool_name, description=description)
-    async def delegate(input: str) -> dict[str, Any]:
-        result = await node.invoke_async(input)
-        return _message_to_tool_result(extract_last_message(result))
-
-    return delegate
+    """Wrap an Agent or MultiAgentBase as an async ``AgentTool`` for delegation."""
+    return _node_as_tool(node, name=name, description=description, is_async=True)

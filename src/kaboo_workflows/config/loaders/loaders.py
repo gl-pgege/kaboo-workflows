@@ -288,4 +288,5 @@ def load_session(
         orchestrators=orchestrators,
         entry=entry,
         mcp_lifecycle=infra.mcp_lifecycle,
+        app_config=config,
     )

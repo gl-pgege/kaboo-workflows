@@ -101,6 +101,7 @@ class MCPClientDef(BaseModel):
     transport: str | None = None
     params: dict[str, Any] = Field(default_factory=dict)
     transport_options: dict[str, Any] = Field(default_factory=dict)
+    tool_labels: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _exactly_one_connection_mode(self) -> MCPClientDef:
@@ -116,6 +117,51 @@ class MCPClientDef(BaseModel):
                 "MCPClientDef requires exactly one of 'server', 'url', or 'command'; got multiple."
             )
         return self
+
+
+class InterruptDef(BaseModel):
+    """Interrupt configuration for an agent.
+
+    ``tools`` lists tool names that require user approval before execution.
+    An empty list means no tool-gate (use ``ask_user`` only).
+
+    ``ask_user`` controls whether the built-in ``ask_user`` tool is injected,
+    allowing the agent to proactively ask the user questions at any time.
+    Defaults to ``True`` when interrupt is enabled.
+    """
+
+    tools: list[str] = Field(default_factory=list)
+    ask_user: bool = True
+
+
+class StreamDef(BaseModel):
+    """Stream group configuration for agent activity visibility.
+
+    Both fields are optional — when omitted, the agent's declared name
+    is used as the group and a humanized version as the title.
+    """
+
+    group: str | None = None
+    title: str | None = None
+
+
+class HistoryDef(BaseModel):
+    """Per-agent conversation history configuration.
+
+    History is client-driven and stateless on the server: an agent's
+    transcript travels in the AG-UI ``state`` blob (``state.kaboo_history``),
+    keyed per agent, and is seeded/captured around each invocation.
+
+    - ``enabled`` — whether this agent remembers across turns of the same
+      conversation. When false the agent runs fresh each turn.
+    - ``group`` — optional shared-transcript bucket. Agents that declare the
+      same ``group`` share one history key, so they read/write a single
+      transcript (e.g. ``researcher`` + ``fact_checker`` sharing context).
+      When omitted, the agent's stable dot-path is used as its key.
+    """
+
+    enabled: bool = True
+    group: str | None = None
 
 
 class AgentDef(BaseModel):
@@ -165,6 +211,26 @@ class AgentDef(BaseModel):
     tool_labels: dict[str, str] = Field(default_factory=dict)
     conversation_manager: ConversationManagerDef | None = None
     session_manager: SessionManagerDef | None = None
+    stream: StreamDef | None = None
+    interrupt: InterruptDef | bool | None = None
+    history: HistoryDef | bool | None = None
+    output_schema: str | None = None
+
+    @model_validator(mode="after")
+    def _normalize_interrupt(self) -> AgentDef:
+        """Normalize ``interrupt: true`` shorthand to a full InterruptDef."""
+        if self.interrupt is True:
+            self.interrupt = InterruptDef()
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_history(self) -> AgentDef:
+        """Normalize ``history: true|false`` shorthand to a full HistoryDef."""
+        if self.history is True:
+            self.history = HistoryDef()
+        elif self.history is False:
+            self.history = HistoryDef(enabled=False)
+        return self
 
 
 # --- Orchestration Models --- #
@@ -215,11 +281,16 @@ class SwarmOrchestrationDef(BaseModel):
 
     Agents transfer control to each other via handoff_to_agent tool.
     Uses strands Swarm under the hood.
+
+    ``chat_output`` names the member agent whose streamed text becomes the
+    assistant reply when the swarm is a first-class AG-UI entry. When omitted,
+    the adapter emits the final active node's text once the run completes.
     """
 
     mode: Literal["swarm"] = "swarm"
     agents: list[str]
     entry_name: str
+    chat_output: str | None = None
     max_handoffs: int = 20
     max_iterations: int = 20
     execution_timeout: float = 900.0
@@ -227,11 +298,22 @@ class SwarmOrchestrationDef(BaseModel):
     session_manager: SessionManagerDef | None = None
     hooks: list[HookDef | str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def _validate_chat_output(self) -> SwarmOrchestrationDef:
+        """Ensure ``chat_output`` (when set) names a member agent."""
+        if self.chat_output is not None and self.chat_output not in self.agents:
+            raise ValueError(
+                f"swarm chat_output '{self.chat_output}' is not one of the swarm "
+                f"agents: {sorted(self.agents)}."
+            )
+        return self
+
     @classmethod
     def reference_fields(cls) -> dict[str, str]:
         """Return mapping of JSON paths to reference types for name sanitization."""
         return {
             "entry_name": "node",
+            "chat_output": "node",
             "agents[]": "node",
         }
 
@@ -250,6 +332,12 @@ class GraphOrchestrationDef(BaseModel):
 
     Agents execute in parallel batches based on dependency order.
     Uses strands Graph under the hood.
+
+    ``chat_output`` names the node whose streamed text becomes the assistant
+    reply when the graph is a first-class AG-UI entry. When omitted, the
+    adapter streams the sole terminal node (a node with no outgoing edges) if
+    there is exactly one, otherwise it emits the final node's text on
+    completion.
     """
 
     mode: Literal["graph"] = "graph"
@@ -260,13 +348,38 @@ class GraphOrchestrationDef(BaseModel):
     reset_on_revisit: bool = False
     session_manager: SessionManagerDef | None = None
     entry_name: str
+    chat_output: str | None = None
     hooks: list[HookDef | str] = Field(default_factory=list)
+
+    def node_ids(self) -> set[str]:
+        """Return every node id referenced by this graph (entry + edge ends)."""
+        ids = {self.entry_name}
+        for edge in self.edges:
+            ids.add(edge.from_agent)
+            ids.add(edge.to_agent)
+        return ids
+
+    def terminal_nodes(self) -> list[str]:
+        """Return nodes with no outgoing edge (candidate chat-output nodes)."""
+        sources = {edge.from_agent for edge in self.edges}
+        return sorted(n for n in self.node_ids() if n not in sources)
+
+    @model_validator(mode="after")
+    def _validate_chat_output(self) -> GraphOrchestrationDef:
+        """Ensure ``chat_output`` (when set) names a graph node."""
+        if self.chat_output is not None and self.chat_output not in self.node_ids():
+            raise ValueError(
+                f"graph chat_output '{self.chat_output}' is not a node in the "
+                f"graph: {sorted(self.node_ids())}."
+            )
+        return self
 
     @classmethod
     def reference_fields(cls) -> dict[str, str]:
         """Return mapping of JSON paths to reference types for name sanitization."""
         return {
             "entry_name": "node",
+            "chat_output": "node",
             "edges[].from": "node",
             "edges[].to": "node",
         }
@@ -307,6 +420,13 @@ class AppConfig(BaseModel):
     session_manager: SessionManagerDef | None = None
     orchestrations: dict[str, OrchestrationDef] = Field(default_factory=dict)
     entry: str
+    history: bool = False
+    """Global default for per-agent ``history:``.
+
+    Applies to any agent that does not set its own ``history:``. Defaults to
+    ``False`` so sub-agents are stateless per run unless opted in. The entry
+    agent is unaffected — its transcript is always the CopilotKit chat.
+    """
     log_level: str = "WARNING"
 
     @model_validator(mode="after")

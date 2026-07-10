@@ -34,6 +34,7 @@ from strands.hooks.events import (
     BeforeToolCallEvent,
 )
 
+from .._context import get_delegation_id, get_run_id, get_thread_id, get_turn_id
 from ..types import EventType, StreamEvent
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,63 @@ def _safe_callback(callback: EventCallback) -> EventCallback:
     return _wrapper
 
 
+def _extract_incoming_task(messages: Any, max_len: int = 400) -> str | None:
+    """Return the task an agent was handed, as a clean human-readable line.
+
+    Scans messages newest-to-oldest for a ``user``-role message that carries
+    text and is not purely a tool result (strands appends tool results as
+    user-role messages). For the entry agent this is the user's prompt; for a
+    swarm node the text is a labeled context blob, so we pull out the most
+    relevant piece:
+
+    - the ``Handoff Message:`` (what the previous agent asked this one to do), or
+    - the ``User Request:`` (the original task), or
+    - the raw text otherwise.
+
+    Returns ``None`` when nothing suitable is found so the card omits the task.
+    """
+    if not isinstance(messages, list):
+        return None
+    for msg in reversed(messages):
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            blocks: list[Any] = [{"text": content}]
+        elif isinstance(content, list):
+            blocks = content
+        else:
+            continue
+        has_tool_result = any(isinstance(b, dict) and "toolResult" in b for b in blocks)
+        if has_tool_result:
+            continue
+        texts = [b["text"] for b in blocks if isinstance(b, dict) and isinstance(b.get("text"), str)]
+        text = "\n".join(t for t in texts if t.strip()).strip()
+        if not text:
+            continue
+        task = _pick_task_line(text)
+        return task if len(task) <= max_len else task[: max_len - 1].rstrip() + "…"
+    return None
+
+
+def _pick_task_line(text: str) -> str:
+    """Pull the most relevant task out of a (possibly labeled) message body.
+
+    Prefers a swarm ``Handoff Message:`` section, then ``User Request:``; falls
+    back to the whole text. Each labeled section runs until the next blank line.
+    """
+    for label in ("Handoff Message:", "User Request:"):
+        idx = text.find(label)
+        if idx == -1:
+            continue
+        section = text[idx + len(label):]
+        section = section.split("\n\n", 1)[0]
+        section = section.strip()
+        if section:
+            return section
+    return text.strip()
+
+
 # ============================================================================
 # EventPublisher
 # ============================================================================
@@ -119,6 +177,9 @@ class EventPublisher(HookProvider):
         agent_name: str,
         *,
         tool_labels: dict[str, str] | None = None,
+        stream_group: str = "",
+        stream_title: str = "",
+        is_chat_reply: bool = False,
         max_result_len: int = 600,
     ) -> None:
         """Initialize the EventPublisher.
@@ -134,6 +195,9 @@ class EventPublisher(HookProvider):
             callback: Called with each :class:`StreamEvent`.
             agent_name: Identifier for the agent or orchestrator.
             tool_labels: Optional mapping of tool names to display labels.
+            stream_group: Dot-path stream group for hierarchical activity
+                attribution. Empty string when not configured.
+            stream_title: Human-readable title for the stream group.
             max_result_len: Maximum character length for tool result text
                 in TOOL_END events. Default: 600.
 
@@ -148,8 +212,41 @@ class EventPublisher(HookProvider):
         self._callback = _safe_callback(callback)
         self._agent_name = agent_name
         self._tool_labels = tool_labels or {}
+        self._stream_group = stream_group
+        self._stream_title = stream_title
+        self._is_chat_reply = is_chat_reply
         self._max_result_len = max_result_len
-        self._errored = False
+        # Set for the plain-agent entry node: its text and tool calls are already
+        # rendered inline in the chat by the host (CopilotKit), so the activity
+        # group exists only to enrich those tool rows — it must never also render
+        # as a drill card. The AG-UI adapter flips this on when forwarding this
+        # publisher to the ag-ui-strands clone. See create_agui_app.
+        self._inline_chat_owner = False
+        # Per-conversation state. A single EventPublisher instance is shared across
+        # every concurrent thread that runs this agent (delegate nodes and the
+        # forwarded plain-agent entry are singletons), so all per-invocation state
+        # — the ``#N`` suffix, active group, and error latch — must be scoped by
+        # thread_id to avoid cross-talk between concurrent conversations.
+        self._invocation_count_by_thread: dict[str | None, int] = {}
+        self._active_group_by_thread: dict[str | None, str] = {}
+        self._errored_by_thread: dict[str | None, bool] = {}
+
+    def mark_inline_chat_owner(self) -> None:
+        """Flag this publisher's group as the inline chat owner (see ``__init__``)."""
+        self._inline_chat_owner = True
+
+    def _enrich(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Inject stream_group, agent_name, and conversation ids into event data."""
+        thread_id = get_thread_id()
+        active_group = self._active_group_by_thread.get(thread_id, self._stream_group)
+        if active_group:
+            data["stream_group"] = active_group
+            data["stream_title"] = self._stream_title
+        data["agent_name"] = self._agent_name
+        data["thread_id"] = thread_id
+        data["run_id"] = get_run_id()
+        data["turn_id"] = get_turn_id()
+        return data
 
     @override
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
@@ -169,12 +266,65 @@ class EventPublisher(HookProvider):
     # -- Agent hooks ---------------------------------------------------------
 
     def _on_agent_start(self, event: BeforeInvocationEvent) -> None:
-        """Emit AGENT_START at the beginning of each agent invocation."""
-        self._errored = False
+        """Emit STREAM_GROUP_START (if grouped) then AGENT_START.
+
+        When the agent is resuming from an interrupt, the invocation is a
+        continuation of the same logical run, so         the existing stream group is
+        reused (no new ``#N`` group, no group-resetting STREAM_GROUP_START).
+        """
+        self._errored_by_thread[get_thread_id()] = False
+
+        istate = getattr(event.agent, "_interrupt_state", None)
+        resuming = bool(istate is not None and getattr(istate, "activated", False))
+
+        if resuming:
+            self._callback(
+                StreamEvent(
+                    type=EventType.AGENT_START,
+                    agent_name=self._agent_name,
+                    data=self._enrich({}),
+                ),
+            )
+            return
+
+        thread_id = get_thread_id()
+        count = self._invocation_count_by_thread.get(thread_id, 0) + 1
+        self._invocation_count_by_thread[thread_id] = count
+        if self._stream_group:
+            self._active_group_by_thread[thread_id] = (
+                f"{self._stream_group}#{count}" if count > 1 else self._stream_group
+            )
+            parent = self._stream_group.rsplit(".", 1)[0] if "." in self._stream_group else None
+            # BeforeInvocationEvent fires before the task message is appended to
+            # agent.messages, but it carries the incoming messages directly; fall
+            # back to the agent transcript for safety.
+            task = _extract_incoming_task(
+                getattr(event, "messages", None) or getattr(event.agent, "messages", None)
+            )
+            self._callback(
+                StreamEvent(
+                    type=EventType.STREAM_GROUP_START,
+                    agent_name=self._agent_name,
+                    data=self._enrich({
+                        "parent_group": parent,
+                        # The tool-call id the coordinator used to delegate to this
+                        # agent. Stable key for correlating the inline card in the
+                        # UI with this group (see delegation_context / _activity).
+                        "tool_call_id": get_delegation_id(),
+                        # The task this agent was handed (its latest human/handoff
+                        # message), shown on the card; and whether this agent's text
+                        # IS the chat reply (so the UI suppresses only its duplicate).
+                        "task": task,
+                        "is_chat_reply": self._is_chat_reply,
+                        "inline_chat_owner": self._inline_chat_owner,
+                    }),
+                ),
+            )
         self._callback(
             StreamEvent(
                 type=EventType.AGENT_START,
                 agent_name=self._agent_name,
+                data=self._enrich({}),
             ),
         )
 
@@ -184,16 +334,19 @@ class EventPublisher(HookProvider):
         tool_label = _resolve_tool_label(raw_name, self._tool_labels) or raw_name
         tool_use_id = event.tool_use.get("toolUseId", "")
 
+        logger.debug(
+            "TOOL_START agent=%s tool=%s tool_use_id=%s", self._agent_name, raw_name, tool_use_id
+        )
         self._callback(
             StreamEvent(
                 type=EventType.TOOL_START,
                 agent_name=self._agent_name,
-                data={
+                data=self._enrich({
                     "tool_name": raw_name,
                     "tool_label": tool_label,
                     "tool_use_id": tool_use_id,
                     "tool_input": event.tool_use.get("input", {}),
-                },
+                }),
             ),
         )
 
@@ -203,30 +356,43 @@ class EventPublisher(HookProvider):
         tool_label = _resolve_tool_label(raw_name, self._tool_labels) or raw_name
         tool_use_id = event.tool_use.get("toolUseId", "")
 
-        status = "error" if event.exception else "success"
+        result_status = event.result.get("status") if isinstance(event.result, dict) else None
+        status = "error" if event.exception or result_status == "error" else "success"
 
+        logger.debug(
+            "TOOL_END agent=%s tool=%s tool_use_id=%s status=%s",
+            self._agent_name, raw_name, tool_use_id, status,
+        )
         self._callback(
             StreamEvent(
                 type=EventType.TOOL_END,
                 agent_name=self._agent_name,
-                data={
+                data=self._enrich({
                     "tool_name": raw_name,
                     "tool_label": tool_label,
                     "tool_use_id": tool_use_id,
                     "status": status,
                     "error": str(event.exception) if event.exception else None,
                     "tool_result": _extract_result_text(event.result, self._max_result_len),
-                },
+                }),
             ),
         )
 
     def _on_complete(self, event: AfterInvocationEvent) -> None:
-        """Emit AGENT_COMPLETE with usage metrics from EventLoopMetrics.
+        """Emit AGENT_COMPLETE (and STREAM_GROUP_END if grouped).
 
         Suppressed when the invocation errored — an ERROR event was
         already emitted via :meth:`_on_model_error`.
         """
-        if self._errored:
+        if self._errored_by_thread.get(get_thread_id(), False):
+            if self._stream_group:
+                self._callback(
+                    StreamEvent(
+                        type=EventType.STREAM_GROUP_END,
+                        agent_name=self._agent_name,
+                        data=self._enrich({"status": "error"}),
+                    ),
+                )
             return
 
         result = event.result
@@ -236,21 +402,20 @@ class EventPublisher(HookProvider):
                     StreamEvent(
                         type=EventType.INTERRUPT,
                         agent_name=self._agent_name,
-                        data={
+                        data=self._enrich({
                             "interrupt_id": interrupt.id,
                             "name": interrupt.name,
                             "reason": interrupt.reason,
-                        },
+                        }),
                     ),
                 )
             return
 
-        # Usage from the latest invocation (current turn only).
         metrics = event.agent.event_loop_metrics
         invocation = metrics.latest_agent_invocation
         usage = invocation.usage if invocation else metrics.accumulated_usage
 
-        data: dict[str, Any] = {
+        data: dict[str, Any] = self._enrich({
             "usage": {
                 "input_tokens": usage.get("inputTokens", 0),
                 "output_tokens": usage.get("outputTokens", 0),
@@ -258,7 +423,15 @@ class EventPublisher(HookProvider):
             },
             "text": str(result) if result is not None else "",
             "message": result.message if result is not None else {},
-        }
+        })
+
+        structured = getattr(result, "structured_output", None) if result is not None else None
+        if structured is not None:
+            try:
+                data["structured_output"] = structured.model_dump()
+                data["output_schema_name"] = type(structured).__name__
+            except Exception:
+                pass
 
         self._callback(
             StreamEvent(
@@ -267,6 +440,15 @@ class EventPublisher(HookProvider):
                 data=data,
             ),
         )
+
+        if self._stream_group:
+            self._callback(
+                StreamEvent(
+                    type=EventType.STREAM_GROUP_END,
+                    agent_name=self._agent_name,
+                    data=self._enrich({"status": "completed"}),
+                ),
+            )
 
     # -- Model error hook ----------------------------------------------------
 
@@ -280,15 +462,15 @@ class EventPublisher(HookProvider):
         if event.exception is None:
             return
 
-        self._errored = True
+        self._errored_by_thread[get_thread_id()] = True
         self._callback(
             StreamEvent(
                 type=EventType.ERROR,
                 agent_name=self._agent_name,
-                data={
+                data=self._enrich({
                     "text": f"{event.exception}",
                     "exception_type": type(event.exception).__name__,
-                },
+                }),
             ),
         )
 
@@ -364,7 +546,9 @@ class EventPublisher(HookProvider):
             if text:
                 self._callback(
                     StreamEvent(
-                        type=EventType.TOKEN, agent_name=self._agent_name, data={"text": text}
+                        type=EventType.TOKEN,
+                        agent_name=self._agent_name,
+                        data=self._enrich({"text": text}),
                     ),
                 )
 
@@ -374,7 +558,7 @@ class EventPublisher(HookProvider):
                     StreamEvent(
                         type=EventType.REASONING,
                         agent_name=self._agent_name,
-                        data={"text": reasoning},
+                        data=self._enrich({"text": reasoning}),
                     ),
                 )
 
@@ -383,11 +567,11 @@ class EventPublisher(HookProvider):
                     StreamEvent(
                         type=EventType.HANDOFF,
                         agent_name=self._agent_name,
-                        data={
+                        data=self._enrich({
                             "from_node_ids": kwargs.get("from_node_ids", []),
                             "to_node_ids": kwargs.get("to_node_ids", []),
                             "message": kwargs.get("message"),
-                        },
+                        }),
                     )
                 )
 

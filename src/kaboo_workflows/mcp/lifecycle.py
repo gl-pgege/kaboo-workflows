@@ -62,6 +62,7 @@ class MCPLifecycle:
         self._clients: dict[str, StrandsMCPClient] = {}
         self._server_ready_timeout = server_ready_timeout
         self._started = False
+        self._consumer_token = f"kaboo-mcp-lifecycle-{id(self)}"
 
     def add_server(self, name: str, server: MCPServer) -> None:
         """Register an MCP server.
@@ -135,7 +136,9 @@ class MCPLifecycle:
         Clients are **not** started here — strands automatically starts
         MCPClient instances when they are registered as tool providers
         on an Agent. Starting them here would cause a "session is currently
-        running" error when the Agent tries to start them again.
+        running" error when the Agent tries to start them again. Instead we
+        pin each client with a permanent lifecycle consumer so its session
+        is not torn down when consuming Agents are garbage-collected.
 
         Raises:
             RuntimeError: If any server fails to start or become ready.
@@ -155,6 +158,16 @@ class MCPLifecycle:
                     f"MCP server '{name}' did not become ready within {self._server_ready_timeout}s"
                 )
             logger.info("server=<%s> | MCP server is ready", name)
+
+        # Phase 3: pin every client with a permanent consumer so its session
+        # survives agent garbage collection (esp. across an interrupt/resume
+        # boundary). Strands reference-counts clients per consuming Agent and
+        # tears the session down when the count hits zero; stop() clears it.
+        for name, client in self._clients.items():
+            add_consumer = getattr(client, "add_consumer", None)
+            if callable(add_consumer):
+                add_consumer(self._consumer_token)
+                logger.debug("client=<%s> | pinned lifecycle consumer", name)
 
         self._started = True
 

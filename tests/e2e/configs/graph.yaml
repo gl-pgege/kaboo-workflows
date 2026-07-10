@@ -1,0 +1,42 @@
+# First-class graph entry with a parallel batch:
+#   strategist → [writer, researcher] → editor
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  strategist:
+    stream: {title: "Strategy"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Outline ready."}
+  writer:
+    stream: {title: "Draft"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Draft written."}
+  researcher:
+    stream: {title: "Data"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Data gathered."}
+  editor:
+    stream: {title: "Editing"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Edited final report."}
+
+orchestrations:
+  pipeline:
+    mode: graph
+    entry_name: strategist
+    chat_output: editor
+    edges:
+      - {from: strategist, to: writer}
+      - {from: strategist, to: researcher}
+      - {from: writer, to: editor}
+      - {from: researcher, to: editor}
+
+entry: pipeline

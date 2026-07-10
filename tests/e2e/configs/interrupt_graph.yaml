@@ -1,0 +1,32 @@
+# HITL interrupt on a first-class GRAPH node. The strategist asks the user a
+# question, pausing the run; on resume the graph proceeds along its edge to the
+# editor, whose text is the chat reply.
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  strategist:
+    stream: {title: "Strategy"}
+    interrupt: true
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: ask_user, input: {question: "How wide should the scope be?"}}
+        final_text: "Outline ready."
+  editor:
+    stream: {title: "Editing"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Final graph report after approval."}
+
+orchestrations:
+  pipeline:
+    mode: graph
+    entry_name: strategist
+    chat_output: editor
+    edges:
+      - {from: strategist, to: editor}
+
+entry: pipeline

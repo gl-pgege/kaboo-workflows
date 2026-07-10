@@ -1,0 +1,38 @@
+# Delegate (1 level): coordinator delegates to worker_a then worker_b.
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: worker_a, input: "do part A"}
+          - {tool: worker_b, input: "do part B"}
+        final_text: "Coordinator combined the results."
+  worker_a:
+    stream: {title: "Worker A"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        final_text: "Part A done."
+  worker_b:
+    stream: {title: "Worker B"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        final_text: "Part B done."
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: worker_a, description: "Handles part A"}
+      - {agent: worker_b, description: "Handles part B"}
+
+entry: team

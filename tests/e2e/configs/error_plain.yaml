@@ -1,0 +1,12 @@
+# Plain agent whose model fails mid-run — drives the RUN_ERROR path.
+agents:
+  assistant:
+    stream: {title: "Assistant"}
+    model:
+      provider: tests.fakes.scripted_model:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - {error: "provider credentials expired"}
+
+entry: assistant

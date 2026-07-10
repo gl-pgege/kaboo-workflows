@@ -1,0 +1,31 @@
+# HITL interrupt on a first-class SWARM node. The planner asks the user a
+# question mid-swarm, pausing the whole run; on resume it hands off to the
+# writer, whose text is the chat reply.
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  planner:
+    stream: {title: "Planning"}
+    interrupt: true
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: ask_user, input: {question: "Which market should I focus on?"}}
+          - {handoff: writer, message: "Write it up."}
+  writer:
+    stream: {title: "Writing"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "Final swarm report after approval."}
+
+orchestrations:
+  pipeline:
+    mode: swarm
+    agents: [planner, writer]
+    entry_name: planner
+    chat_output: writer
+
+entry: pipeline

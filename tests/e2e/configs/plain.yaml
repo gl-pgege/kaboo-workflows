@@ -1,0 +1,11 @@
+# Plain single-agent entry (no orchestration).
+agents:
+  assistant:
+    stream: {title: "Assistant"}
+    model:
+      provider: tests.fakes.scripted_model:ScriptedModel
+      model_id: scripted
+      params:
+        final_text: "Hello from the plain agent."
+
+entry: assistant

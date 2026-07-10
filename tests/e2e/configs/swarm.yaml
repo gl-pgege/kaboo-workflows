@@ -1,0 +1,36 @@
+# First-class swarm entry: planner → researcher → writer (deterministic handoffs).
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  planner:
+    stream: {title: "Planning"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {handoff: researcher, message: "Gather the data."}
+  researcher:
+    stream: {title: "Researching"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {handoff: writer, message: "Write it up."}
+  writer:
+    stream: {title: "Writing"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        final_text: "Final report from the swarm."
+
+orchestrations:
+  pipeline:
+    mode: swarm
+    agents: [planner, researcher, writer]
+    entry_name: planner
+    chat_output: writer
+
+entry: pipeline

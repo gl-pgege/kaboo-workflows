@@ -1,0 +1,37 @@
+# HITL interrupt inside a delegate: the coordinator delegates to `worker`, which
+# asks the user a question (ask_user) and pauses the whole run. On resume the
+# worker receives the answer and finishes, and the coordinator wraps up.
+#
+# Note: ask_user interrupts fire for delegated sub-agents (invoked via
+# invoke_async, which is interrupt-aware); this mirrors the demo's HITL flow.
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: worker, input: "handle it"}
+        final_text: "Coordinator wrapped up after approval."
+  worker:
+    stream: {title: "Working"}
+    interrupt: true
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: ask_user, input: {question: "Approve this action?", options: ["yes", "no"]}}
+        final_text: "Worker finished after approval."
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: worker, description: "Does the gated work"}
+
+entry: team

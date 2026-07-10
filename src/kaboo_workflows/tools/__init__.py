@@ -18,12 +18,14 @@ from .loaders import (
     resolve_tool_spec,
     resolve_tool_specs,
 )
+from .ask_user import ask_user
 from .wrappers import (
     node_as_async_tool,
     node_as_tool,
 )
 
 __all__ = [
+    "ask_user",
     "load_tool_function",
     "load_tools_from_directory",
     "load_tools_from_file",

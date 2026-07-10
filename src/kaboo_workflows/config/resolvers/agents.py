@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 from strands import Agent
 
 from ...exceptions import ConfigurationError
+from ...hooks.interrupt_hook import InterruptHook
+from ...tools.ask_user import ask_user
 from ...utils import load_object
 from .conversation_manager import resolve_conversation_manager
 from .hooks import resolve_hook_entry
@@ -120,6 +122,20 @@ def build_agent_from_def(
     if agent_def.conversation_manager is not None:
         conversation_manager = resolve_conversation_manager(agent_def.conversation_manager)
 
+    # 6b. Resolve interrupt configuration
+    agent_kwargs = dict(agent_def.agent_kwargs)
+    if agent_def.interrupt is not None and agent_def.interrupt is not False:
+        interrupt = agent_def.interrupt
+        if interrupt.tools:
+            hooks.append(InterruptHook(tools=interrupt.tools, agent_name=name))
+        if interrupt.ask_user:
+            tools.append(ask_user)
+
+    # 6c. Resolve output_schema
+    if agent_def.output_schema is not None:
+        schema_cls = load_object(agent_def.output_schema, target="output schema")
+        agent_kwargs["structured_output_model"] = schema_cls
+
     # 7. Build the agent
     all_tools = tools + tool_providers + (extra_tools or [])
     all_hooks = hooks + (extra_hooks or [])
@@ -136,7 +152,7 @@ def build_agent_from_def(
             hooks=all_hooks,
             conversation_manager=conversation_manager,
             session_manager=agent_session,
-            **agent_def.agent_kwargs,
+            **agent_kwargs,
         )
     else:
         agent = Agent(
@@ -150,7 +166,7 @@ def build_agent_from_def(
             conversation_manager=conversation_manager,
             session_manager=agent_session,
             load_tools_from_directory=False,
-            **agent_def.agent_kwargs,
+            **agent_kwargs,
         )
 
     if not isinstance(agent, Agent):
@@ -158,7 +174,27 @@ def build_agent_from_def(
             f"Agent factory for '{name}' returned {type(agent).__name__}, expected strands.Agent."
         )
 
+    # Retain the kaboo HookProviders on the agent. strands stores hooks as a
+    # HookRegistry of bound callbacks and drops the original provider objects,
+    # but ag-ui-strands forks a fresh per-thread Agent for the entry node and
+    # only wires providers passed via ``StrandsAgent(hooks=...)``. Stashing them
+    # here lets the AG-UI adapter forward them so interrupt/HITL hooks fire on
+    # the executing per-thread clone, not just this blueprint. See
+    # ``get_agent_hook_providers`` and ``create_agui_app``.
+    agent._kaboo_hook_providers = list(all_hooks)  # type: ignore[attr-defined]
+
     return agent
+
+
+def get_agent_hook_providers(agent: Agent) -> list[Any]:
+    """Return the kaboo HookProviders retained on *agent* (empty if none).
+
+    These are the providers declared for the agent at build time (YAML
+    ``hooks:`` + interrupt hooks + orchestration hooks) — deliberately *not*
+    the runtime-attached :class:`EventPublisher` (which is stateful and scoped
+    to a single template, and whose events for the entry node are not rendered).
+    """
+    return list(getattr(agent, "_kaboo_hook_providers", []) or [])
 
 
 def resolve_agents(

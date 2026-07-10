@@ -27,7 +27,7 @@ from strands import Agent
 from strands.multiagent import Swarm
 from strands.multiagent.graph import Graph
 
-from .hooks import EventPublisher
+from .hooks import EventPublisher, HistoryHook
 from .types import EventType, SessionManifest, StreamEvent
 
 if TYPE_CHECKING:
@@ -192,7 +192,11 @@ def make_event_queue(
     *,
     orchestrators: dict[str, Node] | None = None,
     tool_labels: dict[str, str] | None = None,
+    stream_groups: dict[str, tuple[str, str]] | None = None,
+    history: dict[str, tuple[str, bool]] | None = None,
     entry_name: str | None = None,
+    chat_owner: str | None = None,
+    chat_reply: str | None = None,
     session_id: str | None = None,
 ) -> EventQueue:
     """Attach :class:`~kaboo_workflows.hooks.EventPublisher` hooks to agents.
@@ -221,9 +225,26 @@ def make_event_queue(
         tool_labels: Tool name → display label mapping forwarded to each
             :class:`.EventPublisher`.  Defaults to
             ``{name: "Delegating work to agent: <Name>"}`` for every agent.
+        stream_groups: agent_name → (group, title) mapping for
+            hierarchical activity attribution. When an agent is not in this
+            dict it uses its own name as the group.
+        history: agent_name → (key, enabled) mapping for client-driven
+            conversation history. Every agent except the chat-owning agent
+            receives a :class:`~kaboo_workflows.hooks.HistoryHook` so its
+            transcript is seeded from and captured back into the request's
+            history exchange. The chat owner is skipped — its transcript is the
+            chat itself, owned by the AG-UI adapter.
         entry_name: The configured name of the entry node.  Stored on the
             EventQueue and used as ``agent_name`` on SESSION_START /
             SESSION_END events.
+        chat_owner: Name of the agent whose transcript IS the chat and must not
+            receive a ``HistoryHook``. For a delegate entry this is the forked
+            manager's blueprint agent (e.g. ``coordinator``), which differs from
+            *entry_name* (the orchestration name). Defaults to *entry_name*.
+        chat_reply: Name of the agent whose streamed text becomes the chat reply
+            (the chat bubble). Its activity card is flagged ``is_chat_reply`` so
+            the UI suppresses only its duplicate text. For swarm/graph this is
+            the ``chat_output`` node; for delegate it is the manager agent.
         session_id: The effective session id.  Stored on the EventQueue and
             included in the SESSION_END event payload.
 
@@ -241,23 +262,56 @@ def make_event_queue(
         **(tool_labels or {}),
     }
 
+    groups = stream_groups or {}
+    history_map = history or {}
+    history_skip = chat_owner or entry_name
+
     for name, agent in agents.items():
-        pub = EventPublisher(callback=event_queue._put, agent_name=name, tool_labels=labels)
+        sg, st = groups.get(name, (name, name.replace("_", " ").title()))
+        pub = EventPublisher(
+            callback=event_queue._put,
+            agent_name=name,
+            tool_labels=labels,
+            stream_group=sg,
+            stream_title=st,
+            is_chat_reply=(chat_reply is not None and name == chat_reply),
+        )
         agent.hooks.add_hook(pub)
         agent.callback_handler = pub.as_callback_handler()
-        logger.debug("agent=<%s> | wired EventPublisher", name)
+        # Stash the instance so the AG-UI adapter can forward it to the per-thread
+        # clone ag-ui-strands executes for a plain-agent entry (that clone does not
+        # inherit this blueprint's HookRegistry). See create_agui_app.
+        agent._kaboo_event_publisher = pub  # type: ignore[attr-defined]
+        logger.debug("agent=<%s>, stream_group=<%s> | wired EventPublisher", name, sg)
+
+        # Client-driven history for every agent except the chat owner, whose
+        # transcript is the chat itself (owned by the AG-UI adapter). For a
+        # delegate entry the chat owner is the manager's blueprint agent, which
+        # differs from the orchestration's entry_name.
+        if name != history_skip:
+            key, enabled = history_map.get(name, (sg, False))
+            agent.hooks.add_hook(HistoryHook(key, enabled=enabled))
+            logger.debug(
+                "agent=<%s>, history_key=<%s>, enabled=<%s> | wired HistoryHook",
+                name,
+                key,
+                enabled,
+            )
 
     for orch_name, orch in (orchestrators or {}).items():
         if not isinstance(orch, (Swarm, Graph, Agent)):
             continue
+        sg, st = groups.get(orch_name, (orch_name, orch_name.replace("_", " ").title()))
         orch_pub = EventPublisher(
             callback=event_queue._put,
             agent_name=orch_name,
             tool_labels=labels,
+            stream_group=sg,
+            stream_title=st,
         )
         orch.hooks.add_hook(orch_pub)
         if isinstance(orch, Agent):
             orch.callback_handler = orch_pub.as_callback_handler()
-        logger.debug("orchestrator=<%s> | wired EventPublisher", orch_name)
+        logger.debug("orchestrator=<%s>, stream_group=<%s> | wired EventPublisher", orch_name, sg)
 
     return event_queue

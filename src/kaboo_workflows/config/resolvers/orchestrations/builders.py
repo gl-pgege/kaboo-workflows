@@ -25,6 +25,7 @@ from ...schema import (
 )
 from ..agents import build_agent_from_def
 from ..hooks import resolve_hook_entry
+from ..schema_prompt import build_delegate_schema_prompt
 from ..session_manager import resolve_leaf_session_manager
 from .planner import topological_sort
 
@@ -228,6 +229,13 @@ def build_delegate(
     #   - field absent on config            → entry_def's chain is untouched
     if "session_manager" in config.model_fields_set:
         entry_def = entry_def.model_copy(update={"session_manager": config.session_manager})
+
+    schema_supplement = build_delegate_schema_prompt(config.connections, agent_defs)
+    if schema_supplement:
+        base_prompt = entry_def.system_prompt or ""
+        entry_def = entry_def.model_copy(
+            update={"system_prompt": base_prompt + schema_supplement}
+        )
 
     # Build a NEW agent from the (possibly overridden) blueprint + delegate tools.
     agent = build_agent_from_def(

@@ -51,6 +51,10 @@ class EventType(StrEnum):
     MULTIAGENT_START = "multiagent_start"
     MULTIAGENT_COMPLETE = "multiagent_complete"
 
+    # Stream group events
+    STREAM_GROUP_START = "stream_group_start"
+    STREAM_GROUP_END = "stream_group_end"
+
     # Session-level events
     SESSION_START = "session_start"
     SESSION_END = "session_end"

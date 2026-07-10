@@ -26,6 +26,8 @@
     "reasoning",
     "session_end",
     "session_start",
+    "stream_group_end",
+    "stream_group_start",
     "token",
     "tool_end",
     "tool_start"
