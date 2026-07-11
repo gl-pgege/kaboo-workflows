@@ -56,7 +56,7 @@ entry: assistant
 
 ### 3. Create a tool
 
-```python notest
+```{.python notest}
 # tools/calculator.py
 from strands.tools.decorator import tool
 
@@ -226,7 +226,7 @@ entry: pipeline
 
 ## Using as a Library
 
-```python notest
+```{.python notest}
 from kaboo_workflows import load
 from kaboo_workflows.adapters import create_agui_app
 
@@ -249,7 +249,7 @@ The top-level `kaboo_workflows` package exports a curated surface; the full,
 auto-generated reference for every public module lives on the
 [documentation site](https://gl-pgege.github.io/kaboo-workflows/api-reference/).
 
-```python notest
+```{.python notest}
 from kaboo_workflows import (
     load, load_config, load_session, resolve_infra,   # config pipeline
     make_event_queue, EventQueue,                       # streaming

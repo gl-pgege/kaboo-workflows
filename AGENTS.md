@@ -110,7 +110,7 @@ Every change ends in the tests/docs that prove it (see Definition of Done):
 
 - [ ] `uv run just check` clean
 - [ ] `uv run just test` green (incl. `tests/contract/*` + `tests/e2e/*`)
-- [ ] `uv run just test-docs` green (all doc fences execute or are `notest`)
+- [ ] `uv run just test-docs` green (all doc fences execute or are `{.python notest}`)
 - [ ] `uv run just docs-build` clean (mkdocstrings renders, no broken refs)
 - [ ] new public symbol has a Google-style docstring + an autodoc page
 - [ ] new example has a passing load/e2e test; new workflow guide has a proof

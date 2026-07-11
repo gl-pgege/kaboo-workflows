@@ -58,7 +58,7 @@ entry: assistant
 
 ### 3. Create a tool
 
-```python notest
+```{.python notest}
 # tools/calculator.py
 from strands.tools.decorator import tool
 
@@ -228,7 +228,7 @@ entry: pipeline
 
 ## Using as a Library
 
-```python notest
+```{.python notest}
 from kaboo_workflows import load
 from kaboo_workflows.adapters import create_agui_app
 
@@ -251,7 +251,7 @@ The top-level `kaboo_workflows` package exports a curated surface; the full,
 auto-generated reference for every public module lives on the
 [documentation site](https://gl-pgege.github.io/kaboo-workflows/api-reference/).
 
-```python notest
+```{.python notest}
 from kaboo_workflows import (
     load, load_config, load_session, resolve_infra,   # config pipeline
     make_event_queue, EventQueue,                       # streaming
@@ -516,7 +516,7 @@ entry: assistant
 
 That's it. One agent, one entry point. Load it in Python:
 
-```python notest
+```{.python notest}
 from kaboo_workflows import load
 
 resolved = load("config.yaml")
@@ -1356,7 +1356,7 @@ The fix: add `session_manager: ~` to each swarm agent to opt out.
 
 For web servers where each HTTP request needs its own session:
 
-```python notest
+```{.python notest}
 from kaboo_workflows import load_config, resolve_infra, load_session
 
 # Once at startup
@@ -1497,7 +1497,7 @@ entry: assistant
 
 The `type` field points to a factory function that returns an `MCPServer` instance:
 
-```python notest
+```{.python notest}
 # server.py
 from mcp.server.fastmcp import FastMCP
 from kaboo_workflows.mcp import MCPServer
@@ -1600,7 +1600,7 @@ On shutdown (via context manager or `.stop()`):
 
 Always use the MCP lifecycle context manager:
 
-```python notest
+```{.python notest}
 resolved = load("config.yaml")
 
 with resolved.mcp_lifecycle:
@@ -1609,7 +1609,7 @@ with resolved.mcp_lifecycle:
 
 Or for async contexts:
 
-```python notest
+```{.python notest}
 async with resolved.mcp_lifecycle:
     result = await resolved.entry.invoke_async("Hello!")
 ```
@@ -2022,7 +2022,7 @@ orchestrations:
 
 Large configs can be split across multiple files. Pass a list to `load()` and they're merged:
 
-```python notest
+```{.python notest}
 from kaboo_workflows import load
 
 resolved = load(["base.yaml", "agents.yaml", "mcp.yaml"])
@@ -2235,7 +2235,7 @@ orchestrations:
 
 When you have nested orchestrations running, you need visibility into what's happening. `wire_event_queue()` attaches event publishers to every agent and orchestrator and funnels all events into a single async queue.
 
-```python notest
+```{.python notest}
 import asyncio
 from kaboo_workflows import AnsiRenderer, load
 
@@ -2305,7 +2305,7 @@ The built-in `AnsiRenderer` prints colored terminal output — agent names, tool
 
 Events are `StreamEvent` dataclasses with `.asdict()` for serialization:
 
-```python notest
+```{.python notest}
 while (event := await queue.get()) is not None:
     data = event.asdict()
     # Send to websocket, log to file, push to metrics system...
@@ -2313,7 +2313,7 @@ while (event := await queue.get()) is not None:
 
 A typical consumer pattern that handles the session lifecycle:
 
-```python notest
+```{.python notest}
 while (event := await queue.get()) is not None:
     if event.type == "session_start":
         session_id = event.data.get("session_id")
@@ -2487,7 +2487,7 @@ The final `ResolvedConfig` has:
 
 Most users only need:
 
-```python notest
+```{.python notest}
 from kaboo_workflows import load
 
 resolved = load("config.yaml")
@@ -2543,7 +2543,7 @@ After `resolve_infra()`:
 
 You then start the shared MCP runtime explicitly:
 
-```python notest
+```{.python notest}
 from kaboo_workflows.config import load_config, resolve_infra
 
 app_config = load_config("config.yaml")
@@ -2578,7 +2578,7 @@ Instead, you want:
 
 Typical pattern:
 
-```python notest
+```{.python notest}
 from kaboo_workflows.config import load_config, load_session, resolve_infra
 
 # Once at process startup

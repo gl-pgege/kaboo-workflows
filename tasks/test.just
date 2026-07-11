@@ -10,7 +10,7 @@ test-coverage cov_fail_under="70":
 # execute python fences embedded in README + docs (proven docs)
 [group('test')]
 test-docs:
-    uv run python -m pytest --markdown-docs -m markdown-docs README.md docs/
+    uv run python -m pytest --markdown-docs -m markdown-docs --markdown-docs-syntax=superfences README.md docs/
 
 # run mutation testing (requires: pip install mutmut)
 [group('test')]

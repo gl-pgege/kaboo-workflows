@@ -144,7 +144,7 @@ The fix: add `session_manager: ~` to each swarm agent to opt out.
 
 For web servers where each HTTP request needs its own session:
 
-```python notest
+```{.python notest}
 from kaboo_workflows import load_config, resolve_infra, load_session
 
 # Once at startup

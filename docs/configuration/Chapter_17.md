@@ -69,7 +69,7 @@ The final `ResolvedConfig` has:
 
 Most users only need:
 
-```python notest
+```{.python notest}
 from kaboo_workflows import load
 
 resolved = load("config.yaml")
@@ -125,7 +125,7 @@ After `resolve_infra()`:
 
 You then start the shared MCP runtime explicitly:
 
-```python notest
+```{.python notest}
 from kaboo_workflows.config import load_config, resolve_infra
 
 app_config = load_config("config.yaml")
@@ -160,7 +160,7 @@ Instead, you want:
 
 Typical pattern:
 
-```python notest
+```{.python notest}
 from kaboo_workflows.config import load_config, load_session, resolve_infra
 
 # Once at process startup

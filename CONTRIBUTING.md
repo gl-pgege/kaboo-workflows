@@ -90,7 +90,7 @@ Nothing documented ships without a passing test:
 
 - **Doc snippets** — every executable ```python fence in `README.md` and `docs/`
   is run by `uv run just test-docs`. Snippets that need a network/LLM call must be
-  fenced ```python notest.
+  fenced ```{.python notest}.
 - **Examples** — every `examples/**/config.yaml` is load-validated by
   `tests/pipeline/test_examples.py`. For complex scenarios, add a scripted
   `tests/e2e/configs/*.yaml` and an e2e test asserting exact behaviour; a globber

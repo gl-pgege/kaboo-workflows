@@ -18,7 +18,7 @@ entry: assistant
 
 That's it. One agent, one entry point. Load it in Python:
 
-```python notest
+```{.python notest}
 from kaboo_workflows import load
 
 resolved = load("config.yaml")

@@ -6,7 +6,7 @@
 
 Large configs can be split across multiple files. Pass a list to `load()` and they're merged:
 
-```python notest
+```{.python notest}
 from kaboo_workflows import load
 
 resolved = load(["base.yaml", "agents.yaml", "mcp.yaml"])

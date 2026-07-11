@@ -43,7 +43,7 @@ entry: assistant
 
 The `type` field points to a factory function that returns an `MCPServer` instance:
 
-```python notest
+```{.python notest}
 # server.py
 from mcp.server.fastmcp import FastMCP
 from kaboo_workflows.mcp import MCPServer
@@ -146,7 +146,7 @@ On shutdown (via context manager or `.stop()`):
 
 Always use the MCP lifecycle context manager:
 
-```python notest
+```{.python notest}
 resolved = load("config.yaml")
 
 with resolved.mcp_lifecycle:
@@ -155,7 +155,7 @@ with resolved.mcp_lifecycle:
 
 Or for async contexts:
 
-```python notest
+```{.python notest}
 async with resolved.mcp_lifecycle:
     result = await resolved.entry.invoke_async("Hello!")
 ```
