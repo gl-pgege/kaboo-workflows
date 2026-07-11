@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 authors = [
-    { name = "Michal Galuszka", email = "michal.galuszka1@gmail.com" },
+    { name = "Paul Gege", email = "pgege@goodlabs.studio" },
 ]
 keywords = ["agents", "multi-agent", "orchestration", "yaml", "strands", "llm", "ai"]
 classifiers = [
