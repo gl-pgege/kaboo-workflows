@@ -2,7 +2,7 @@
 
 This module manages the full lifecycle of [Model Context Protocol](https://modelcontextprotocol.io/) servers and clients within kaboo-workflows.  It bridges the gap between the low-level `mcp` Python SDK (which provides `FastMCP` and transport primitives) and the strands agent framework (which consumes `MCPClient` as a tool provider).
 
-The compose config layer resolves YAML declarations into the objects defined here; this module knows nothing about YAML — it only deals with constructed Python objects and their lifecycle.
+The kaboo-workflows config layer resolves YAML declarations into the objects defined here; this module knows nothing about YAML — it only deals with constructed Python objects and their lifecycle.
 
 ---
 
@@ -92,7 +92,7 @@ The ordering constraint is:
 
 This prevents clients from connecting to servers that aren't ready, and prevents servers from shutting down while clients still have open sessions.
 
-### Integration with compose
+### Integration with the config layer
 
 The config resolver assembles an `MCPLifecycle` with all declared servers and clients, but does **not** start it.  The `load()` function calls `lifecycle.start()` before creating agents.  Agents auto-start their MCP clients on construction.
 
