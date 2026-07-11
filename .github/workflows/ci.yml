@@ -89,5 +89,5 @@ jobs:
       - name: Execute doc snippets
         run: uv run just test-docs
 
-      - name: Build docs (strict)
-        run: uv run mkdocs build --strict
+      - name: Build docs (strict) + render sanity check
+        run: uv run just docs-check-render
