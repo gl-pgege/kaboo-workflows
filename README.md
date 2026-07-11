@@ -10,7 +10,7 @@
 **[Configuration guide](docs/configuration/)** ·
 **[Workflow guides](docs/workflows/)** ·
 **[Examples](examples/)** ·
-**[Live demo](https://github.com/gl-pgege/kaboo-workflows-demo)**
+**[Live demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo)**
 
 > Extended with native AG-UI protocol support for CopilotKit frontends and AgentCore deployment. Now maintained at [gl-pgege/kaboo-workflows](https://github.com/gl-pgege/kaboo-workflows) (originally forked from strands-compose — see [Attribution](#attribution)).
 
@@ -296,7 +296,7 @@ See [examples/](examples/) for the full list.
 
 ### Live demo
 
-[kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) is a
+[kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo) is a
 runnable, end-to-end reference: this library serves a YAML multi-agent pipeline as
 AG-UI SSE, behind a CopilotKit runtime
 ([kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime)) and a React UI

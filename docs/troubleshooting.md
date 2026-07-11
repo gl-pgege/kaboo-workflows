@@ -57,7 +57,7 @@ See the [MCP guide](configuration/Chapter_09.md) for details.
   CopilotKit `runtimeUrl` (or a dev proxy) at it.
 - **CORS blocked in the browser** — serve the frontend through the same origin
   or a dev proxy rather than hitting `:8080` cross-origin. The
-  [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) shows
+  [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo) shows
   a working proxy setup.
 
 ## Nothing streams back

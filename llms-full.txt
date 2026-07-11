@@ -12,7 +12,7 @@
 **[Configuration guide](docs/configuration/)** ·
 **[Workflow guides](docs/workflows/)** ·
 **[Examples](examples/)** ·
-**[Live demo](https://github.com/gl-pgege/kaboo-workflows-demo)**
+**[Live demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo)**
 
 > Extended with native AG-UI protocol support for CopilotKit frontends and AgentCore deployment. Now maintained at [gl-pgege/kaboo-workflows](https://github.com/gl-pgege/kaboo-workflows) (originally forked from strands-compose — see [Attribution](#attribution)).
 
@@ -298,7 +298,7 @@ See [examples/](examples/) for the full list.
 
 ### Live demo
 
-[kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) is a
+[kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo) is a
 runnable, end-to-end reference: this library serves a YAML multi-agent pipeline as
 AG-UI SSE, behind a CopilotKit runtime
 ([kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime)) and a React UI
@@ -3160,7 +3160,7 @@ kaboo-workflows is the orchestration engine. It pairs with:
   Postgres `ThreadStore`s).
 - **[kaboo-react](https://github.com/gl-pgege/kaboo-react)** — React components
   for rendering agent activity.
-- **[kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo)** —
+- **[kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo)** —
   a runnable, end-to-end reference wiring all three together.
 
 See [the kaboo stack](https://gl-pgege.github.io/kaboo-docs/) for the whole
@@ -3234,7 +3234,7 @@ See the [MCP guide](configuration/Chapter_09.md) for details.
   CopilotKit `runtimeUrl` (or a dev proxy) at it.
 - **CORS blocked in the browser** — serve the frontend through the same origin
   or a dev proxy rather than hitting `:8080` cross-origin. The
-  [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) shows
+  [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo) shows
   a working proxy setup.
 
 ## Nothing streams back

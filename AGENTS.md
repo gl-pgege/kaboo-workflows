@@ -121,7 +121,7 @@ Every change ends in the tests/docs that prove it (see Definition of Done):
 
 ## Related
 
-- [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) — the
+- [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo) — the
   runnable, end-to-end reference that serves this library as AG-UI SSE.
 - [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) — CopilotKit runtime
   persistence.

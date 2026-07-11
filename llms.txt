@@ -61,5 +61,5 @@
 
 - [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) — CopilotKit runtime persistence
 - [kaboo-react](https://github.com/gl-pgege/kaboo-react) — agent-activity React UI
-- [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) — runnable end-to-end reference
+- [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo) — runnable end-to-end reference
 - [The kaboo stack](https://gl-pgege.github.io/kaboo-docs/) — umbrella landing

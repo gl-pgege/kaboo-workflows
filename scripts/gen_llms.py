@@ -100,7 +100,7 @@ def build_llms_txt() -> str:
     out.append("## The kaboo stack\n")
     out.append("- [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) — CopilotKit runtime persistence")
     out.append("- [kaboo-react](https://github.com/gl-pgege/kaboo-react) — agent-activity React UI")
-    out.append("- [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) — runnable end-to-end reference")
+    out.append("- [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo) — runnable end-to-end reference")
     out.append("- [The kaboo stack](https://gl-pgege.github.io/kaboo-docs/) — umbrella landing")
 
     return "\n".join(out).rstrip() + "\n"
