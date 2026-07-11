@@ -1,0 +1,50 @@
+# 19_multiturn_history — Client-driven sub-agent memory
+#
+#   assistant_team (delegate):
+#     coordinator ─▶ memo (history: true)
+#
+# A delegate sub-agent normally starts fresh every turn. Set `history: true` on
+# `memo` and its transcript is seeded from `state.kaboo_history` on the way in and
+# captured back into the outgoing snapshot on the way out — so the client (or the
+# kaboo-runtime persistence layer) can carry a sub-agent's memory across turns.
+#
+# The client owns the transcript: kaboo enriches the data structure; you decide
+# where to store it (see the kaboo-runtime library for turnkey persistence).
+#
+# Run:
+#   uv run python examples/19_multiturn_history/main.py
+
+models:
+  default:
+    provider: bedrock
+    model_id: openai.gpt-oss-20b-1:0
+
+x-hooks: &hooks
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
+    params: { max_calls: 20 }
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
+
+agents:
+  coordinator:
+    model: default
+    hooks: *hooks
+    system_prompt: |
+      You coordinate a note-taking assistant. Delegate every note to memo, then
+      confirm what was recorded.
+
+  memo:
+    model: default
+    hooks: *hooks
+    history: true
+    system_prompt: |
+      You keep a running memory of the user's notes. Use the notes from previous
+      turns (provided in your history) when answering follow-up questions.
+
+orchestrations:
+  assistant_team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - { agent: memo, description: "Records and recalls notes across turns" }
+
+entry: assistant_team

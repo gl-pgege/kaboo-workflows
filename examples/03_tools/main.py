@@ -1,7 +1,7 @@
 """03_tools — Python Tools.
 
 Load ``@tool``-decorated functions from an external file via tools: [./tools.py]
-in config.yaml.  strands-compose discovers every ``@tool``-decorated function
+in config.yaml.  kaboo-workflows discovers every ``@tool``-decorated function
 and registers it with the Agent automatically.  Plain functions without the
 decorator are ignored.
 

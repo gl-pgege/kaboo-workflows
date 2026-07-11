@@ -18,7 +18,7 @@ models:
     model_id: openai.gpt-oss-20b-1:0
 
 # ── Local server (managed lifecycle) ─────────────────────────────────────────
-# strands-compose calls create(**params) -> starts the server before load() returns.
+# kaboo-workflows calls create(**params) -> starts the server before load() returns.
 mcp_servers:
   calculator:
     type: ./server.py:create

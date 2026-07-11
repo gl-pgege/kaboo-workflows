@@ -55,7 +55,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
 
@@ -69,3 +69,25 @@ jobs:
 
       - name: pytest with coverage
         run: uv run just test
+
+  # ── Docs (proven snippets + strict site build) ──────────────────────────────
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install deps (dev + docs)
+        run: uv sync --all-groups --all-extras
+
+      - name: Execute doc snippets
+        run: uv run just test-docs
+
+      - name: Build docs (strict)
+        run: uv run mkdocs build --strict

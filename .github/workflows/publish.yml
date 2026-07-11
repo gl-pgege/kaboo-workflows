@@ -2,10 +2,10 @@
 # Uses Trusted Publishing (OIDC — no API tokens required).
 #
 # One-time setup on PyPI:
-#   1. Create a project for "strands-compose" at https://pypi.org/manage/account/publishing/
+#   1. Create a project for "kaboo-workflows" at https://pypi.org/manage/account/publishing/
 #   2. Configure Trusted Publisher:
-#     - Owner:       strands-compose
-#     - Repository:  sdk-python
+#     - Owner:       gl-pgege
+#     - Repository:  kaboo-workflows
 #     - Workflow:    publish.yml
 #     - Environment: release
 

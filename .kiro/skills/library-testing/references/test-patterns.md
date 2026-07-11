@@ -2,7 +2,7 @@
 
 Concrete, copy-paste templates for the doctrine in `SKILL.md`. Load this only
 when actually writing a test. Exact names drift — trust the **shapes** and adapt
-to the current public API (`strands_compose/__init__.py`) and pipeline
+to the current public API (`kaboo_workflows/__init__.py`) and pipeline
 (`config/loaders/loaders.py`).
 
 Everything here obeys two rules from the law: **fake strands at our own resolver
@@ -94,15 +94,15 @@ def fake_runtime():
     """Context managers that swap the strands-facing seams for fakes."""
     return (
         patch(
-            "strands_compose.config.resolvers.config.resolve_model",
+            "kaboo_workflows.config.resolvers.config.resolve_model",
             lambda model_def: FakeModel(),
         ),
         patch(
-            "strands_compose.config.resolvers.config.resolve_mcp_server",
+            "kaboo_workflows.config.resolvers.config.resolve_mcp_server",
             lambda *a, **k: FakeMCPServer(),
         ),
         patch(
-            "strands_compose.config.resolvers.config.resolve_mcp_client",
+            "kaboo_workflows.config.resolvers.config.resolve_mcp_client",
             lambda *a, **k: FakeMCPClient(),
         ),
     )
@@ -124,7 +124,7 @@ from __future__ import annotations
 
 import textwrap
 
-from strands_compose.config.schema import AgentDef, AppConfig
+from kaboo_workflows.config.schema import AgentDef, AppConfig
 
 
 def agent_def(**overrides) -> AgentDef:
@@ -165,7 +165,7 @@ from __future__ import annotations
 
 from strands import Agent
 
-from strands_compose.config import load_config, resolve_infra, load_session
+from kaboo_workflows.config import load_config, resolve_infra, load_session
 from tests.factories import app_config, agent_def
 
 
@@ -204,8 +204,8 @@ identifier, never a sentence.
 ```python
 import pytest
 
-from strands_compose.config.loaders.validators import validate_references
-from strands_compose.exceptions import UnresolvedReferenceError
+from kaboo_workflows.config.loaders.validators import validate_references
+from kaboo_workflows.exceptions import UnresolvedReferenceError
 from tests.factories import app_config, agent_def
 
 
@@ -229,8 +229,8 @@ Never call `pub._on_*` and never fabricate strands hook events.
 ```python
 from strands import Agent
 
-from strands_compose.wire import make_event_queue
-from strands_compose.types import EventType
+from kaboo_workflows.wire import make_event_queue
+from kaboo_workflows.types import EventType
 from tests.fakes.strands import FakeModel
 
 
@@ -263,7 +263,7 @@ is a reviewed decision, not a surprise.
 import json
 from pathlib import Path
 
-from strands_compose.types import StreamEvent, SessionManifest
+from kaboo_workflows.types import StreamEvent, SessionManifest
 
 BASELINE = Path(__file__).parent / "shape_baseline.json"
 
@@ -290,7 +290,7 @@ Assert invariants over a domain, not recomputations. Keep strategies tight.
 ```python
 from hypothesis import given, strategies as st
 
-from strands_compose.config.loaders.helpers import sanitize_collection_keys  # adapt name
+from kaboo_workflows.config.loaders.helpers import sanitize_collection_keys  # adapt name
 
 
 @given(st.text(min_size=1, max_size=40))
@@ -323,7 +323,7 @@ Assert the *contract* (order + idempotency) through the fake's recorded calls.
 Never read `lifecycle._started`.
 
 ```python
-from strands_compose.mcp.lifecycle import MCPLifecycle
+from kaboo_workflows.mcp.lifecycle import MCPLifecycle
 from tests.fakes.strands import FakeMCPServer
 
 
@@ -350,7 +350,7 @@ exactly one `start` — the observable idempotency contract, not a private flag.
 import pytest
 from strands import Agent
 
-from strands_compose.config import ResolvedConfig, load
+from kaboo_workflows.config import ResolvedConfig, load
 
 
 @pytest.mark.integration

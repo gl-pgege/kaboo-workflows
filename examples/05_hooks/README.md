@@ -35,10 +35,10 @@ In `config.yaml`, hooks are listed under the agent. They fire in order:
 ```yaml
 hooks:
   - type: ./hooks.py:FingerprintHook           # custom — from local file
-  - type: strands_compose.hooks:MaxToolCallsGuard
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
     params:
       max_calls: 5
-  - type: strands_compose.hooks:ToolNameSanitizer
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
 ```
 
 The spec format for hooks is always `module_or_file:ClassName` — the class name is required (no bulk scan).

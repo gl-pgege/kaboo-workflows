@@ -1,6 +1,6 @@
 ---
 name: library-development
-description: Build and extend strands-compose — the declarative YAML to strands resolution library in src/strands_compose. Use when adding or editing config schema, loaders, resolvers, orchestration builders, model/mcp/tool/hook resolution, streaming, manifests, or the CLI. Library source only; not tests, examples, or docs.
+description: Build and extend kaboo-workflows — the declarative YAML to strands resolution library in src/kaboo_workflows. Use when adding or editing config schema, loaders, resolvers, orchestration builders, model/mcp/tool/hook resolution, streaming, manifests, or the CLI. Library source only; not tests, examples, or docs.
 metadata:
   area: library
   stack: python,pydantic-v2,strands-agents,pyyaml,mcp
@@ -8,12 +8,12 @@ metadata:
 
 # Library Development
 
-Rules for the **strands-compose library** in `src/strands_compose/`
+Rules for the **kaboo-workflows library** in `src/kaboo_workflows/`
 (Python ≥ 3.11 + Pydantic v2 + strands-agents + PyYAML + MCP). They describe
 the **mental model and conventions**, not the current set of files — sections,
 providers, and orchestration modes come and go, the shape stays.
 
-strands-compose does exactly one thing: **read YAML and hand back fully wired,
+kaboo-workflows does exactly one thing: **read YAML and hand back fully wired,
 plain `strands` objects — no wrappers, no subclasses.** Everything agent-,
 model-, session-, tool-, or MCP-related is provided by strands. Before building
 anything that touches those, check the installed SDK
@@ -176,7 +176,7 @@ foundation, imported freely:  types.py · exceptions.py · wire.py · manifest.p
   still required for graceful shutdown.
 - **Optional providers import lazily inside the function** that needs them
   (`bedrock`, `ollama`, `openai`, `gemini`, `agentcore`), each raising a clear
-  `ImportError` pointing at the extra (`pip install strands-compose[openai]`).
+  `ImportError` pointing at the extra (`pip install kaboo-workflows[openai]`).
   This is the one sanctioned use of function-local imports; keep it.
 
 ---
@@ -206,7 +206,7 @@ foundation, imported freely:  types.py · exceptions.py · wire.py · manifest.p
   `UPPER_SNAKE_CASE` constants · `_prefix` for private. No abbreviations in the
   public API. Booleans read as `is_` / `has_` / `enable_`. Don't shadow builtins.
 - **`__all__` only in `__init__.py`** — it is the single source of truth for a
-  package's public surface. The top-level `strands_compose/__init__.py` is the
+  package's public surface. The top-level `kaboo_workflows/__init__.py` is the
   public API; consumers import from there, never from submodules.
 - **Import order** stdlib -> third-party -> local (ruff-enforced, autofixed).
 - Run modules with `uv run python …`, never bare `python`.

@@ -1,0 +1,74 @@
+# 17_parallel — Parallel top-level + nested parallelism
+#
+#   pipeline (graph):
+#     strategist ─▶ [ writer , subteam ] ─▶ editor
+#     subteam (graph): sub_lead ─▶ [ analyst_a , analyst_b ] ─▶ sub_end
+#
+# The top graph fans out to `writer` and `subteam` in parallel; `subteam` is
+# itself a graph that fans out to two analysts. All leaves run before the merge.
+#
+# Run:
+#   uv run python examples/17_parallel/main.py
+
+models:
+  default:
+    provider: bedrock
+    model_id: openai.gpt-oss-20b-1:0
+
+x-hooks: &hooks
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
+    params: { max_calls: 20 }
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
+
+agents:
+  strategist:
+    model: default
+    hooks: *hooks
+    system_prompt: "Produce a short outline that the writer and analysis subteam can work from."
+  writer:
+    model: default
+    hooks: *hooks
+    system_prompt: "Draft the narrative section from the outline."
+  sub_lead:
+    model: default
+    hooks: *hooks
+    system_prompt: "Split the analysis into two independent angles for analyst_a and analyst_b."
+  analyst_a:
+    model: default
+    hooks: *hooks
+    system_prompt: "Analyze the quantitative angle."
+  analyst_b:
+    model: default
+    hooks: *hooks
+    system_prompt: "Analyze the qualitative angle."
+  sub_end:
+    model: default
+    hooks: *hooks
+    system_prompt: "Merge analyst_a and analyst_b into a single analysis section."
+  editor:
+    model: default
+    hooks: *hooks
+    system_prompt: "Combine the narrative and the analysis into the final report."
+
+orchestrations:
+  subteam:
+    mode: graph
+    entry_name: sub_lead
+    chat_output: sub_end
+    edges:
+      - { from: sub_lead, to: analyst_a }
+      - { from: sub_lead, to: analyst_b }
+      - { from: analyst_a, to: sub_end }
+      - { from: analyst_b, to: sub_end }
+
+  pipeline:
+    mode: graph
+    entry_name: strategist
+    chat_output: editor
+    edges:
+      - { from: strategist, to: writer }
+      - { from: strategist, to: subteam }
+      - { from: writer, to: editor }
+      - { from: subteam, to: editor }
+
+entry: pipeline

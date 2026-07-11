@@ -4,7 +4,7 @@
 
 ## What this shows
 
-- `load()` — the single entry point to strands-compose. Give it a YAML file, get back a
+- `load()` — the single entry point to kaboo-workflows. Give it a YAML file, get back a
   ready-to-use agent.
 - A minimal `config.yaml` with just a model and an agent — nothing else needed.
 - `resolved.entry` — call it with a string and you get the agent's answer. No boilerplate.
@@ -31,7 +31,7 @@ entry: assistant
 ```
 
 ```python
-from strands_compose import load
+from kaboo_workflows import load
 
 resolved = load("config.yaml")
 result = resolved.entry("What is Python?")

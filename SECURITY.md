@@ -10,7 +10,7 @@
 
 We take security seriously. Please **do not** open a public GitHub issue for security vulnerabilities.
 
-Instead, please report via [GitHub Security Advisories](https://github.com/strands-compose/sdk-python/security/advisories/new).
+Instead, please report via [GitHub Security Advisories](https://github.com/gl-pgege/kaboo-workflows/security/advisories/new).
 
 Include:
 - Description of the vulnerability
@@ -20,7 +20,7 @@ Include:
 
 ## Security Practices
 
-strands-compose enforces the following (via Bandit + code review):
+kaboo-workflows enforces the following (via Bandit + code review):
 
 - **No `eval()` or `exec()`** — config is parsed through Pydantic, never executed as code
 - **No `subprocess` with `shell=True`** — MCP stdio transports use direct command execution

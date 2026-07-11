@@ -40,3 +40,19 @@ def test_example_config_loads(config_input, fake_runtime):
     assert isinstance(resolved, ResolvedConfig)
     assert resolved.entry is not None
     resolved.mcp_lifecycle.stop()
+
+
+@pytest.mark.integration
+def test_step1_example_config_loads(fake_runtime, monkeypatch):
+    """``examples/step1`` uses a non-numbered dir + an env-var-driven model.
+
+    The numbered-example glob skips it, so it is covered explicitly here: set a
+    placeholder ``OPENROUTER_API_KEY`` (interpolation runs before the faked model
+    resolver) and assert the config resolves end to end.
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    config = EXAMPLES_DIR / "step1" / "config.yaml"
+    resolved = load(str(config))
+    assert isinstance(resolved, ResolvedConfig)
+    assert resolved.entry is not None
+    resolved.mcp_lifecycle.stop()

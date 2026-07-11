@@ -4,7 +4,7 @@
 
 ---
 
-strands-compose supports Docker Compose-style `${VAR}` interpolation. Define variables in the `vars` block, reference them anywhere with `${VAR}`, and optionally provide defaults with `${VAR:-fallback}`.
+kaboo-workflows supports Docker Compose-style `${VAR}` interpolation. Define variables in the `vars` block, reference them anywhere with `${VAR}`, and optionally provide defaults with `${VAR:-fallback}`.
 
 ```yaml
 vars:
@@ -29,7 +29,7 @@ entry: assistant
 
 ## Lookup Order
 
-When strands-compose sees `${SOMETHING}`, it resolves it in this order:
+When kaboo-workflows sees `${SOMETHING}`, it resolves it in this order:
 
 1. **`vars` block** — your YAML-defined variables
 2. **Environment variables** — `os.environ`
@@ -58,7 +58,7 @@ vars:
   MODEL: ${BASE_MODEL}
 ```
 
-This works because strands-compose resolves `vars` in two sequential passes — the first pass resolves against environment variables, the second pass resolves cross-references between vars. Circular references (`A: ${B}`, `B: ${A}`) are caught and raise a clear error.
+This works because kaboo-workflows resolves `vars` in two sequential passes — the first pass resolves against environment variables, the second pass resolves cross-references between vars. Circular references (`A: ${B}`, `B: ${A}`) are caught and raise a clear error.
 
 ## Type Preservation
 

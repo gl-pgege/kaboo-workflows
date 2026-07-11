@@ -1,4 +1,4 @@
-# strands-compose Examples
+# kaboo-workflows Examples
 
 Each example is a self-contained folder with a `README.md`, `config.yaml`, and `main.py`.
 
@@ -18,6 +18,20 @@ Each example is a self-contained folder with a `README.md`, `config.yaml`, and `
 | 12 | [12_streaming](./12_streaming/) | `wire_event_queue()` — stream every token, tool call, and completion live |
 | 13 | [13_graph_conditions](./13_graph_conditions/) | Conditional graph edges — `condition:`, `reset_on_revisit`, `max_node_executions` |
 | 14 | [14_agent_factory](./14_agent_factory/) | `type:` + `agent_kwargs:` — custom agent factory instead of default `Agent()` |
+
+### Complex workflows (multi-depth, multi-step)
+
+Each of these ships alongside a [workflow guide](../docs/workflows/) and a passing
+end-to-end test that proves its exact behaviour.
+
+| # | Folder | What it demonstrates | Guide |
+|---|--------|----------------------|-------|
+| 15 | [15_deep_nesting](./15_deep_nesting/) | Delegation nested 3 levels deep | [deep-nesting](../docs/workflows/deep-nesting.md) |
+| 16 | [16_swarm_in_graph](./16_swarm_in_graph/) | A swarm and a delegate side by side inside one graph | [swarm-and-graph](../docs/workflows/swarm-and-graph.md) |
+| 17 | [17_parallel](./17_parallel/) | Parallel top-level batch + nested parallelism | [parallel](../docs/workflows/parallel.md) |
+| 18 | [18_hitl](./18_hitl/) | Nested + parallel human-in-the-loop gates | [human-in-the-loop](../docs/workflows/human-in-the-loop.md) |
+| 19 | [19_multiturn_history](./19_multiturn_history/) | Client-driven sub-agent memory across turns | [multi-turn-history](../docs/workflows/multi-turn-history.md) |
+| 20 | [20_error_and_rejection](./20_error_and_rejection/) | Isolated errors + safe rejection of gated tools | [errors-and-rejection](../docs/workflows/errors-and-rejection.md) |
 
 ## Prerequisites
 

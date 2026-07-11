@@ -6,9 +6,9 @@
 
 When you have nested orchestrations running, you need visibility into what's happening. `wire_event_queue()` attaches event publishers to every agent and orchestrator and funnels all events into a single async queue.
 
-```python
+```python notest
 import asyncio
-from strands_compose import AnsiRenderer, load
+from kaboo_workflows import AnsiRenderer, load
 
 async def main():
     resolved = load("config.yaml")
@@ -76,7 +76,7 @@ The built-in `AnsiRenderer` prints colored terminal output — agent names, tool
 
 Events are `StreamEvent` dataclasses with `.asdict()` for serialization:
 
-```python
+```python notest
 while (event := await queue.get()) is not None:
     data = event.asdict()
     # Send to websocket, log to file, push to metrics system...
@@ -84,7 +84,7 @@ while (event := await queue.get()) is not None:
 
 A typical consumer pattern that handles the session lifecycle:
 
-```python
+```python notest
 while (event := await queue.get()) is not None:
     if event.type == "session_start":
         session_id = event.data.get("session_id")

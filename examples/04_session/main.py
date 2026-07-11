@@ -1,6 +1,6 @@
 """04_session — Persistent Memory.
 
-Declare a session_manager in config.yaml — strands-compose wires persistent
+Declare a session_manager in config.yaml — kaboo-workflows wires persistent
 conversation history automatically. State is saved to .sessions/ on disk.
 
 Usage:

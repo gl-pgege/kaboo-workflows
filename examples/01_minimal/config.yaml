@@ -1,6 +1,6 @@
 # 01_minimal — Hello, Agent
 #
-# The absolute minimum strands-compose config:
+# The absolute minimum kaboo-workflows config:
 # a model, one agent, and an entry point.
 #
 # Run:

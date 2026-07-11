@@ -6,8 +6,8 @@
 
 Large configs can be split across multiple files. Pass a list to `load()` and they're merged:
 
-```python
-from strands_compose import load
+```python notest
+from kaboo_workflows import load
 
 resolved = load(["base.yaml", "agents.yaml", "mcp.yaml"])
 ```

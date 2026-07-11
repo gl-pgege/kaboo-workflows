@@ -69,8 +69,8 @@ The final `ResolvedConfig` has:
 
 Most users only need:
 
-```python
-from strands_compose import load
+```python notest
+from kaboo_workflows import load
 
 resolved = load("config.yaml")
 ```
@@ -86,7 +86,7 @@ That one call runs the whole pipeline:
 7. Start MCP lifecycle
 8. Create agents and orchestrations
 
-But strands-compose also exposes the lower-level split because **config parsing** and **session creation** are not always the same thing.
+But kaboo-workflows also exposes the lower-level split because **config parsing** and **session creation** are not always the same thing.
 
 ### What counts as "config"?
 
@@ -125,8 +125,8 @@ After `resolve_infra()`:
 
 You then start the shared MCP runtime explicitly:
 
-```python
-from strands_compose.config import load_config, resolve_infra
+```python notest
+from kaboo_workflows.config import load_config, resolve_infra
 
 app_config = load_config("config.yaml")
 infra = resolve_infra(app_config)
@@ -160,8 +160,8 @@ Instead, you want:
 
 Typical pattern:
 
-```python
-from strands_compose.config import load_config, load_session, resolve_infra
+```python notest
+from kaboo_workflows.config import load_config, load_session, resolve_infra
 
 # Once at process startup
 app_config = load_config("config.yaml")
@@ -182,7 +182,7 @@ computes a single `effective_session_id` and threads it down to every agent and 
 
 1. If you pass `session_id="my-id"` to `load_session()`, that value is used as-is.
 2. If you do **not** pass a `session_id` but the config declares a global `session_manager:`,
-   strands-compose looks for a `session_id` in `session_manager.params`. If found, that value is
+   kaboo-workflows looks for a `session_id` in `session_manager.params`. If found, that value is
    used; otherwise a fresh `uuid.uuid4()` is generated once and shared by all agents in that
    call — matching the "one folder per CLI run" behaviour.
 3. If neither a `session_id` is provided nor a global `session_manager:` is configured, no session

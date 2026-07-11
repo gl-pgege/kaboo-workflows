@@ -16,9 +16,9 @@ vars:
   TONE: ${TONE:-professional}
 
 x-hooks: &safety_hooks
-  - type: strands_compose.hooks:MaxToolCallsGuard
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
     params: { max_calls: 20 }
-  - type: strands_compose.hooks:ToolNameSanitizer
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
 
 models:
   default:

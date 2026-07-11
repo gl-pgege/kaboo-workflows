@@ -1,0 +1,3347 @@
+# README.md
+
+# kaboo-workflows
+
+**YAML-driven multi-agent orchestration with AG-UI and CopilotKit support, built on [strands-agents](https://github.com/strands-agents/harness-sdk)**
+
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-gl--pgege.github.io-blue.svg)](https://gl-pgege.github.io/kaboo-workflows/)
+
+**[Documentation](https://gl-pgege.github.io/kaboo-workflows/)** ·
+**[Configuration guide](docs/configuration/)** ·
+**[Workflow guides](docs/workflows/)** ·
+**[Examples](examples/)** ·
+**[Live demo](https://github.com/gl-pgege/kaboo-workflows-demo)**
+
+> Extended with native AG-UI protocol support for CopilotKit frontends and AgentCore deployment. Now maintained at [gl-pgege/kaboo-workflows](https://github.com/gl-pgege/kaboo-workflows) (originally forked from strands-compose — see [Attribution](#attribution)).
+
+---
+
+## Quick Start
+
+### 1. Install
+
+```bash
+pip install kaboo-workflows[openai]
+# or with uv
+uv add kaboo-workflows[openai]
+```
+
+Extras: `openai`, `ollama`, `gemini`, `agentcore-memory`
+
+### 2. Create a config
+
+```yaml
+# config.yaml
+vars:
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+
+models:
+  default:
+    provider: openai
+    model_id: anthropic/claude-sonnet-4
+    params:
+      client_args:
+        base_url: https://openrouter.ai/api/v1
+        api_key: ${OPENROUTER_API_KEY}
+
+agents:
+  assistant:
+    model: default
+    system_prompt: "You are a helpful assistant."
+    tools:
+      - ./tools/calculator.py
+
+entry: assistant
+```
+
+### 3. Create a tool
+
+```python notest
+# tools/calculator.py
+from strands.tools.decorator import tool
+
+@tool
+def calculator(expression: str) -> str:
+    """Evaluate a math expression and return the result."""
+    import ast
+    result = eval(compile(ast.parse(expression, mode='eval'), '<expr>', 'eval'))
+    return f"Result: {result}"
+```
+
+### 4. Start the server
+
+```bash
+OPENROUTER_API_KEY=sk-... uv run kaboo-serve config.yaml
+```
+
+That's it. Your agent is now serving AG-UI SSE on `http://localhost:8080/invocations`.
+
+### 5. Test it
+
+```bash
+# Health check
+curl http://localhost:8080/ping
+
+# Send a message
+curl -s -N -X POST http://localhost:8080/invocations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "thread_id": "thread-1",
+    "run_id": "run-1",
+    "messages": [{"id": "msg-1", "role": "user", "content": "What is 15 * 23?"}],
+    "tools": [],
+    "context": [],
+    "state": {},
+    "forwarded_props": {}
+  }'
+```
+
+You'll see AG-UI events stream back:
+
+```
+RUN_STARTED → TEXT_MESSAGE_START → TEXT_MESSAGE_CONTENT →
+TOOL_CALL_START → TOOL_CALL_ARGS → TOOL_CALL_END → TOOL_CALL_RESULT →
+TEXT_MESSAGE_CONTENT → TEXT_MESSAGE_END → RUN_FINISHED
+```
+
+---
+
+## How It Works
+
+kaboo-workflows does three things:
+
+1. **YAML → Agents**: Your config defines models, agents, tools, hooks, MCP servers, and orchestrations. `load()` resolves everything into live strands objects.
+2. **Agents → AG-UI SSE**: `kaboo-serve` wraps the resolved agents with [ag-ui-strands](https://github.com/ag-ui-protocol/ag-ui/tree/main/integrations/aws-strands/python) and serves them as AG-UI Server-Sent Events.
+3. **AG-UI → CopilotKit**: Any CopilotKit frontend connects directly. Generative UI, shared state, and human-in-the-loop work out of the box.
+
+```
+YAML config → load() → strands.Agent → StrandsAgent (AG-UI) → FastAPI SSE
+                                                                    ↑
+Browser → CopilotKit Runtime ──────────────────────────────────────┘
+```
+
+### AgentCore Deployment
+
+kaboo-workflows is fully compatible with [Amazon Bedrock AgentCore](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-agui.html). Deploy with the AG-UI protocol flag:
+
+```bash
+agentcore configure -e my_server.py --protocol AGUI
+agentcore deploy
+```
+
+AgentCore handles auth, session isolation, and scaling. Your `kaboo-serve` server serves the same `/invocations` (AG-UI SSE) and `/ping` endpoints that AgentCore expects.
+
+---
+
+## Model Providers
+
+Swap providers by changing `models.default` in your YAML:
+
+```yaml
+# OpenRouter (any model via OpenAI-compatible API)
+default:
+  provider: openai
+  model_id: anthropic/claude-sonnet-4
+  params:
+    client_args:
+      base_url: https://openrouter.ai/api/v1
+      api_key: ${OPENROUTER_API_KEY}
+
+# AWS Bedrock
+default:
+  provider: bedrock
+  model_id: us.anthropic.claude-sonnet-4-6-v1:0
+
+# Local Ollama
+default:
+  provider: ollama
+  model_id: llama3
+
+# Direct OpenAI
+default:
+  provider: openai
+  model_id: gpt-4o
+```
+
+---
+
+## Multi-Agent Orchestration
+
+Three orchestration modes, arbitrarily nestable:
+
+### Delegate — agent as a tool
+
+```yaml
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - agent: researcher
+        description: "Research the topic."
+      - agent: writer
+        description: "Write the report."
+entry: team
+```
+
+### Swarm — autonomous handoffs
+
+```yaml
+orchestrations:
+  review:
+    mode: swarm
+    entry_name: drafter
+    agents: [drafter, reviewer, tech_lead]
+    max_handoffs: 10
+entry: review
+```
+
+### Graph — deterministic DAG
+
+```yaml
+orchestrations:
+  pipeline:
+    mode: graph
+    entry_name: writer
+    edges:
+      - from: writer
+        to: reviewer
+      - from: reviewer
+        to: publisher
+entry: pipeline
+```
+
+---
+
+## CLI Reference
+
+| Command | What it does |
+|---------|-------------|
+| `uv run kaboo-serve config.yaml` | Start AG-UI SSE server (port 8080) |
+| `uv run kaboo-serve config.yaml --port 9000` | Custom port |
+| `uv run kaboo-workflows check config.yaml` | Validate config (no side-effects) |
+| `uv run kaboo-workflows load config.yaml` | Full load + MCP health check |
+
+---
+
+## Using as a Library
+
+```python notest
+from kaboo_workflows import load
+from kaboo_workflows.adapters import create_agui_app
+
+# Option 1: Programmatic agent use
+resolved = load("config.yaml")
+result = resolved.entry("Hello!")
+
+# Option 2: Create a FastAPI app for custom middleware
+app = create_agui_app("config.yaml")
+```
+
+`create_agui_app` lives in `kaboo_workflows.adapters` (it is intentionally not
+re-exported at the top level, to keep the top-level surface small).
+
+---
+
+## Public API
+
+The top-level `kaboo_workflows` package exports a curated surface; the full,
+auto-generated reference for every public module lives on the
+[documentation site](https://gl-pgege.github.io/kaboo-workflows/api-reference/).
+
+```python notest
+from kaboo_workflows import (
+    load, load_config, load_session, resolve_infra,   # config pipeline
+    make_event_queue, EventQueue,                       # streaming
+    StreamEvent, EventType,                             # event protocol
+    AppConfig, ConfigInput, ResolvedConfig, ResolvedInfra,
+    OrchestrationBuilder,
+    node_as_tool, node_as_async_tool, serialize_multiagent_result,
+    create_mcp_client, create_mcp_server, MCPLifecycle,
+    EventPublisher, MaxToolCallsGuard, StopGuard, ToolNameSanitizer,
+    AnsiRenderer, cli_errors,
+)
+```
+
+Public subpackages (import directly for the rest of the surface):
+
+| Import path | Highlights |
+|-------------|-----------|
+| `kaboo_workflows.adapters` | `create_agui_app` — the primary serving entrypoint |
+| `kaboo_workflows.config` | `load`, `load_config`, `load_session`, schema models (`AgentDef`, `AppConfig`, …) |
+| `kaboo_workflows.hooks` | `EventPublisher`, `HistoryHook`, `InterruptHook`, guards, `ToolNameSanitizer` |
+| `kaboo_workflows.mcp` | `MCPClient`, `MCPServer`, `MCPLifecycle`, transports |
+| `kaboo_workflows.tools` | `ask_user`, tool loaders, `node_as_tool` |
+| `kaboo_workflows.converters` | `StreamConverter`, `OpenAIStreamConverter`, `RawStreamConverter` |
+| `kaboo_workflows.renderers` | `AnsiRenderer` |
+| `kaboo_workflows.types` | `EventType`, `StreamEvent`, `SessionManifest` family |
+
+A completeness test (`tests/contract/test_public_api.py`) guarantees every public
+symbol has a docstring and an autodoc page, so this surface can never drift out of
+sync with the docs.
+
+---
+
+## Examples
+
+```bash
+# Serve any example
+OPENROUTER_API_KEY=... uv run kaboo-serve examples/step1/config.yaml
+
+# Or run as a REPL
+OPENROUTER_API_KEY=... uv run python examples/step1/main.py
+```
+
+See [examples/](examples/) for the full list.
+
+### Live demo
+
+[kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) is a
+runnable, end-to-end reference: this library serves a YAML multi-agent pipeline as
+AG-UI SSE, behind a CopilotKit runtime
+([kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime)) and a React UI
+([kaboo-react](https://github.com/gl-pgege/kaboo-react)). See
+[the kaboo stack](https://gl-pgege.github.io/kaboo-docs/) for the whole picture.
+
+---
+
+## Developer Setup
+
+```bash
+git clone https://github.com/gl-pgege/kaboo-workflows.git
+cd kaboo-workflows
+uv sync --all-extras
+
+uv run just check        # lint + type check + security scan
+uv run just test         # pytest with coverage (>=70% gate)
+uv run just format       # auto-format
+```
+
+---
+
+## Attribution
+
+Originally forked from [strands-compose/sdk-python](https://github.com/strands-compose/sdk-python) (Apache 2.0), original work by [Michal Galuszka](https://github.com/strands-compose). Now maintained as [kaboo-workflows](https://github.com/gl-pgege/kaboo-workflows).
+
+# docs/api-reference.md
+
+# API reference
+
+A curated map of the public surface, grouped by import path. Every module below
+has a full, auto-generated reference (rendered from docstrings by mkdocstrings) —
+follow the links for signatures, parameters, and source.
+
+The public surface is guarded by `tests/contract/test_public_api.py`: every
+symbol in a public `__all__` must resolve, carry a docstring, and appear on one
+of these pages.
+
+## Top level — [`kaboo_workflows`](api/kaboo_workflows.md)
+
+The curated top-level exports, for the common case:
+
+- **Config pipeline**: `load`, `load_config`, `load_session`, `resolve_infra`,
+  `AppConfig`, `ConfigInput`, `ResolvedConfig`, `ResolvedInfra`
+- **Orchestration**: `OrchestrationBuilder`
+- **Streaming**: `make_event_queue`, `EventQueue`, `StreamEvent`, `EventType`
+- **Tools**: `node_as_tool`, `node_as_async_tool`, `serialize_multiagent_result`
+- **MCP**: `create_mcp_client`, `create_mcp_server`, `MCPLifecycle`
+- **Hooks**: `EventPublisher`, `MaxToolCallsGuard`, `StopGuard`, `ToolNameSanitizer`
+- **Rendering / CLI**: `AnsiRenderer`, `cli_errors`
+- **Errors**: `ConfigurationError`, `SchemaValidationError`,
+  `UnresolvedReferenceError`, `CircularDependencyError`,
+  `ImportResolutionError` (see `kaboo_workflows.exceptions`)
+
+## Serving — [`kaboo_workflows.adapters`](api/adapters.md)
+
+- `create_agui_app` — turn a config into a FastAPI AG-UI / CopilotKit app. This is
+  the primary serving entrypoint and lives here (not re-exported top level).
+
+## Configuration — [`kaboo_workflows.config`](api/config.md)
+
+Loaders, interpolation, infra resolution, and the full YAML schema models
+(`AgentDef`, `ModelDef`, `OrchestrationDef`, `DelegateOrchestrationDef`,
+`SwarmOrchestrationDef`, `GraphOrchestrationDef`, `MCPServerDef`, `MCPClientDef`,
+`HookDef`, `SessionManagerDef`, …).
+
+## Hooks — [`kaboo_workflows.hooks`](api/hooks.md)
+
+`EventPublisher`, `HistoryHook`, `InterruptHook`, `MaxToolCallsGuard`,
+`MultiAgentStopGuard`, `StopGuard`, `ToolNameSanitizer`, `stop_guard_from_event`.
+
+## MCP — [`kaboo_workflows.mcp`](api/mcp.md)
+
+`MCPClient`, `MCPServer`, `MCPLifecycle`, `create_mcp_client`,
+`create_mcp_server`, and the `sse` / `stdio` / `streamable_http` transports.
+
+## Tools — [`kaboo_workflows.tools`](api/tools.md)
+
+`ask_user`, the `load_tool*` discovery helpers, `node_as_tool` /
+`node_as_async_tool`, `resolve_tool_spec(s)`, `serialize_multiagent_result`.
+
+## Converters — [`kaboo_workflows.converters`](api/converters.md)
+
+`StreamConverter`, `OpenAIStreamConverter`, `RawStreamConverter`.
+
+## Renderers — [`kaboo_workflows.renderers`](api/renderers.md)
+
+`AnsiRenderer`.
+
+## Types — [`kaboo_workflows.types`](api/types.md)
+
+`EventType`, `StreamEvent`, and the `SessionManifest` family
+(`AgentDescriptor`, `OrchestrationDescriptor`, `EntryDescriptor`,
+`ModelDescriptor`, `NodeRef`, `EdgeRef`).
+
+# docs/api/adapters.md
+
+# kaboo_workflows.adapters
+
+The serving layer: turn a resolved config into an AG-UI / CopilotKit app.
+
+::: kaboo_workflows.adapters
+    options:
+      show_root_heading: true
+      members_order: source
+
+# docs/api/config.md
+
+# kaboo_workflows.config
+
+Config schema, loaders, interpolation, and infrastructure resolution.
+
+::: kaboo_workflows.config
+    options:
+      show_root_heading: true
+      members_order: source
+
+# docs/api/converters.md
+
+# kaboo_workflows.converters
+
+Stream converters that reshape agent events for external consumers.
+
+::: kaboo_workflows.converters
+    options:
+      show_root_heading: true
+      members_order: source
+
+# docs/api/hooks.md
+
+# kaboo_workflows.hooks
+
+Lifecycle hooks: event publishing, guards, sanitizers, and interrupts.
+
+::: kaboo_workflows.hooks
+    options:
+      show_root_heading: true
+      members_order: source
+
+# docs/api/kaboo_workflows.md
+
+# kaboo_workflows
+
+The top-level package. See [API reference overview](../api-reference.md) for the
+curated map of the public surface grouped by import path.
+
+::: kaboo_workflows
+    options:
+      show_root_heading: true
+      members_order: source
+
+# docs/api/mcp.md
+
+# kaboo_workflows.mcp
+
+Model Context Protocol client/server lifecycle and transports.
+
+::: kaboo_workflows.mcp
+    options:
+      show_root_heading: true
+      members_order: source
+
+# docs/api/renderers.md
+
+# kaboo_workflows.renderers
+
+Terminal renderers for streamed agent activity.
+
+::: kaboo_workflows.renderers
+    options:
+      show_root_heading: true
+      members_order: source
+
+# docs/api/tools.md
+
+# kaboo_workflows.tools
+
+Tool discovery, loading, and node-as-tool adapters.
+
+::: kaboo_workflows.tools
+    options:
+      show_root_heading: true
+      members_order: source
+
+# docs/api/types.md
+
+# kaboo_workflows.types
+
+Shared event protocol and session manifest models.
+
+::: kaboo_workflows.types
+    options:
+      show_root_heading: true
+      members_order: source
+
+# docs/configuration/Chapter_01.md
+
+# Chapter 1: The Basics — Your First Config
+
+[← Back to Table of Contents](README.md)
+
+---
+
+A kaboo-workflows config is a YAML file with a handful of top-level sections. The only truly **required** fields are `agents` (at least one) and `entry` (which agent or orchestration to call).
+
+Here is the absolute minimum:
+
+```yaml
+agents:
+  assistant:
+    system_prompt: "You are a helpful assistant."
+
+entry: assistant
+```
+
+That's it. One agent, one entry point. Load it in Python:
+
+```python notest
+from kaboo_workflows import load
+
+resolved = load("config.yaml")
+result = resolved.entry("Hello!")
+print(result)
+```
+
+`resolved.entry` is a plain `strands.Agent` — nothing wrapped, nothing magic. You can call it, inspect it, pass it around — it's the real deal.
+
+## Root-Level Sections
+
+Here is the full list of top-level keys you can put in a config file:
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `version` | string | No | Schema version. Only `"1"` is supported. Defaults to `"1"`. |
+| `vars` | dict | No | Variable definitions for `${VAR}` interpolation. |
+| `models` | dict | No | Named LLM model definitions. |
+| `agents` | dict | **Yes** (at least one somewhere) | Named agent definitions. |
+| `orchestrations` | dict | No | Named multi-agent orchestration definitions. |
+| `mcp_servers` | dict | No | Named MCP server definitions (managed lifecycle). |
+| `mcp_clients` | dict | No | Named MCP client connections. |
+| `session_manager` | dict | No | Global session manager (inherited by all agents). |
+| `entry` | string | **Yes** | Name of the agent or orchestration to use as the entry point. |
+| `log_level` | string | No | Logging level for kaboo_workflows. Default: `"WARNING"`. |
+
+Sections marked as **dict** are name-keyed dictionaries — you pick the name, and it becomes the identifier:
+
+```yaml
+models:
+  my_fast_model:    # <-- you chose this name
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-4-6-v1:0
+```
+
+The `x-` prefix is reserved for scratch-pad keys (YAML anchors) — they are **stripped** before validation and never reach the schema. More on that in [Chapter 4](Chapter_04.md).
+
+## What About `vars`?
+
+`vars` is special. It's consumed during interpolation and **removed** before schema validation. You will never see it in the final `AppConfig` object. It exists only to feed `${VAR}` references. Covered in [Chapter 3](Chapter_03.md).
+
+> **Tips & Tricks**
+>
+> - You can omit `models` entirely. If an agent doesn't specify a `model`, strands uses its default (Bedrock with the default model). Handy for quick prototyping.
+> - `entry` must reference something defined in either `agents` or `orchestrations`. If it doesn't, you'll get a clear error at load time.
+> - Names follow the pattern `[a-zA-Z0-9_-]` and are limited to 64 characters. Spaces and special characters are auto-sanitized to underscores.
+
+---
+
+[Next: Chapter 2 — Models →](Chapter_02.md)
+
+# docs/configuration/Chapter_02.md
+
+# Chapter 2: Models — Choosing Your LLM
+
+[← Back to Table of Contents](README.md) | [← Previous: The Basics](Chapter_01.md)
+
+---
+
+The `models` section defines named LLM configurations. Each model has a `provider`, a `model_id`, and optional `params`.
+
+```yaml
+models:
+  fast:
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-4-6-v1:0
+
+  creative:
+    provider: openai
+    model_id: gpt-4o
+    params:
+      temperature: 0.9
+
+  local:
+    provider: ollama
+    model_id: llama3.2
+    params:
+      ctx_size: 8192
+```
+
+## Built-in Providers
+
+| Provider | Package Required | Example `model_id` |
+|----------|-----------------|---------------------|
+| `bedrock` | *(included)* | `us.anthropic.claude-sonnet-4-6-v1:0` |
+| `openai` | `pip install kaboo-workflows[openai]` | `gpt-4o` |
+| `ollama` | `pip install kaboo-workflows[ollama]` | `llama3.2` |
+| `gemini` | `pip install kaboo-workflows[gemini]` | `gemini-2.0-flash` |
+
+## How Agents Reference Models
+
+Agents reference models by **name** — the key you defined in the `models` section:
+
+```yaml
+models:
+  smart:
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-4-6-v1:0
+
+agents:
+  analyst:
+    model: smart     # <-- references the "smart" model above
+    system_prompt: "You analyze data."
+```
+
+## Inline Models
+
+Don't want to name a model? Define it inline directly on the agent:
+
+```yaml
+agents:
+  analyst:
+    model:
+      provider: bedrock
+      model_id: us.anthropic.claude-sonnet-4-6-v1:0
+    system_prompt: "You analyze data."
+```
+
+This is handy when only one agent uses a specific model — no need to pollute the `models` section. But if two agents share the same model config, **use a named model** to avoid duplication.
+
+## Custom Model Providers
+
+If the built-in four providers aren't enough, you can point `provider` to a custom `Model` subclass:
+
+```yaml
+models:
+  my_custom:
+    provider: my_package.models:CustomModel
+    model_id: my-model-v1
+    params:
+      api_key: ${API_KEY}
+```
+
+The class must be a subclass of `strands.models.Model`. The `model_id` and `params` are passed to its constructor.
+
+## The `params` Dict
+
+`params` is a pass-through dictionary — whatever you put in it gets forwarded as `**kwargs` to the model constructor. This means you can set any provider-specific parameter:
+
+```yaml
+models:
+  tuned:
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-4-6-v1:0
+    params:
+      max_tokens: 4096
+      temperature: 0.7
+      top_p: 0.9
+```
+
+> **Tips & Tricks**
+>
+> - When combined with `vars`, you can swap models at runtime: `MODEL=gpt-4o python main.py`. See [Chapter 3](Chapter_03.md).
+> - If you omit `model` on an agent entirely, strands picks its built-in default (Bedrock). This is fine for quick tests but explicit is better for production.
+> - The `params` dict preserves types from YAML — integers stay integers, floats stay floats. This matters for parameters like `max_tokens` that must be an int.
+
+---
+
+[Next: Chapter 3 — Variables →](Chapter_03.md)
+
+# docs/configuration/Chapter_03.md
+
+# Chapter 3: Variables — Environment-Driven Config
+
+[← Back to Table of Contents](README.md) | [← Previous: Models](Chapter_02.md)
+
+---
+
+kaboo-workflows supports Docker Compose-style `${VAR}` interpolation. Define variables in the `vars` block, reference them anywhere with `${VAR}`, and optionally provide defaults with `${VAR:-fallback}`.
+
+```yaml
+vars:
+  MODEL: ${MODEL:-us.anthropic.claude-sonnet-4-6-v1:0}
+  TONE:  ${TONE:-friendly}
+  MAX_TOKENS: ${MAX_TOKENS:-1024}
+
+models:
+  default:
+    provider: bedrock
+    model_id: ${MODEL}
+    params:
+      max_tokens: ${MAX_TOKENS}
+
+agents:
+  assistant:
+    model: default
+    system_prompt: "You are a ${TONE} assistant."
+
+entry: assistant
+```
+
+## Lookup Order
+
+When kaboo-workflows sees `${SOMETHING}`, it resolves it in this order:
+
+1. **`vars` block** — your YAML-defined variables
+2. **Environment variables** — `os.environ`
+3. **Default value** — the part after `:-`
+4. **Error** — if none of the above, loading fails with a clear message
+
+So `${MODEL:-gpt-4o}` means: "use the `MODEL` var if defined, then check the environment, then fall back to `gpt-4o`."
+
+## Override at Runtime
+
+```bash
+# Linux/macOS
+TONE=formal MODEL=gpt-4o python main.py
+
+# Windows PowerShell
+$env:TONE="formal"; $env:MODEL="gpt-4o"; python main.py
+```
+
+## Variable Chaining
+
+Variables can reference other variables:
+
+```yaml
+vars:
+  BASE_MODEL: us.anthropic.claude-sonnet-4-6-v1:0
+  MODEL: ${BASE_MODEL}
+```
+
+This works because kaboo-workflows resolves `vars` in two sequential passes — the first pass resolves against environment variables, the second pass resolves cross-references between vars. Circular references (`A: ${B}`, `B: ${A}`) are caught and raise a clear error.
+
+## Type Preservation
+
+Here's a subtle but powerful feature: when the **entire** value is a single `${VAR}` reference (not embedded in a larger string), the original type is preserved.
+
+```yaml
+vars:
+  MAX_TOKENS: 1024    # This is an integer in YAML
+
+models:
+  default:
+    provider: bedrock
+    model_id: some-model
+    params:
+      max_tokens: ${MAX_TOKENS}   # Resolves to integer 1024, not string "1024"
+```
+
+But if you embed it in a string, it becomes a string:
+
+```yaml
+system_prompt: "Use max ${MAX_TOKENS} tokens"  # "Use max 1024 tokens" (string)
+```
+
+This is important for parameters that expect a specific type (like `max_tokens` needing an int).
+
+## Variables Without Defaults
+
+If you reference a variable that doesn't exist and has no default, loading fails immediately:
+
+```yaml
+vars:
+  MODEL: ${REQUIRED_MODEL}  # No :- default!
+```
+
+```
+ValueError: Variable '${REQUIRED_MODEL}' is not set in 'vars:' or environment,
+and no default was provided.
+Use ${REQUIRED_MODEL:-fallback} to set a fallback value.
+```
+
+This is intentional — it forces explicit configuration for deployment-critical values.
+
+## Per-Source Interpolation
+
+When you use [multi-file configs](Chapter_13.md), each file's `vars` block is interpolated independently before merging. File A's vars don't leak into File B's interpolation.
+
+> **Tips & Tricks**
+>
+> - Use variables for anything that changes between environments: model IDs, API endpoints, log levels, session directories.
+> - The `${VAR:-default}` pattern is your best friend for making configs self-contained — they work out of the box but can be customized via environment.
+> - `vars` is removed after interpolation — it never reaches schema validation. So you can put anything in there, even nested dicts and lists (though string/number values are most common).
+> - Want to see what resolved? Use `load_config()` instead of `load()` — it returns the validated `AppConfig` without starting anything.
+
+---
+
+[Next: Chapter 4 — YAML Anchors →](Chapter_04.md)
+
+# docs/configuration/Chapter_04.md
+
+# Chapter 4: YAML Anchors — DRY Config Blocks
+
+[← Back to Table of Contents](README.md) | [← Previous: Variables](Chapter_03.md)
+
+---
+
+YAML has a built-in reuse mechanism: **anchors** (`&name`) and **aliases** (`*name`). kaboo-workflows embraces this for eliminating copy-paste across your config.
+
+## The `x-` Scratch Pad
+
+Any top-level key starting with `x-` is treated as a scratch pad — it's stripped before schema validation. Use it to define reusable blocks:
+
+```yaml
+# Define reusable blocks
+x-base_prompt: &base_prompt |
+  You are a helpful assistant.
+  Always be concise and clear.
+
+x-safety_hooks: &safety_hooks
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
+    params: { max_calls: 15 }
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
+
+x-model_params: &model_params
+  max_tokens: 2048
+  temperature: 0.7
+
+# Use them
+models:
+  default:
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-4-6-v1:0
+    params: *model_params        # Reuse the model params
+
+agents:
+  researcher:
+    model: default
+    system_prompt: *base_prompt   # Reuse the prompt
+    hooks: *safety_hooks          # Reuse the hooks
+
+  writer:
+    model: default
+    system_prompt: *base_prompt   # Same prompt, no copy-paste
+    hooks: *safety_hooks          # Same hooks, no copy-paste
+
+entry: researcher
+```
+
+## How Anchors Work
+
+1. **Define** with `&name`: `x-my_block: &my_block { key: value }`
+2. **Reference** with `*name`: `field: *my_block`
+
+The anchor creates a deep copy at the alias site. The `x-` prefix is a kaboo-workflows convention — YAML anchors work on any key, but `x-` keys are cleaned up so they don't trigger "unknown field" errors.
+
+## Combining Anchors with Variables
+
+Anchors and variables work together beautifully:
+
+```yaml
+vars:
+  TONE: ${TONE:-professional}
+
+x-base_prompt: &base_prompt |
+  You are a ${TONE} assistant.
+  Keep responses clear and structured.
+
+agents:
+  assistant:
+    system_prompt: *base_prompt  # Gets "${TONE}" which is then interpolated
+```
+
+The order is: YAML parsing (anchors resolved) → anchor stripping (`x-*` removed) → variable interpolation (`${VAR}` replaced). So the alias `*base_prompt` is expanded first, and then `${TONE}` within it is interpolated.
+
+## Anchors for Type-Preserving Reuse
+
+Unlike variables (which can become strings when embedded), anchors always preserve the original YAML structure. An anchor on a dict gives you a dict, an anchor on a list gives you a list, an integer stays an integer:
+
+```yaml
+x-model_params: &params
+  max_tokens: 2048    # integer
+  temperature: 0.7    # float
+
+models:
+  fast:
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-4-6-v1:0
+    params: *params   # max_tokens is still int 2048, not string "2048"
+```
+
+## Anchors You Can Define Anywhere
+
+You don't *have* to use `x-` keys. Anchors can be defined on any value:
+
+```yaml
+models:
+  default: &default_model        # Anchor on an entire model definition
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-4-6-v1:0
+
+  backup: *default_model          # Exact copy of 'default'
+```
+
+The `x-` prefix is simply cleaner for "scratch pad" blocks that don't belong to any real config section.
+
+> **Tips & Tricks**
+>
+> - Use `x-` blocks at the top of your file to define your project's "design system" — shared prompts, hook lists, model params.
+> - Pair anchors with variables for maximum flexibility: anchors handle structure reuse, variables handle value swapping.
+> - YAML anchors are resolved by the YAML parser itself — kaboo-workflows doesn't even see them. This means they work exactly as documented in the YAML spec.
+> - You can use `{ key: value }` inline syntax for short dicts in anchor definitions — great for concise params: `params: { max_calls: 15 }`.
+
+---
+
+[Next: Chapter 5 — Tools →](Chapter_05.md)
+
+# docs/configuration/Chapter_05.md
+
+# Chapter 5: Tools — Giving Agents Superpowers
+
+[← Back to Table of Contents](README.md) | [← Previous: YAML Anchors](Chapter_04.md)
+
+---
+
+The `tools` field on an agent is a list of spec strings that tell kaboo-workflows where to find Python tool functions.
+
+```yaml
+agents:
+  analyst:
+    model: default
+    tools:
+      - ./tools.py                          # All @tool functions from this file
+      - ./tools.py:count_words              # One specific function
+      - ./utils/                            # All @tool functions from all .py files in dir
+      - my_package.tools                    # All @tool functions from an installed module
+      - my_package.tools:special_function   # One specific function from a module
+      - strands_tools.http_request          # A tool from strands' built-in tools
+    system_prompt: "You analyze text using your tools."
+```
+
+## Spec Formats
+
+| Format | What It Loads |
+|--------|---------------|
+| `./file.py` | All `@tool`-decorated functions from the file |
+| `./file.py:func_name` | One specific function (auto-wrapped with `@tool` if needed) |
+| `./dir/` | All `@tool` functions from all `.py` files in directory (skips `_`-prefixed files) |
+| `module.path` | All `@tool` functions from an installed Python module |
+| `module.path:func_name` | One specific function from a module |
+
+## Writing Tool Functions
+
+Tool functions must be decorated with `@tool` from strands:
+
+```python
+# tools.py
+from strands.tools.decorator import tool
+
+@tool
+def count_words(text: str) -> int:
+    """Count the number of words in the given text."""
+    return len(text.split())
+
+@tool
+def reverse_text(text: str) -> str:
+    """Reverse the given text."""
+    return text[::-1]
+```
+
+The decorator registers the function's name, docstring (used as the tool description for the LLM), and parameter schema (derived from type hints). Functions **without** `@tool` are silently ignored when scanning a file or module.
+
+## Single Function Lookups and Auto-Wrapping
+
+When you use the colon syntax to load a specific function (`./file.py:my_func`), kaboo-workflows does something helpful: if the function isn't decorated with `@tool`, it auto-wraps it for you (and logs a warning). This is safe because the intent is unambiguous — you explicitly named the function:
+
+```yaml
+tools:
+  - ./helpers.py:calculate_tax   # Works even without @tool decorator
+```
+
+You'll see a warning in the logs:
+
+```
+WARNING | tool=<calculate_tax> | not decorated with @tool, wrapping automatically
+```
+
+For file/module-wide scanning (without `:`), only `@tool`-decorated functions are picked up. This prevents accidentally exposing internal helper functions.
+
+## Path Resolution
+
+Filesystem paths are resolved **relative to the config file**, not the working directory. This is critical — it means your config works regardless of where you run the Python script from:
+
+```
+project/
+├── config.yaml          # tools: [./tools/analysis.py]
+├── tools/
+│   └── analysis.py      # Resolved relative to config.yaml's directory
+└── main.py              # Can be run from anywhere
+```
+
+Module-based specs (`module.path:func`) use the standard Python import system — the module must be importable.
+
+## Directory Scanning
+
+The directory spec (`./dir/`) recursively loads all `.py` files in the directory, skipping any file whose name starts with `_`:
+
+```
+tools/
+├── _helpers.py     # Skipped (underscore prefix)
+├── __init__.py     # Skipped (underscore prefix)
+├── analysis.py     # Loaded — all @tool functions extracted
+└── formatting.py   # Loaded — all @tool functions extracted
+```
+
+> **Tips & Tricks**
+>
+> - Organize tools in a directory when you have many of them. One file per domain: `tools/math.py`, `tools/text.py`, `tools/database.py`.
+> - The `strands_tools` package has built-in tools like `http_request`, `file_read`, `shell` — use them with `strands_tools.http_request`.
+> - Each agent gets its own copy of tools. Two agents referencing the same file get independent tool instances.
+> - Tool function docstrings are sent to the LLM as the tool description. Write good docstrings — they directly affect how well the model uses your tools.
+> - Type hints on tool parameters become the JSON schema the LLM sees. Use `str`, `int`, `float`, `bool`, `list[str]`, etc. The more specific your types, the better the LLM calls your tools.
+
+---
+
+[Next: Chapter 6 — Hooks →](Chapter_06.md)
+
+# docs/configuration/Chapter_06.md
+
+# Chapter 6: Hooks — Middleware for Agents
+
+[← Back to Table of Contents](README.md) | [← Previous: Tools](Chapter_05.md)
+
+---
+
+Hooks are lifecycle callbacks that fire at specific points during agent execution — before/after invocations, before/after tool calls, before/after model calls. They're perfect for guardrails, logging, metrics, and custom behavior.
+
+```yaml
+agents:
+  assistant:
+    model: default
+    hooks:
+      - type: kaboo_workflows.hooks:MaxToolCallsGuard
+        params:
+          max_calls: 10
+      - type: kaboo_workflows.hooks:ToolNameSanitizer
+      - type: ./my_hooks.py:AuditLogger
+        params:
+          log_file: ./audit.log
+    system_prompt: "You are a helpful assistant."
+```
+
+## Hook Specification Formats
+
+Hooks can be specified in two ways:
+
+**Inline object** — with `type` and optional `params`:
+
+```yaml
+hooks:
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
+    params:
+      max_calls: 10
+```
+
+**String shorthand** — just the import path (no params):
+
+```yaml
+hooks:
+  - kaboo_workflows.hooks:ToolNameSanitizer
+```
+
+Both the `type` field and the string shorthand accept:
+- `module.path:ClassName` — for installed packages
+- `./file.py:ClassName` — for local files (relative to config file)
+
+## Built-in Hooks
+
+kaboo-workflows ships with three hooks:
+
+### `MaxToolCallsGuard`
+
+Limits how many tool calls an agent can make in a single invocation. Two-phase behavior:
+
+1. **First violation** — injects a system message telling the LLM to stop and write a final answer.
+2. **Second violation** — if the LLM ignores the warning and calls another tool, the loop is terminated.
+
+```yaml
+hooks:
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
+    params:
+      max_calls: 15
+```
+
+### `ToolNameSanitizer`
+
+Some models inject extra tokens into tool names (e.g., `search<|python_tag|>` instead of `search`). This hook strips those artifacts so strands can find the tool in the registry.
+
+```yaml
+hooks:
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
+```
+
+No params needed — just add it.
+
+### `StopGuard`
+
+A cooperative stop mechanism — set a flag on the guard and the agent stops cleanly at the next opportunity. Useful for external cancellation (e.g., user disconnects from a web socket).
+
+`StopGuard` needs a Python callable for `stop_check`, so it's usually wired from Python rather than pure YAML:
+
+```python
+from kaboo_workflows.hooks import stop_guard_from_event
+
+guard, stop = stop_guard_from_event()
+
+# add `guard` to an agent's hooks, then later:
+stop.set()
+```
+
+## Writing Custom Hooks
+
+A hook is any class that subclasses `strands.hooks.HookProvider` and implements `register_hooks()`:
+
+```python
+# my_hooks.py
+from strands.hooks import HookProvider, HookRegistry
+from strands.hooks.events import AfterToolCallEvent, AfterInvocationEvent
+
+class ToolCounter(HookProvider):
+    """Counts tool calls and prints a summary after each invocation."""
+
+    def __init__(self, verbose: bool = False):
+        self._count = 0
+        self._verbose = verbose
+
+    def register_hooks(self, registry: HookRegistry, **kwargs):
+        registry.add_callback(AfterToolCallEvent, self._on_tool)
+        registry.add_callback(AfterInvocationEvent, self._on_done)
+
+    def _on_tool(self, event: AfterToolCallEvent):
+        self._count += 1
+        if self._verbose:
+            print(f"  Tool #{self._count}: {event.tool_use.get('name')}")
+
+    def _on_done(self, event: AfterInvocationEvent):
+        print(f"Agent used {self._count} tools this turn.")
+        self._count = 0
+```
+
+Use it in YAML:
+
+```yaml
+hooks:
+  - type: ./my_hooks.py:ToolCounter
+    params:
+      verbose: true
+```
+
+The `params` dict is spread as `**kwargs` to your class constructor.
+
+## Hook Execution Order
+
+Hooks fire in the order they're listed. First hook's callbacks run before the second hook's for the same event. This matters when hooks interact — for example, `ToolNameSanitizer` should run before hooks that inspect tool names.
+
+## Available Hook Events
+
+These are the strands lifecycle events you can listen to:
+
+| Event | When It Fires |
+|-------|---------------|
+| `BeforeInvocationEvent` | Before the agent starts processing |
+| `AfterInvocationEvent` | After the agent finishes |
+| `BeforeModelCallEvent` | Before each LLM API call |
+| `AfterModelCallEvent` | After each LLM API call |
+| `BeforeToolCallEvent` | Before each tool execution |
+| `AfterToolCallEvent` | After each tool execution |
+| `BeforeNodeCallEvent` | Before a graph/swarm node executes |
+| `AfterNodeCallEvent` | After a graph/swarm node executes |
+| `BeforeMultiAgentInvocationEvent` | Before a multi-agent orchestration starts |
+| `AfterMultiAgentInvocationEvent` | After a multi-agent orchestration completes |
+
+## Hooks on Orchestrations
+
+Orchestrations also support hooks — applied at the orchestration level, not the individual agent level:
+
+```yaml
+orchestrations:
+  pipeline:
+    mode: graph
+    entry_name: writer
+    hooks:
+      - type: kaboo_workflows.hooks:MaxToolCallsGuard
+        params: { max_calls: 30 }
+    edges:
+      - from: writer
+        to: reviewer
+```
+
+> **Tips & Tricks**
+>
+> - Each agent gets **fresh hook instances**. Two agents with the same hook config get independent instances — no shared state between them.
+> - `params` preserves YAML types. `{ max_calls: 15 }` passes `max_calls` as an integer, `{ log_file: ./out.log }` as a string.
+> - Hooks are the right place for cross-cutting concerns: rate limiting, audit logging, cost tracking, safety guardrails.
+> - Combine `MaxToolCallsGuard` and `ToolNameSanitizer` as a baseline for any agent that uses tools — they handle the most common edge cases.
+
+---
+
+[Next: Chapter 7 — Session Persistence →](Chapter_07.md)
+
+# docs/configuration/Chapter_07.md
+
+# Chapter 7: Session Persistence — Memory That Survives Restarts
+
+[← Back to Table of Contents](README.md) | [← Previous: Hooks](Chapter_06.md)
+
+---
+
+By default, agents are stateless — each `load()` call starts fresh. The `session_manager` section enables persistent conversation history.
+
+## Global Session Manager
+
+Define a session manager at the root level and **every agent** inherits it:
+
+```yaml
+session_manager:
+  provider: file
+  params:
+    storage_dir: ./.sessions
+    session_id: my-session-001
+
+agents:
+  assistant:
+    model: default
+    system_prompt: "You remember everything."
+
+entry: assistant
+```
+
+## Built-in Providers
+
+| Provider | Backend | Required Package |
+|----------|---------|------------------|
+| `file` | Local filesystem | *(included)* |
+| `s3` | Amazon S3 bucket | *(included, needs AWS creds)* |
+| `agentcore` | Bedrock AgentCore Memory | `pip install kaboo-workflows[agentcore-memory]` |
+
+### File Provider
+
+```yaml
+session_manager:
+  provider: file
+  params:
+    storage_dir: ./.sessions
+    session_id: my-session
+```
+
+Sessions are stored as files in `storage_dir`. Delete the directory to start fresh.
+
+### S3 Provider
+
+```yaml
+session_manager:
+  provider: s3
+  params:
+    bucket_name: my-agent-sessions
+    session_id: prod-session-001
+```
+
+Requires AWS credentials in the environment.
+
+### AgentCore Provider
+
+The `agentcore` provider requires a unique `actor_id` per agent and **cannot** be set globally — set it per-agent instead:
+
+```yaml
+agents:
+  assistant:
+    model: default
+    system_prompt: "You are helpful."
+    session_manager:
+      provider: agentcore
+      params:
+        actor_id: assistant
+        memory_id: my-memory-store
+```
+
+## Per-Agent Session Manager
+
+Any agent can override the global session manager with its own:
+
+```yaml
+session_manager:
+  provider: file
+  params:
+    storage_dir: ./.sessions
+
+agents:
+  persistent_agent:
+    model: default
+    system_prompt: "I remember."
+    # Inherits the global file session manager
+
+  stateless_agent:
+    model: default
+    system_prompt: "I forget."
+    session_manager: ~             # <-- Explicit opt-out with YAML null (~)
+```
+
+Setting `session_manager: ~` (YAML null) on an agent **explicitly opts it out** of the global default. This is important — without this, it would inherit the global one.
+
+## Session ID Resolution
+
+When no `session_id` is provided, kaboo-workflows generates a random UUID — meaning each run gets a fresh session. The resolution order is:
+
+1. **Runtime override** — via `load_session(..., session_id="abc")`
+2. **`params.session_id`** — from YAML config
+3. **Random UUID** — fresh session per run
+
+## Custom Session Manager
+
+For anything beyond the built-in providers, point `type` to your own class:
+
+```yaml
+session_manager:
+  type: my_package.sessions:RedisSessionManager
+  params:
+    host: localhost
+    port: 6379
+```
+
+The class must be a subclass of `strands.session.SessionManager`. When `type` is set, `provider` is ignored.
+
+## Swarm Agents and Sessions
+
+**Important limitation**: agents that participate in a Swarm orchestration **cannot** have a session manager. This is a strands-agents limitation. If a global session manager is set and an agent is used in a swarm, kaboo-workflows will raise a clear error:
+
+```
+ConfigurationError: Agent 'drafter' is in swarm orchestration and cannot
+have a session manager (source: global 'session_manager:' in config).
+Fix: Add 'session_manager: ~' to agent 'drafter' to opt out of the global default.
+```
+
+The fix: add `session_manager: ~` to each swarm agent to opt out.
+
+> **Tips & Tricks**
+>
+> - For development, `file` provider with a fixed `session_id` is great — restart your script and the agent remembers your conversation.
+> - For server/API deployments, use `load_session()` with a per-request `session_id`. kaboo-workflows
+>   computes a single `effective_session_id` from your value and threads it to every agent and
+>   orchestration, so all agents in one request share the same session folder. See
+>   [the multi-tenant pattern](#the-multi-tenant-server-pattern) below.
+> - Delete the `.sessions/` directory to "factory reset" your agent's memory.
+
+## The Multi-Tenant Server Pattern
+
+For web servers where each HTTP request needs its own session:
+
+```python notest
+from kaboo_workflows import load_config, resolve_infra, load_session
+
+# Once at startup
+app_config = load_config("config.yaml")
+infra = resolve_infra(app_config)
+infra.mcp_lifecycle.start()
+
+# Per request
+def handle_request(user_session_id: str, message: str):
+    resolved = load_session(app_config, infra, session_id=user_session_id)
+    return resolved.entry(message)
+```
+
+MCP servers are shared across sessions (started once), but agents and their conversation state are created fresh per session.
+
+---
+
+[Next: Chapter 8 — Conversation Managers →](Chapter_08.md)
+
+# docs/configuration/Chapter_08.md
+
+# Chapter 8: Conversation Managers — Controlling Context Windows
+
+[← Back to Table of Contents](README.md) | [← Previous: Session Persistence](Chapter_07.md)
+
+---
+
+Conversation managers control how the conversation history is managed — truncation, summarization, or no management at all. This is different from session persistence (which stores history) — conversation managers decide **what's in the context window** when the LLM is called.
+
+```yaml
+agents:
+  assistant:
+    model: default
+    conversation_manager:
+      type: strands.agent:SlidingWindowConversationManager
+      params:
+        window_size: 40
+        should_truncate_results: false
+    system_prompt: "You are a helpful assistant."
+```
+
+## Built-in Conversation Managers
+
+These come from strands-agents directly:
+
+| Class | What It Does |
+|-------|-------------|
+| `strands.agent:SlidingWindowConversationManager` | Keeps the last N messages in context |
+| `strands.agent:SummarizingConversationManager` | Summarizes older messages to save context |
+| `strands.agent:NullConversationManager` | No management — keeps entire history |
+
+## Using Them
+
+```yaml
+# Fixed-window approach
+conversation_manager:
+  type: strands.agent:SlidingWindowConversationManager
+  params:
+    window_size: 20
+
+# Summarization approach
+conversation_manager:
+  type: strands.agent:SummarizingConversationManager
+  params:
+    summary_ratio: 0.3
+    preserve_recent_messages: 10
+
+# No management (pass everything)
+conversation_manager:
+  type: strands.agent:NullConversationManager
+```
+
+## Custom Conversation Managers
+
+Write your own by subclassing `strands.agent.conversation_manager.ConversationManager`:
+
+```yaml
+conversation_manager:
+  type: ./managers.py:MySmartManager
+  params:
+    strategy: semantic_relevance
+```
+
+> **Tips & Tricks**
+>
+> - Conversation managers are per-agent. Different agents in the same config can use different strategies.
+> - For orchestration coordinators that do a lot of delegating, `SlidingWindowConversationManager` with a generous `window_size` prevents context overflow from long delegate tool results.
+> - Unlike session managers, there's no "global" conversation manager — set it on each agent that needs one.
+
+---
+
+[Next: Chapter 9 — MCP →](Chapter_09.md)
+
+# docs/configuration/Chapter_09.md
+
+# Chapter 9: MCP — External Tool Servers
+
+[← Back to Table of Contents](README.md) | [← Previous: Conversation Managers](Chapter_08.md)
+
+---
+
+The Model Context Protocol (MCP) lets agents connect to external tool servers. kaboo-workflows supports three connection modes and manages the full server lifecycle.
+
+## Architecture
+
+```
+mcp_servers:  → Define managed local servers (kaboo-workflows starts/stops them)
+mcp_clients:  → Define connections to servers (local, remote, or subprocess)
+agents:
+  my_agent:
+    mcp: [client_name]  → Attach MCP clients as tool providers
+```
+
+## Mode 1: Managed Local Server
+
+You define a server, kaboo-workflows starts it in a background thread before creating agents, and stops it on shutdown:
+
+```yaml
+mcp_servers:
+  calculator:
+    type: ./server.py:create
+    params:
+      port: 9001
+
+mcp_clients:
+  calc:
+    server: calculator                # References the server above
+    params:
+      prefix: calc                    # Tools become calc_add, calc_multiply, etc.
+
+agents:
+  assistant:
+    mcp: [calc]
+    system_prompt: "Use calc tools for math."
+
+entry: assistant
+```
+
+The `type` field points to a factory function that returns an `MCPServer` instance:
+
+```python notest
+# server.py
+from mcp.server.fastmcp import FastMCP
+from kaboo_workflows.mcp import MCPServer
+
+class CalculatorServer(MCPServer):
+    def _register_tools(self, mcp: FastMCP) -> None:
+        @mcp.tool()
+        def add(a: float, b: float) -> float:
+            """Add two numbers."""
+            return a + b
+
+        @mcp.tool()
+        def multiply(a: float, b: float) -> float:
+            """Multiply two numbers."""
+            return a * b
+
+def create(name: str, port: int = 9001) -> CalculatorServer:
+    return CalculatorServer(name=name, port=port)
+```
+
+The factory receives `name` (from the YAML key) plus everything in `params`.
+
+## Mode 2: Remote URL
+
+Connect to an existing MCP server over HTTP — no server management needed:
+
+```yaml
+mcp_clients:
+  aws_docs:
+    url: https://knowledge-mcp.global.api.aws
+    transport: streamable-http
+    params:
+      prefix: aws
+      startup_timeout: 30
+```
+
+## Mode 3: Stdio Subprocess
+
+Spawn a local process that speaks MCP over stdin/stdout:
+
+```yaml
+mcp_clients:
+  filesystem:
+    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    params:
+      prefix: fs
+```
+
+## The `transport` Field
+
+Transport auto-detection usually works, but you can override it:
+
+| Transport | When to Use |
+|-----------|-------------|
+| `streamable-http` | Default for URLs and managed servers. Modern MCP transport. |
+| `sse` | Older Server-Sent Events transport. Auto-detected if URL ends in `/sse`. |
+| `stdio` | Set automatically for `command:` mode. Not valid for managed servers. |
+
+## Client `params`
+
+The `params` dict on an MCP client is forwarded to strands' `MCPClient` constructor:
+
+| Param | Type | What It Does |
+|-------|------|-------------|
+| `prefix` | string | Prefix all tool names from this server (e.g., `calc_add`) |
+| `startup_timeout` | number | Seconds to wait for the server to respond |
+| `tool_filters` | list | Filter which tools to expose |
+
+## Client `transport_options`
+
+Transport-specific options forwarded to the transport factory:
+
+```yaml
+mcp_clients:
+  authenticated_server:
+    url: https://internal.example.com/mcp
+    transport_options:
+      headers:
+        Authorization: "Bearer ${API_TOKEN}"
+```
+
+Available options vary by transport:
+
+- **stdio**: `env`, `cwd`, `encoding`
+- **sse**: `headers`, `timeout`, `sse_read_timeout`
+- **streamable-http**: `headers`, `http_client`, `terminate_on_close`
+
+## Lifecycle Management
+
+kaboo-workflows handles the startup ordering automatically:
+
+1. Start all MCP **servers** (in parallel)
+2. Wait for all servers to be **ready** (TCP port check with configurable timeout)
+3. Create agents (which auto-start MCP **clients**)
+
+On shutdown (via context manager or `.stop()`):
+
+1. Stop all **clients** first
+2. Then stop all **servers**
+
+Always use the MCP lifecycle context manager:
+
+```python notest
+resolved = load("config.yaml")
+
+with resolved.mcp_lifecycle:
+    result = resolved.entry("Hello!")
+```
+
+Or for async contexts:
+
+```python notest
+async with resolved.mcp_lifecycle:
+    result = await resolved.entry.invoke_async("Hello!")
+```
+
+## MCPClientDef Validation
+
+Exactly **one** of `server`, `url`, or `command` must be set on each client. Setting zero or more than one raises a validation error:
+
+```
+MCPClientDef requires exactly one of 'server', 'url', or 'command'; got none.
+```
+
+## Combining Multiple MCP Sources
+
+A single agent can use tools from multiple MCP clients:
+
+```yaml
+agents:
+  super_agent:
+    mcp:
+      - calc_client
+      - aws_knowledge
+      - filesystem
+    system_prompt: "You have math, AWS docs, and filesystem access."
+```
+
+> **Tips & Tricks**
+>
+> - The `prefix` parameter is your friend. It namespaces tools to avoid collisions: `calc_add` vs `aws_add`.
+> - For development, managed servers (Mode 1) are the most convenient — everything starts and stops with your script.
+> - For production, prefer remote URLs (Mode 2) — deploy MCP servers independently and connect agents to them.
+> - Server transport defaults to `streamable-http`. You can also use `sse` for older MCP servers.
+> - MCP servers support `server_params` which are forwarded to FastMCP constructor — useful for `stateless_http`, `json_response`, etc.
+
+---
+
+[Next: Chapter 10 — Orchestrations →](Chapter_10.md)
+
+# docs/configuration/Chapter_10.md
+
+# Chapter 10: Orchestrations — Multi-Agent Systems
+
+[← Back to Table of Contents](README.md) | [← Previous: MCP](Chapter_09.md)
+
+---
+
+Orchestrations wire multiple agents into collaborative systems. Define them under the `orchestrations` section — each one has a `mode` and references agents by name.
+
+**Key rule**: agents and orchestrations share a single namespace. You can't have an agent named `team` and an orchestration named `team`.
+
+## Mode: Delegate
+
+A coordinator agent calls sub-agents as tool functions. Best for hub-and-spoke patterns where one agent directs others:
+
+```yaml
+agents:
+  researcher:
+    model: default
+    system_prompt: "You research topics thoroughly."
+
+  writer:
+    model: default
+    system_prompt: "You write polished articles."
+
+  coordinator:
+    model: default
+    system_prompt: |
+      For every request:
+        1. Call researcher to gather facts.
+        2. Pass the facts to writer for the final article.
+      Delegate all work — don't write content yourself.
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - agent: researcher
+        description: "Research a topic and return structured facts."
+      - agent: writer
+        description: "Write a polished article from research material."
+
+entry: team
+```
+
+**How it works**: kaboo-workflows **forks** a new agent from the `entry_name` agent's blueprint (model, system_prompt, hooks, tools) and adds delegate tools for each connection. The original `coordinator` agent is **never mutated**. Each connection becomes an async tool that the coordinator can call.
+
+**Fields**:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `mode` | `"delegate"` | Yes | |
+| `entry_name` | string | Yes | The agent whose blueprint is forked as coordinator |
+| `connections` | list | Yes | Sub-agents to wire as tools |
+| `connections[].agent` | string | Yes | Name of the target agent or orchestration |
+| `connections[].description` | string | Yes | Tool description the LLM sees |
+| `session_manager` | dict | No | Override session manager for the forked agent |
+| `hooks` | list | No | Additional hooks for the forked agent |
+| `agent_kwargs` | dict | No | Override agent kwargs (merged with entry agent's kwargs) |
+
+## Mode: Swarm
+
+Peer agents hand off control to each other autonomously. No central coordinator — agents decide when to pass the baton:
+
+```yaml
+agents:
+  drafter:
+    model: default
+    system_prompt: |
+      Write initial code. When done, hand off to reviewer.
+
+  reviewer:
+    model: default
+    system_prompt: |
+      Review code. If issues found, hand back to drafter.
+      If good, hand off to tech_lead.
+
+  tech_lead:
+    model: default
+    system_prompt: "Make final approval decision."
+
+orchestrations:
+  review_team:
+    mode: swarm
+    agents: [drafter, reviewer, tech_lead]
+    entry_name: drafter
+    max_handoffs: 10
+
+entry: review_team
+```
+
+**How it works**: strands' Swarm injects a `handoff_to_agent` tool into every agent in the list. Agents call this tool to transfer control. Execution continues until one agent decides to stop or `max_handoffs` is reached.
+
+**Fields**:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `mode` | `"swarm"` | Yes | | |
+| `agents` | list[str] | Yes | | Agent names participating in the swarm |
+| `entry_name` | string | Yes | | Which agent starts first |
+| `max_handoffs` | int | No | 20 | Maximum handoffs before termination |
+| `max_iterations` | int | No | 20 | Maximum iterations |
+| `execution_timeout` | float | No | 900.0 | Total execution timeout (seconds) |
+| `node_timeout` | float | No | 300.0 | Per-agent timeout (seconds) |
+| `session_manager` | dict | No | | Swarm-level session manager |
+| `hooks` | list | No | | Swarm-level hooks |
+
+**Limitation**: All swarm nodes must be plain agents — no nested orchestrations. Node agents cannot have session managers (see [Chapter 7](Chapter_07.md#swarm-agents-and-sessions)).
+
+## Mode: Graph
+
+Deterministic DAG pipeline with explicit edges. Agents execute in dependency order — independent nodes can run in parallel:
+
+```yaml
+agents:
+  planner:
+    model: default
+    system_prompt: "Create a content outline."
+
+  writer:
+    model: default
+    system_prompt: "Write content following the outline."
+
+  editor:
+    model: default
+    system_prompt: "Edit for clarity and correctness."
+
+orchestrations:
+  pipeline:
+    mode: graph
+    entry_name: planner
+    edges:
+      - from: planner
+        to: writer
+      - from: writer
+        to: editor
+
+entry: pipeline
+```
+
+**How it works**: kaboo-workflows feeds the edges to strands' `GraphBuilder`, which constructs a topological execution plan. The `entry_name` must be a node with no incoming edges (the pipeline start).
+
+**Fields**:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `mode` | `"graph"` | Yes | | |
+| `entry_name` | string | Yes | | Starting node (must have no incoming edges) |
+| `edges` | list | Yes | | Edge definitions |
+| `edges[].from` | string | Yes | | Source node name |
+| `edges[].to` | string | Yes | | Target node name |
+| `edges[].condition` | string | No | | Python callable for conditional routing |
+| `max_node_executions` | int | No | | Max times any node can execute |
+| `execution_timeout` | float | No | | Total pipeline timeout (seconds) |
+| `node_timeout` | float | No | | Per-node timeout (seconds) |
+| `reset_on_revisit` | bool | No | false | Reset agent state when a node is revisited |
+| `session_manager` | dict | No | | Graph-level session manager |
+| `hooks` | list | No | | Graph-level hooks |
+
+> **Tips & Tricks**
+>
+> - **Delegate** is best for "boss and workers" patterns — the coordinator has full control over when and how to call sub-agents.
+> - **Swarm** is best for peer collaboration — agents negotiate among themselves. Great for review/revision cycles.
+> - **Graph** is best for fixed pipelines — when you know the exact processing order. Parallel execution of independent nodes is automatic.
+> - The `description` field on delegate connections is what the coordinator LLM sees as the tool description — make it clear and actionable.
+> - In swarm mode, guide handoff behavior through system prompts — tell each agent *when* and *to whom* they should hand off.
+
+---
+
+[Next: Chapter 11 — Graph Conditions →](Chapter_11.md)
+
+# docs/configuration/Chapter_11.md
+
+# Chapter 11: Graph Conditions — Dynamic Routing
+
+[← Back to Table of Contents](README.md) | [← Previous: Orchestrations](Chapter_10.md)
+
+---
+
+Graph edges can have conditions — Python functions that decide at runtime whether an edge should fire. This unlocks feedback loops and branching pipelines.
+
+```yaml
+orchestrations:
+  pipeline:
+    mode: graph
+    entry_name: writer
+    reset_on_revisit: true
+    max_node_executions: 6
+    edges:
+      - from: writer
+        to: reviewer
+      - from: reviewer
+        to: writer
+        condition: ./conditions.py:needs_revision
+      - from: reviewer
+        to: publisher
+        condition: ./conditions.py:is_approved
+```
+
+## Writing Condition Functions
+
+Condition functions receive the graph execution context and return `True` or `False`:
+
+```python
+# conditions.py
+
+def needs_revision(context: dict) -> bool:
+    """Route back to writer if reviewer says REVISE."""
+    last_output = str(context.get("last_output", ""))
+    return "REVISE" in last_output.upper()
+
+def is_approved(context: dict) -> bool:
+    """Route to publisher if reviewer approves."""
+    last_output = str(context.get("last_output", ""))
+    return "APPROVED" in last_output.upper()
+```
+
+The condition spec format is the same as tools and hooks: `./file.py:function_name` or `module.path:function_name`.
+
+## Loops and Revisits
+
+When an edge condition creates a loop (reviewer → writer → reviewer), you need two settings:
+
+- **`reset_on_revisit: true`** — Resets the agent's conversation state when it's visited again. Without this, the agent accumulates context from all previous visits.
+- **`max_node_executions: N`** — Safety cap on how many times any node can execute. Prevents infinite loops.
+
+## How Conditions Are Evaluated
+
+For a given node, all outgoing edges are checked. Edges without conditions always fire. Edges with conditions fire only if the function returns `True`. If no outgoing edge fires, the pipeline stops.
+
+> **Tips & Tricks**
+>
+> - Make your reviewer agent's output deterministic by instructing it to start with keywords like "REVISE:" or "APPROVED:" — this makes condition functions simple and reliable.
+> - Always set `max_node_executions` when you have loops — it's your safety net against infinite cycles.
+> - `reset_on_revisit` is usually what you want for revision loops — the writer should get fresh context each time, not accumulate all previous attempts.
+> - Condition functions must be callable. If you accidentally point to a non-callable (like a string or class), kaboo-workflows will raise a clear error.
+
+---
+
+[Next: Chapter 12 — Nested Orchestrations →](Chapter_12.md)
+
+# docs/configuration/Chapter_12.md
+
+# Chapter 12: Nested Orchestrations — Composing Systems
+
+[← Back to Table of Contents](README.md) | [← Previous: Graph Conditions](Chapter_11.md)
+
+---
+
+Named orchestrations can reference each other. A swarm can be plugged into a delegate as a tool. A delegate can be a node in a graph. Compose them however you want.
+
+```yaml
+agents:
+  researcher:
+    model: default
+    system_prompt: "Research topics thoroughly."
+
+  reviewer:
+    model: default
+    system_prompt: "Review and improve content."
+
+  qa_bot:
+    model: default
+    system_prompt: "Run quality checks on content."
+
+  coordinator:
+    model: default
+    system_prompt: |
+      1. Send work to content_team.
+      2. Pass results to qa_bot.
+      3. Return the final output.
+
+orchestrations:
+  # Inner orchestration — built first
+  content_team:
+    mode: swarm
+    agents: [researcher, reviewer]
+    entry_name: researcher
+    max_handoffs: 10
+
+  # Outer orchestration — references inner by name
+  manager:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - agent: content_team          # This is an orchestration, not a plain agent!
+        description: "Content production team."
+      - agent: qa_bot
+        description: "Quality assurance check."
+
+entry: manager
+```
+
+## How It Works
+
+1. kaboo-workflows collects all orchestration dependencies.
+2. It performs a **topological sort** — inner orchestrations are built before outer ones.
+3. Built orchestrations become nodes in the node pool, available for outer orchestrations to reference.
+4. For delegate mode, inner orchestrations are wrapped as async tools (just like regular agents).
+
+## Circular Dependencies
+
+Orchestrations that reference each other in a cycle are caught at load time:
+
+```yaml
+orchestrations:
+  a:
+    mode: delegate
+    entry_name: some_agent
+    connections:
+      - agent: b
+        description: "..."
+  b:
+    mode: delegate
+    entry_name: other_agent
+    connections:
+      - agent: a          # Circular!
+        description: "..."
+```
+
+```
+CircularDependencyError: Circular dependency between orchestrations: ['a', 'b'].
+Orchestrations cannot reference each other in a cycle.
+```
+
+## Nesting Depth
+
+There's no hard limit on nesting depth. A delegate can reference a graph that contains a delegate that references a swarm. As long as there are no cycles, it builds.
+
+## Graph Nodes as Orchestrations
+
+Graph edges can reference orchestrations, not just agents. This means a graph node can be an entire swarm:
+
+```yaml
+orchestrations:
+  writing_team:
+    mode: delegate
+    entry_name: writer
+    connections:
+      - agent: researcher
+        description: "Research first."
+
+  pipeline:
+    mode: graph
+    entry_name: writing_team        # Starts with the delegate orchestration
+    edges:
+      - from: writing_team
+        to: editor
+      - from: editor
+        to: publisher
+```
+
+> **Tips & Tricks**
+>
+> - Draw your system topology on paper first, then translate it to YAML. Each box is an agent or orchestration, each arrow is a connection/edge.
+> - Name your orchestrations descriptively — `content_team`, `review_pipeline`, `analysis_graph` — because error messages reference these names.
+> - Use delegate mode as the "outer shell" for most complex systems — it gives the coordinator explicit control over when to call sub-systems.
+
+---
+
+[Next: Chapter 13 — Multi-File Configs →](Chapter_13.md)
+
+# docs/configuration/Chapter_13.md
+
+# Chapter 13: Multi-File Configs — Splitting and Merging
+
+[← Back to Table of Contents](README.md) | [← Previous: Nested Orchestrations](Chapter_12.md)
+
+---
+
+Large configs can be split across multiple files. Pass a list to `load()` and they're merged:
+
+```python notest
+from kaboo_workflows import load
+
+resolved = load(["base.yaml", "agents.yaml", "mcp.yaml"])
+```
+
+## Merge Rules
+
+**Collection sections** (dicts) are merged across files:
+
+- `models` — merged
+- `agents` — merged
+- `orchestrations` — merged
+- `mcp_servers` — merged
+- `mcp_clients` — merged
+
+**Singleton fields** use last-wins semantics:
+
+- `entry` — last file's value wins
+- `session_manager` — last file's value wins
+- `log_level` — last file's value wins
+- `version` — last file's value wins
+
+## Duplicate Detection
+
+If two files define the same name in the same collection section, loading fails:
+
+```yaml
+# file_a.yaml
+agents:
+  helper:
+    system_prompt: "I help."
+
+# file_b.yaml
+agents:
+  helper:                  # Duplicate!
+    system_prompt: "I also help."
+```
+
+```
+ValueError: Duplicate names in 'agents' across config sources: ['helper']
+```
+
+## Per-File Variable Interpolation
+
+Each file's `vars` block is interpolated independently *before* merging. This means File A's vars don't affect File B:
+
+```yaml
+# base.yaml
+vars:
+  MODEL: us.anthropic.claude-sonnet-4-6-v1:0
+models:
+  default:
+    provider: bedrock
+    model_id: ${MODEL}         # Resolves from base.yaml's vars
+
+# agents.yaml
+vars:
+  TONE: friendly               # This is agents.yaml's own vars
+agents:
+  assistant:
+    model: default
+    system_prompt: "You are ${TONE}."
+entry: assistant
+```
+
+## Typical Split Patterns
+
+**Infrastructure + Application**:
+```
+base.yaml     — vars, models, mcp_servers, mcp_clients, session_manager
+agents.yaml   — agents, orchestrations, entry
+```
+
+**Environment Layering**:
+```
+base.yaml        — shared models, shared agents
+production.yaml  — production model IDs, production entry
+staging.yaml     — staging model IDs, staging entry
+```
+
+**Team-Based**:
+```
+models.yaml       — all model definitions
+research.yaml     — researcher agents + orchestrations
+content.yaml      — writer/editor agents + orchestrations
+main.yaml         — coordinator agent, top-level orchestration, entry
+```
+
+## Neither File Needs to Be Complete
+
+Individual files don't need to be valid on their own. `base.yaml` can define models without agents or entry. `agents.yaml` can reference models it doesn't define. The merged result must be valid — individual files don't.
+
+> **Tips & Tricks**
+>
+> - Use multi-file configs when your single file exceeds ~200 lines. It makes diffs cleaner and team collaboration easier.
+> - The `entry` field should typically go in the "application" file, not the "infrastructure" file — it's the most likely to change between use cases.
+> - File paths for tools/hooks/servers are resolved relative to the file they appear in. If `agents.yaml` says `tools: [./tools.py]`, it looks for `tools.py` next to `agents.yaml`.
+
+---
+
+[Next: Chapter 14 — Agent Factories →](Chapter_14.md)
+
+# docs/configuration/Chapter_14.md
+
+# Chapter 14: Agent Factories — Custom Agent Construction
+
+[← Back to Table of Contents](README.md) | [← Previous: Multi-File Configs](Chapter_13.md)
+
+---
+
+The `type` field on an agent lets you replace the standard `strands.Agent()` constructor with your own factory function. The `agent_kwargs` dict passes extra parameters to it.
+
+```yaml
+agents:
+  assistant:
+    type: ./factory.py:create_agent
+    model: default
+    system_prompt: "You are a helpful assistant."
+    agent_kwargs:
+      greeting: "Ahoy, captain!"
+      personality: pirate
+```
+
+## Writing a Factory
+
+kaboo-workflows calls your factory with all standard agent parameters plus `agent_kwargs`:
+
+```python
+# factory.py
+from strands import Agent
+
+def create_agent(
+    *,
+    name: str,
+    greeting: str = "Hello!",
+    personality: str = "friendly",
+    **kwargs,
+) -> Agent:
+    """Custom factory that injects personality into the system prompt."""
+    system_prompt = kwargs.pop("system_prompt", "") or ""
+    enhanced = f"{system_prompt}\nPersonality: {personality}. Greet with: {greeting}"
+
+    return Agent(
+        name=name,
+        system_prompt=enhanced,
+        **kwargs,
+    )
+```
+
+**Important**: `strands.Agent.__init__` does NOT accept `**kwargs` — it has explicit parameters only. Your factory **must** consume any custom keys from `agent_kwargs` before forwarding the rest to `Agent()`.
+
+## The `agent_kwargs` Dict
+
+`agent_kwargs` accepts any key-value pairs that get spread into your factory call. It can also pass valid `Agent()` parameters directly:
+
+```yaml
+agents:
+  assistant:
+    model: default
+    system_prompt: "You are helpful."
+    agent_kwargs:
+      record_direct_tool_call: true
+      trace_attributes:
+        team: content
+        environment: production
+```
+
+When `type` is **not** set (standard agent construction), `agent_kwargs` is passed directly to `strands.Agent()`. Any invalid key will raise `TypeError` at construction time.
+
+## Delegate `agent_kwargs` Override
+
+Delegate orchestrations can also specify `agent_kwargs`, which get **merged** over the entry agent's kwargs (orchestration values win on conflict):
+
+```yaml
+agents:
+  coordinator:
+    model: default
+    system_prompt: "Coordinate work."
+    agent_kwargs:
+      record_direct_tool_call: false
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    agent_kwargs:
+      record_direct_tool_call: true     # Overrides the agent's value
+    connections:
+      - agent: worker
+        description: "Do the work."
+```
+
+> **Tips & Tricks**
+>
+> - Agent factories are great for custom `Agent` subclasses — your factory can return `MySpecialAgent(...)` which extends strands' `Agent`.
+> - The factory must return a `strands.Agent` instance — kaboo-workflows checks this and raises `TypeError` if it doesn't.
+> - Use factory paths in the same format as hooks and tools: `./local/file.py:function_name` or `my_package.factory:create_agent`.
+
+---
+
+[Next: Chapter 15 — Event Streaming →](Chapter_15.md)
+
+# docs/configuration/Chapter_15.md
+
+# Chapter 15: Event Streaming — Real-Time Observability
+
+[← Back to Table of Contents](README.md) | [← Previous: Agent Factories](Chapter_14.md)
+
+---
+
+When you have nested orchestrations running, you need visibility into what's happening. `wire_event_queue()` attaches event publishers to every agent and orchestrator and funnels all events into a single async queue.
+
+```python notest
+import asyncio
+from kaboo_workflows import AnsiRenderer, load
+
+async def main():
+    resolved = load("config.yaml")
+    queue = resolved.wire_event_queue()
+
+    async def invoke():
+        try:
+            await resolved.entry.invoke_async("Analyze LLM trends.")
+        finally:
+            await queue.close()
+
+    asyncio.create_task(invoke())
+
+    renderer = AnsiRenderer()
+    while (event := await queue.get()) is not None:
+        renderer.render(event)
+    renderer.flush()
+
+asyncio.run(main())
+```
+
+## Event Types
+
+Every event is a `StreamEvent` dataclass with four fields: `type`, `agent_name`, `timestamp`, and `data`.
+
+### Session lifecycle events
+
+These two events bracket every invocation. They are produced by the queue layer, not by individual agents.
+
+| Event Type | Description | `data` payload |
+|------------|-------------|----------------|
+| `SESSION_START` | First event on the queue — emitted before any agent activity | `{"session_id": "<id or null>", "manifest": {SessionManifest}}` — agents, orchestrations, entry point, model info, session manager locations |
+| `SESSION_END` | Last typed event before the stream closes | `{"session_id": "<id or null>"}` |
+
+The `SESSION_START` payload wraps the full wired topology snapshot together with the effective session id. Use the `manifest` key to restore conversation history, render an architecture diagram, or audit which models are in use — before any agent has run.
+
+### Per-agent events
+
+| Event Type | Description |
+|------------|-------------|
+| `AGENT_START` | Agent begins processing |
+| `TOKEN` | Individual token streamed from LLM |
+| `REASONING` | Reasoning/thinking content from LLM |
+| `TOOL_START` | Tool execution begins |
+| `TOOL_END` | Tool execution completes |
+| `INTERRUPT` | Agent pauses for human input |
+| `AGENT_COMPLETE` | Agent finishes — `data` carries `usage` metrics, `text` (final output string), and `message` (raw message dict) |
+| `ERROR` | Model or execution error |
+
+### Multi-agent events
+
+| Event Type | Description |
+|------------|-------------|
+| `NODE_START` | Graph/swarm node begins |
+| `NODE_STOP` | Graph/swarm node completes |
+| `HANDOFF` | Swarm agent hands off to another |
+| `MULTIAGENT_START` | Multi-agent orchestration begins |
+| `MULTIAGENT_COMPLETE` | Multi-agent orchestration completes |
+
+## AnsiRenderer
+
+The built-in `AnsiRenderer` prints colored terminal output — agent names, tool calls, reasoning traces, tokens — all streaming live. Perfect for development and debugging.
+
+## Custom Event Consumers
+
+Events are `StreamEvent` dataclasses with `.asdict()` for serialization:
+
+```python notest
+while (event := await queue.get()) is not None:
+    data = event.asdict()
+    # Send to websocket, log to file, push to metrics system...
+```
+
+A typical consumer pattern that handles the session lifecycle:
+
+```python notest
+while (event := await queue.get()) is not None:
+    if event.type == "session_start":
+        session_id = event.data.get("session_id")
+        manifest = event.data["manifest"]  # full topology snapshot
+        entry = manifest["entry"]          # {"name": "...", "kind": "agent|orchestration"}
+    elif event.type == "session_end":
+        session_id = event.data.get("session_id")
+    else:
+        # per-agent or multi-agent event
+        process(event)
+```
+
+## Configuring the Queue in YAML
+
+Event streaming is configured in Python, not YAML — it's a runtime concern. But the **hooks** it installs (`EventPublisher`) listen to the same lifecycle events as your YAML-defined hooks. They coexist peacefully.
+
+> **Tips & Tricks**
+>
+> - Call `wire_event_queue()` only **once** per `ResolvedConfig` — it mutates agents and orchestrators by adding hooks. Calling it twice would double-attach publishers.
+> - Call `queue.flush()` between requests to clear stale events from a previous invocation. This also resets the `SESSION_START` / `SESSION_END` guards so the next cycle can re-emit them.
+> - The queue has a max size of 10,000. If your agent generates more events than the consumer processes, events are dropped with a warning.
+> - `SESSION_START` is emitted synchronously by `wire_event_queue()` before any agent runs. `SESSION_END` is emitted by `queue.close()` — always call it in a `finally` block.
+
+---
+
+[Next: Chapter 16 — Name Sanitization →](Chapter_16.md)
+
+# docs/configuration/Chapter_16.md
+
+# Chapter 16: Name Sanitization — How Names Are Handled
+
+[← Back to Table of Contents](README.md) | [← Previous: Event Streaming](Chapter_15.md)
+
+---
+
+Names in config (agent names, model names, MCP client/server names, orchestration names) follow strict rules:
+
+## Valid Names
+
+- Characters: `[a-zA-Z0-9_-]`
+- Length: 1–64 characters
+- Examples: `researcher`, `fast-model`, `content_writer_v2`
+
+## Automatic Sanitization
+
+If you use characters outside the valid set (spaces, dots, special characters), kaboo-workflows sanitizes them:
+
+- Invalid characters → underscores
+- Consecutive underscores → single underscore
+- Leading/trailing underscores → stripped
+- Names over 64 characters → truncated
+
+```yaml
+agents:
+  "My Cool Agent!":      # Sanitized to: My_Cool_Agent
+    system_prompt: "Hi."
+```
+
+A warning is logged when sanitization happens:
+
+```
+WARNING | section=<agents>, original=<My Cool Agent!>, sanitized=<My_Cool_Agent> | sanitized collection key
+```
+
+## Reference Updates
+
+When a name is sanitized, **all references** to it throughout the config are updated automatically — `entry`, `model` references, `mcp` lists, orchestration agents, connections, and edges.
+
+## Namespace Collisions
+
+Agents and orchestrations share a single namespace. You cannot have:
+
+```yaml
+agents:
+  team:
+    system_prompt: "I'm an agent."
+
+orchestrations:
+  team:                    # ERROR: collides with agent 'team'
+    mode: swarm
+    agents: [team]
+    entry_name: team
+```
+
+```
+ValueError: Name collision between agents and orchestrations: ['team'].
+Names must be unique within each section.
+```
+
+Models, MCP servers, and MCP clients each have their own independent namespaces — a model and an agent can share a name (though it's confusing and not recommended).
+
+> **Tips & Tricks**
+>
+> - Stick to `snake_case` for names. It's valid, readable, and never needs sanitization.
+> - Avoid naming an orchestration and an agent the same thing — even accidentally similar names can confuse you when debugging.
+
+---
+
+[Next: Chapter 17 — The Loading Pipeline →](Chapter_17.md)
+
+# docs/configuration/Chapter_17.md
+
+# Chapter 17: The Loading Pipeline — What Happens Under the Hood
+
+[← Back to Table of Contents](README.md) | [← Previous: Name Sanitization](Chapter_16.md)
+
+---
+
+When you call `load("config.yaml")`, here's exactly what happens:
+
+## Step 1: Parse Sources
+
+Each config source (file path or raw YAML string) is parsed with `yaml.safe_load()`. `Path` objects are always treated as files. Strings are files if the path exists on disk, otherwise parsed as inline YAML.
+
+## Step 2: Strip Anchors and Interpolate Variables
+
+For each source independently:
+1. Extract and remove the `vars` block
+2. Strip `x-*` keys (YAML anchor scratch pads)
+3. Interpolate `${VAR}` references using `vars` + environment
+
+## Step 3: Rewrite Relative Paths
+
+All filesystem-based specs (`./file.py:func`, `./tools/`) are rewritten to absolute paths anchored to the config file's directory. This ensures the config works regardless of the working directory.
+
+## Step 4: Sanitize Collection Keys
+
+Names in all collection sections are sanitized to `[a-zA-Z0-9_-]`. Cross-references are updated automatically.
+
+## Step 5: Merge (If Multi-File)
+
+Collection sections are combined, duplicate names detected, singleton fields use last-wins.
+
+## Step 6: Validate Against Schema
+
+The merged dict is validated against Pydantic models. Invalid fields, missing required values, wrong types — all caught here with clear error messages.
+
+## Step 7: Validate References
+
+Cross-references are checked:
+- Agent `model` references → must exist in `models`
+- Agent `mcp` references → must exist in `mcp_clients`
+- MCP client `server` references → must exist in `mcp_servers`
+- Orchestration agent references → must exist in `agents` or `orchestrations`
+
+## Step 8: Resolve Infrastructure
+
+Models, MCP servers, MCP clients, and session managers are created as Python objects. Nothing is started yet.
+
+## Step 9: Start MCP Lifecycle
+
+MCP servers are started in background threads. The pipeline waits for all servers to be ready (TCP port check). This happens **before** agent creation because `Agent.__init__` auto-starts MCP clients which need running servers.
+
+## Step 10: Create Agents
+
+Each agent definition is resolved: model looked up, tools loaded, hooks instantiated, MCP clients attached, session manager wired. Each agent is a fresh `strands.Agent` instance.
+
+## Step 11: Wire Orchestrations
+
+Orchestrations are topologically sorted and built in dependency order. Inner orchestrations first, outer orchestrations reference the already-built inner ones.
+
+## Step 12: Return ResolvedConfig
+
+The final `ResolvedConfig` has:
+- `agents` — dict of all agents by name
+- `orchestrators` — dict of all built orchestrations by name
+- `entry` — the entry point (Agent, Swarm, or Graph)
+- `mcp_lifecycle` — for managing shutdown
+
+## Advanced Topic: `load()` vs `load_config()` + `resolve_infra()` + `load_session()`
+
+Most users only need:
+
+```python notest
+from kaboo_workflows import load
+
+resolved = load("config.yaml")
+```
+
+That one call runs the whole pipeline:
+
+1. Parse YAML
+2. Interpolate variables
+3. Sanitize names
+4. Merge files
+5. Validate schema + references
+6. Resolve infrastructure
+7. Start MCP lifecycle
+8. Create agents and orchestrations
+
+But kaboo-workflows also exposes the lower-level split because **config parsing** and **session creation** are not always the same thing.
+
+### What counts as "config"?
+
+`load_config()` returns a validated `AppConfig` — just structured data.
+
+At this point, nothing is started and no live strands objects exist yet:
+
+- no `Agent` instances
+- no orchestration objects
+- no started MCP servers
+- no connected MCP clients
+
+This step is useful when you want to parse and validate once at process startup, fail fast on bad YAML, and keep the validated config around.
+
+### What counts as "infrastructure"?
+
+`resolve_infra(app_config)` turns the validated config into the shared runtime pieces:
+
+- resolved model objects
+- resolved MCP server objects
+- resolved MCP client objects
+- a cold `mcp_lifecycle`
+
+> **Note:** `resolve_infra()` does **not** build session manager instances. Session managers are
+> created per agent and per orchestration at session time (inside `load_session()`), once a real
+> session ID is known. This avoids creating orphan filesystem folders before a session actually starts.
+
+Important nuance: **resolved** does not mean **started**.
+
+After `resolve_infra()`:
+
+- MCP servers exist as Python objects, but are not running yet
+- MCP clients exist as Python objects, but are not connected yet
+- agents still do not exist
+- orchestrations still do not exist
+
+You then start the shared MCP runtime explicitly:
+
+```python notest
+from kaboo_workflows.config import load_config, resolve_infra
+
+app_config = load_config("config.yaml")
+infra = resolve_infra(app_config)
+infra.mcp_lifecycle.start()
+```
+
+### What `load_session()` does
+
+`load_session(app_config, infra, session_id=...)` is the final step. It uses the already-started shared infrastructure to create a **fresh** `ResolvedConfig` for one session:
+
+- fresh agents
+- fresh orchestrations
+- fresh entry point
+- the same shared MCP lifecycle
+
+This is the key distinction:
+
+- `resolve_infra()` gives you **shared process-level infrastructure**
+- `load_session()` gives you **session-level agent graph built on top of that infrastructure**
+
+### Why this split matters for multi-tenant deployments
+
+In a multi-tenant server, you usually do **not** want to re-parse YAML, re-resolve models, or restart MCP servers on every request. Those are process-level concerns.
+
+Instead, you want:
+
+- one validated config shared by the process
+- one resolved infrastructure shared by the process
+- one started MCP lifecycle shared by the process
+- one fresh set of agents per tenant/session/request
+
+Typical pattern:
+
+```python notest
+from kaboo_workflows.config import load_config, load_session, resolve_infra
+
+# Once at process startup
+app_config = load_config("config.yaml")
+infra = resolve_infra(app_config)
+infra.mcp_lifecycle.start()
+
+# Per request / websocket / tenant session
+resolved = load_session(app_config, infra, session_id="tenant-123")
+result = resolved.entry("Hello!")
+```
+
+This avoids paying the startup cost repeatedly while still keeping per-session agent state isolated.
+
+### Session manager nuance
+
+Session manager instances are **not** built during `resolve_infra()`. Instead, `load_session()`
+computes a single `effective_session_id` and threads it down to every agent and orchestration leaf:
+
+1. If you pass `session_id="my-id"` to `load_session()`, that value is used as-is.
+2. If you do **not** pass a `session_id` but the config declares a global `session_manager:`,
+   kaboo-workflows looks for a `session_id` in `session_manager.params`. If found, that value is
+   used; otherwise a fresh `uuid.uuid4()` is generated once and shared by all agents in that
+   call — matching the "one folder per CLI run" behaviour.
+3. If neither a `session_id` is provided nor a global `session_manager:` is configured, no session
+   manager instances are created at all. Each individual agent or orchestration with a per-agent
+   `session_manager:` will generate its own ID as usual.
+
+This design guarantees exactly one folder is created per `load_session()` call, never an orphan
+folder from `resolve_infra()`.
+
+### Mental model
+
+Use this rule of thumb:
+
+- **`load()`** = convenience API for scripts and local apps
+- **`load_config()`** = validate and freeze the declarative config
+- **`resolve_infra()`** = build shared runtime dependencies, but do not start them yet
+- **`load_session()`** = build one session's live agents/orchestrations from shared infra
+
+If you're building a CLI, a notebook, or a one-shot script, use `load()`.
+
+If you're building a long-running web server with many user sessions, use `load_config()` + `resolve_infra()` once, then `load_session()` for each session.
+
+---
+
+[Next: Chapter 18 — Full Reference →](Chapter_18.md)
+
+# docs/configuration/Chapter_18.md
+
+# Chapter 18: Full Reference — Every Field at a Glance
+
+[← Back to Table of Contents](README.md) | [← Previous: The Loading Pipeline](Chapter_17.md)
+
+---
+
+## Root Config
+
+```yaml
+version: "1"          # Optional, defaults to "1"
+vars: {}              # Variable definitions (removed after interpolation)
+models: {}            # Named model definitions
+agents: {}            # Named agent definitions (required: at least one)
+orchestrations: {}    # Named orchestration definitions
+mcp_servers: {}       # Named MCP server definitions
+mcp_clients: {}       # Named MCP client connections
+session_manager: {}   # Global session manager
+entry: "name"         # Required: entry point agent or orchestration
+log_level: "WARNING"  # Optional: DEBUG, INFO, WARNING, ERROR
+```
+
+## ModelDef
+
+```yaml
+models:
+  name:
+    provider: bedrock | openai | ollama | gemini | module.path:CustomModel
+    model_id: "model-identifier"
+    params: {}        # Provider-specific kwargs
+```
+
+## AgentDef
+
+```yaml
+agents:
+  name:
+    type: null                     # Custom factory: module.path:factory_func
+    agent_kwargs: {}               # Extra kwargs for Agent() or custom factory
+    model: "model_name"            # String ref to models: or inline ModelDef
+    system_prompt: "..."           # System prompt string
+    description: "..."             # Agent description (used in orchestration tools)
+    tools: []                      # List of tool spec strings
+    hooks: []                      # List of HookDef objects or import path strings
+    mcp: []                        # List of MCP client names
+    tool_labels: {}                # Tool name -> display label mapping
+    conversation_manager: null     # ConversationManagerDef
+    session_manager: null          # Per-agent SessionManagerDef (overrides global)
+```
+
+## HookDef
+
+```yaml
+hooks:
+  # Inline object form
+  - type: module.path:ClassName    # or ./file.py:ClassName
+    params: {}                     # Constructor kwargs
+
+  # String shorthand (no params)
+  - module.path:ClassName
+```
+
+## SessionManagerDef
+
+```yaml
+session_manager:
+  provider: file | s3 | agentcore  # Built-in provider name
+  type: null                        # Custom class: module.path:ClassName (overrides provider)
+  params: {}                        # Constructor kwargs (session_id, storage_dir, etc.)
+```
+
+## ConversationManagerDef
+
+```yaml
+conversation_manager:
+  type: strands.agent:SlidingWindowConversationManager
+  params: {}                       # Constructor kwargs (window_size, etc.)
+```
+
+## MCPServerDef
+
+```yaml
+mcp_servers:
+  name:
+    type: ./server.py:create       # Factory function: module.path:func or ./file.py:func
+    params: {}                     # Forwarded to factory (port, host, etc.)
+```
+
+## MCPClientDef
+
+```yaml
+mcp_clients:
+  name:
+    # Exactly one of:
+    server: "server_name"          # Reference to mcp_servers entry
+    url: "https://..."             # External MCP server URL
+    command: ["cmd", "arg"]        # Stdio subprocess command
+
+    transport: null                # Override: "streamable-http" | "sse" | "stdio"
+    params: {}                     # Forwarded to strands MCPClient (prefix, startup_timeout, etc.)
+    transport_options: {}          # Transport-specific options (headers, timeout, etc.)
+```
+
+## DelegateOrchestrationDef
+
+```yaml
+orchestrations:
+  name:
+    mode: delegate
+    entry_name: "agent_name"       # Agent blueprint to fork
+    connections:
+      - agent: "target_name"      # Agent or orchestration name
+        description: "..."         # Tool description for LLM
+    session_manager: null          # Override session manager
+    hooks: []                      # Additional hooks
+    agent_kwargs: {}               # Override agent kwargs (merged)
+```
+
+## SwarmOrchestrationDef
+
+```yaml
+orchestrations:
+  name:
+    mode: swarm
+    agents: [agent1, agent2]       # Participating agents
+    entry_name: "agent1"           # Starting agent
+    max_handoffs: 20               # Max handoffs
+    max_iterations: 20             # Max iterations
+    execution_timeout: 900.0       # Total timeout (seconds)
+    node_timeout: 300.0            # Per-agent timeout (seconds)
+    session_manager: null          # Swarm-level session manager
+    hooks: []                      # Swarm-level hooks
+```
+
+## GraphOrchestrationDef
+
+```yaml
+orchestrations:
+  name:
+    mode: graph
+    entry_name: "start_node"       # Node with no incoming edges
+    edges:
+      - from: "node_a"
+        to: "node_b"
+        condition: null            # Optional: ./file.py:func or module:func
+    max_node_executions: null      # Safety cap for loops
+    execution_timeout: null        # Total timeout (seconds)
+    node_timeout: null             # Per-node timeout (seconds)
+    reset_on_revisit: false        # Reset agent state on revisit
+    session_manager: null          # Graph-level session manager
+    hooks: []                      # Graph-level hooks
+```
+
+---
+
+**Bonus**: [Quick Recipes →](Quick_Recipes.md)
+
+# docs/configuration/Quick_Recipes.md
+
+# Quick Recipes
+
+[← Back to Table of Contents](README.md) | [← Previous: Full Reference](Chapter_18.md)
+
+---
+
+Copy-paste-ready configs for common patterns.
+
+## The Kitchen Sink
+
+Everything in one config:
+
+```yaml
+vars:
+  MODEL: ${MODEL:-us.anthropic.claude-sonnet-4-6-v1:0}
+  TONE: ${TONE:-professional}
+
+x-hooks: &safety_hooks
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
+    params: { max_calls: 20 }
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
+
+models:
+  default:
+    provider: bedrock
+    model_id: ${MODEL}
+
+session_manager:
+  provider: file
+  params:
+    storage_dir: ./.sessions
+    session_id: ${SESSION_ID:-default}
+
+agents:
+  researcher:
+    model: default
+    hooks: *safety_hooks
+    tools:
+      - ./tools/research.py
+    system_prompt: |
+      You are a ${TONE} assistant.
+      You specialize in research.
+    session_manager: ~              # Opt out (used in swarm)
+
+  reviewer:
+    model: default
+    hooks: *safety_hooks
+    system_prompt: "You review content."
+    session_manager: ~              # Opt out (used in swarm)
+
+  qa_bot:
+    model: default
+    hooks: *safety_hooks
+    system_prompt: "Run QA checks."
+
+  coordinator:
+    model: default
+    hooks: *safety_hooks
+    conversation_manager:
+      type: strands.agent:SlidingWindowConversationManager
+      params: { window_size: 40 }
+    system_prompt: "Coordinate the team."
+
+orchestrations:
+  content_team:
+    mode: swarm
+    agents: [researcher, reviewer]
+    entry_name: researcher
+    max_handoffs: 10
+
+  pipeline:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - agent: content_team
+        description: "Content production team."
+      - agent: qa_bot
+        description: "Quality assurance."
+
+entry: pipeline
+log_level: ${LOG_LEVEL:-WARNING}
+```
+
+## Minimal Single Agent
+
+```yaml
+agents:
+  bot:
+    system_prompt: "You answer questions."
+entry: bot
+```
+
+## Two Models, One Agent
+
+```yaml
+models:
+  fast:
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-4-6-v1:0
+  smart:
+    provider: openai
+    model_id: gpt-4o
+
+agents:
+  assistant:
+    model: ${WHICH_MODEL:-fast}
+    system_prompt: "You are helpful."
+entry: assistant
+```
+
+---
+
+[← Back to Table of Contents](README.md)
+
+# docs/configuration/README.md
+
+# YAML Configuration Guide
+
+**Everything you need to know about writing kaboo-workflows YAML configs — from zero to production.**
+
+kaboo-workflows lets you describe entire multi-agent systems in YAML and get back live, fully wired strands objects. This guide walks you through every configuration option, from the simplest one-agent setup to nested multi-orchestration systems with MCP servers, hooks, session persistence, conditional graph pipelines, and multi-file configs.
+
+No prior YAML expertise required. We start simple and build up.
+
+---
+
+## Table of Contents
+
+1. [The Basics — Your First Config](Chapter_01.md)
+2. [Models — Choosing Your LLM](Chapter_02.md)
+3. [Variables — Environment-Driven Config](Chapter_03.md)
+4. [YAML Anchors — DRY Config Blocks](Chapter_04.md)
+5. [Tools — Giving Agents Superpowers](Chapter_05.md)
+6. [Hooks — Middleware for Agents](Chapter_06.md)
+7. [Session Persistence — Memory That Survives Restarts](Chapter_07.md)
+8. [Conversation Managers — Controlling Context Windows](Chapter_08.md)
+9. [MCP — External Tool Servers](Chapter_09.md)
+10. [Orchestrations — Multi-Agent Systems](Chapter_10.md)
+11. [Graph Conditions — Dynamic Routing](Chapter_11.md)
+12. [Nested Orchestrations — Composing Systems](Chapter_12.md)
+13. [Multi-File Configs — Splitting and Merging](Chapter_13.md)
+14. [Agent Factories — Custom Agent Construction](Chapter_14.md)
+15. [Event Streaming — Real-Time Observability](Chapter_15.md)
+16. [Name Sanitization — How Names Are Handled](Chapter_16.md)
+17. [The Loading Pipeline — What Happens Under the Hood](Chapter_17.md)
+18. [Full Reference — Every Field at a Glance](Chapter_18.md)
+
+**Bonus**: [Quick Recipes](Quick_Recipes.md) — Copy-paste-ready configs for common patterns.
+
+---
+
+That covers everything kaboo-workflows YAML has to offer. When in doubt, check the [examples](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples) — each one is a self-contained demo of the concepts above. And remember: after `load()`, what you get back are plain strands objects. No wrappers, no subclasses. Just the real deal, fully wired and ready to go.
+
+Happy composing! 🎼
+
+# docs/index.md
+
+# kaboo-workflows
+
+**YAML-driven multi-agent orchestration with AG-UI and CopilotKit support, built
+on [strands-agents](https://github.com/strands-agents/harness-sdk).**
+
+Describe an entire multi-agent system in YAML — models, agents, tools, hooks, MCP
+servers, and nested orchestrations — and `load()` hands back live, fully wired
+strands objects. `kaboo-serve` then serves them as AG-UI Server-Sent Events that
+any [CopilotKit](https://copilotkit.ai) frontend can consume.
+
+## Start here
+
+<div class="grid cards" markdown>
+
+- **Quick start** — install, write a config, serve it. See the
+  [README](https://github.com/gl-pgege/kaboo-workflows#quick-start).
+- **[Configuration guide](configuration/README.md)** — the complete 18-chapter
+  reference for every YAML option.
+- **[Workflow guides](workflows/deep-nesting.md)** — worked, tested examples of
+  deep nesting, swarm+graph, parallelism, HITL, history, and error handling.
+- **[API reference](api-reference.md)** — the full public Python surface,
+  auto-generated from docstrings.
+
+</div>
+
+## The kaboo stack
+
+kaboo-workflows is the orchestration engine. It pairs with:
+
+- **[kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime)** — a CopilotKit
+  runtime plugin for persisting and replaying agent event logs (in-memory or
+  Postgres `ThreadStore`s).
+- **[kaboo-react](https://github.com/gl-pgege/kaboo-react)** — React components
+  for rendering agent activity.
+- **[kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo)** —
+  a runnable, end-to-end reference wiring all three together.
+
+See [the kaboo stack](https://gl-pgege.github.io/kaboo-docs/) for the whole
+picture.
+
+## Everything is proven
+
+Nothing documented here ships without a test: every example config is
+load-validated, every complex workflow guide is backed by a passing end-to-end
+test, executable doc snippets run in CI, and a completeness gate guarantees every
+public symbol has a docstring and an API page.
+
+# docs/workflows/deep-nesting.md
+
+# Deep nested delegation (3+ levels)
+
+A delegate **connection** can target another orchestration, not just a plain
+agent. Nesting orchestrations this way gives you arbitrary depth from a single
+top-level entry.
+
+```
+research_pipeline (coordinator)
+  └─▶ research_team (lead)
+        └─▶ field_team (field_researcher ─▶ verifier)
+```
+
+## Config
+
+Each level is a delegate whose connection is the orchestration below it.
+kaboo-workflows topologically sorts them, building `field_team` first.
+
+```yaml
+orchestrations:
+  field_team:
+    mode: delegate
+    entry_name: field_researcher
+    connections:
+      - { agent: verifier, description: "Double-check the collected data" }
+  research_team:
+    mode: delegate
+    entry_name: lead
+    connections:
+      - { agent: field_team, description: "Collect and verify field data" }
+  research_pipeline:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - { agent: research_team, description: "Research the topic end to end" }
+
+entry: research_pipeline
+```
+
+Full runnable project: [`examples/15_deep_nesting`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/15_deep_nesting).
+
+## Run
+
+```bash
+uv run python examples/15_deep_nesting/main.py
+```
+
+## What you'll observe
+
+- The top entry (`coordinator`) runs *as* the orchestration and owns the reply,
+  wrapping the whole chain.
+- The deepest leaf (`verifier`) surfaces in the activity tree nested transitively
+  under `research_team` — so a user can drill from the coordinator down to the
+  verifier.
+
+## Proven by
+
+`tests/e2e/test_complex.py::test_delegate_three_levels_of_nesting` drives the same
+shape with deterministic scripted models and asserts the transitive nesting and
+the coordinator's wrapping reply.
+
+# docs/workflows/errors-and-rejection.md
+
+# Errors & rejection
+
+Two "unhappy path" behaviours, both handled safely.
+
+## 1. Error isolation
+
+If a node raises mid-run, the failure is isolated to that node: earlier nodes
+stay `completed`, the failing node's activity card is marked `error`, and the run
+**terminates** rather than hanging.
+
+```
+review_swarm (swarm): planner ─▶ researcher ─▶ writer
+```
+
+```yaml
+orchestrations:
+  review_swarm:
+    mode: swarm
+    agents: [planner, researcher, writer]
+    entry_name: planner
+
+entry: review_swarm
+```
+
+Full runnable project: [`examples/20_error_and_rejection`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/20_error_and_rejection).
+
+### Proven by
+
+`tests/e2e/test_cross_cutting.py::test_swarm_node_error_is_isolated_and_run_terminates`
+— the earlier node stays completed, the failing node is marked `error`, and the
+run terminates (never stalls).
+
+## 2. Rejection
+
+Rejection uses the same gate mechanism as [human-in-the-loop](human-in-the-loop.md).
+When the client resumes an interrupt with `{"status": "cancelled"}` (or simply
+does not address it), the gated tool receives a cancellation sentinel ("The user
+declined to answer.") and the agent proceeds **without fabricating an approval**.
+kaboo never silently approves an unaddressed interrupt — the safe default is to
+cancel.
+
+```json
+// resume payload declining the gate
+[{ "interruptId": "<id>", "status": "cancelled" }]
+```
+
+### Proven by
+
+`tests/e2e/test_complex.py::test_rejected_interrupt_finishes_cleanly` — a declined
+gate resumes to a clean `RUN_FINISHED` with no error and no hang.
+
+# docs/workflows/human-in-the-loop.md
+
+# Human-in-the-loop
+
+Set `interrupt: true` on an agent to grant it the built-in `ask_user` tool. When
+the agent calls it, the run pauses and the question surfaces to the client; on
+resume the same call returns the user's answer.
+
+```
+review_team (delegate):
+  coordinator ─▶ field_agent (interrupt: true, asks the user)
+```
+
+## Config
+
+```yaml
+agents:
+  field_agent:
+    interrupt: true          # grants the built-in ask_user tool
+    system_prompt: |
+      Before finalizing anything risky, call ask_user to confirm. If several
+      details are unclear, ask them together in one ask_user call.
+
+orchestrations:
+  review_team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - { agent: field_agent, description: "Gated field work with user confirmation" }
+
+entry: review_team
+```
+
+Full runnable project: [`examples/18_hitl`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/18_hitl).
+
+## Key behaviours
+
+- **Interrupts bubble up.** A gate fired by a nested sub-agent surfaces to the
+  single top-level handler and pauses the entire run — no matter how deep it is.
+- **Parallel gated tool calls.** An agent can raise several gates in one turn
+  (a multi-question form, or two tool calls). Each becomes its own interrupt with
+  a distinct tool-call id, and the run resumes once all are answered.
+- **Positions.** HITL works for a plain entry agent, a delegate sub-agent, and
+  swarm/graph nodes alike.
+
+## Run
+
+HITL needs a client with a resume UI — serve it and connect a CopilotKit
+frontend:
+
+```bash
+OPENROUTER_API_KEY=... uv run kaboo-serve examples/18_hitl/config.yaml
+```
+
+## Resume protocol
+
+On pause, the run finishes with an `interrupt` outcome listing the pending
+interrupts (each with an `id`). The client resumes by sending, per interrupt,
+either `{"status": "resolved", "payload": ...}` or `{"status": "cancelled"}`
+(see [errors & rejection](errors-and-rejection.md)).
+
+## Proven by
+
+- `tests/e2e/test_cross_cutting.py::test_ask_user_interrupt_then_resume`
+  (plain / delegate / swarm / graph positions).
+- `tests/e2e/test_complex.py::test_parallel_interrupts_surface_together_and_resume`
+  (two gates in one step, distinct ids, both resumed).
+
+# docs/workflows/multi-turn-history.md
+
+# Multi-turn history
+
+A delegate sub-agent starts fresh every turn by default. Set `history: true` and
+its transcript is seeded from `state.kaboo_history` on the way in and captured
+back into the outgoing snapshot on the way out — so it can remember across turns.
+
+```
+assistant_team (delegate):
+  coordinator ─▶ memo (history: true)
+```
+
+## Config
+
+```yaml
+agents:
+  memo:
+    history: true
+    system_prompt: "Use the notes from previous turns when answering follow-ups."
+
+orchestrations:
+  assistant_team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - { agent: memo, description: "Records and recalls notes across turns" }
+
+entry: assistant_team
+```
+
+Full runnable project: [`examples/19_multiturn_history`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/19_multiturn_history).
+
+## The client owns storage
+
+kaboo enriches the data structure; it does **not** choose your datastore. The
+captured transcript comes back in the run's outgoing history snapshot, and the
+client feeds it back in `state.kaboo_history` on the next turn. For turnkey
+persistence (in-memory or Postgres `ThreadStore`s behind a CopilotKit runtime),
+use [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime).
+
+## Run
+
+```bash
+OPENROUTER_API_KEY=... uv run kaboo-serve examples/19_multiturn_history/config.yaml
+```
+
+## Proven by
+
+- `tests/e2e/test_cross_cutting.py::test_subagent_history_round_trips_and_accumulates`
+  (turn 2 is seeded from turn 1 and grows).
+- `tests/e2e/test_cross_cutting.py::test_history_disabled_sub_agent_does_not_persist`
+  (the stateless-by-default contrast).
+
+# docs/workflows/parallel.md
+
+# Parallel (top-level + nested)
+
+A graph fans out to parallel branches by giving one source node multiple outgoing
+edges. Because a graph node can itself be an orchestration, you get nested
+parallelism for free.
+
+```
+pipeline (graph):
+  strategist ─▶ [ writer , subteam ] ─▶ editor
+  subteam (graph): sub_lead ─▶ [ analyst_a , analyst_b ] ─▶ sub_end
+```
+
+## Config
+
+```yaml
+orchestrations:
+  subteam:
+    mode: graph
+    entry_name: sub_lead
+    chat_output: sub_end
+    edges:
+      - { from: sub_lead, to: analyst_a }
+      - { from: sub_lead, to: analyst_b }
+      - { from: analyst_a, to: sub_end }
+      - { from: analyst_b, to: sub_end }
+  pipeline:
+    mode: graph
+    entry_name: strategist
+    chat_output: editor
+    edges:
+      - { from: strategist, to: writer }
+      - { from: strategist, to: subteam }
+      - { from: writer, to: editor }
+      - { from: subteam, to: editor }
+
+entry: pipeline
+```
+
+Full runnable project: [`examples/17_parallel`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/17_parallel).
+
+## Run
+
+```bash
+uv run python examples/17_parallel/main.py
+```
+
+## What you'll observe
+
+- `writer` and `subteam` run in parallel after `strategist`.
+- Inside `subteam`, `analyst_a` and `analyst_b` run in parallel before `sub_end`.
+- `editor` only runs once both top-level branches finish, and owns the reply.
+
+## Proven by
+
+- `tests/e2e/test_complex.py::test_parallel_top_and_nested_batches_all_run`
+  (all leaves run; editor merges).
+- `tests/e2e/test_compositions.py::test_graph_parallel_batch_all_run`
+  (top-level parallel batch).
+
+# docs/workflows/swarm-and-graph.md
+
+# Swarm + graph combined
+
+A graph's parallel batch can mix orchestration **kinds**. Here one branch is an
+autonomous peer swarm and the other is a delegating coordinator — both run in
+parallel, then a merge node combines them.
+
+```
+pipeline (graph):
+  strategist ─▶ [ research_team (swarm) , audit_team (delegate) ] ─▶ editor
+```
+
+## Config
+
+```yaml
+orchestrations:
+  research_team:
+    mode: swarm
+    agents: [researcher_a, researcher_b]
+    entry_name: researcher_a
+  audit_team:
+    mode: delegate
+    entry_name: auditor
+    connections:
+      - { agent: checker, description: "Focused compliance/accuracy check" }
+  pipeline:
+    mode: graph
+    entry_name: strategist
+    chat_output: editor
+    edges:
+      - { from: strategist, to: research_team }
+      - { from: strategist, to: audit_team }
+      - { from: research_team, to: editor }
+      - { from: audit_team, to: editor }
+
+entry: pipeline
+```
+
+Full runnable project: [`examples/16_swarm_in_graph`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/16_swarm_in_graph).
+
+## Run
+
+```bash
+uv run python examples/16_swarm_in_graph/main.py
+```
+
+## What you'll observe
+
+- Swarm members (`researcher_a`, `researcher_b`) nest under the swarm node.
+- The delegate's `checker` nests under the audit sub-tree via its tool call.
+- Only the `editor` (the `chat_output`) carries the chat reply.
+
+## Proven by
+
+`tests/e2e/test_compositions.py::test_kitchen_sink_mixes_swarm_and_delegate_in_one_graph`.

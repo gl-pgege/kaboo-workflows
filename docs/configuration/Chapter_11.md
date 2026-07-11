@@ -60,7 +60,7 @@ For a given node, all outgoing edges are checked. Edges without conditions alway
 > - Make your reviewer agent's output deterministic by instructing it to start with keywords like "REVISE:" or "APPROVED:" — this makes condition functions simple and reliable.
 > - Always set `max_node_executions` when you have loops — it's your safety net against infinite cycles.
 > - `reset_on_revisit` is usually what you want for revision loops — the writer should get fresh context each time, not accumulate all previous attempts.
-> - Condition functions must be callable. If you accidentally point to a non-callable (like a string or class), strands-compose will raise a clear error.
+> - Condition functions must be callable. If you accidentally point to a non-callable (like a string or class), kaboo-workflows will raise a clear error.
 
 ---
 

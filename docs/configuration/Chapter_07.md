@@ -31,7 +31,7 @@ entry: assistant
 |----------|---------|------------------|
 | `file` | Local filesystem | *(included)* |
 | `s3` | Amazon S3 bucket | *(included, needs AWS creds)* |
-| `agentcore` | Bedrock AgentCore Memory | `pip install strands-compose[agentcore-memory]` |
+| `agentcore` | Bedrock AgentCore Memory | `pip install kaboo-workflows[agentcore-memory]` |
 
 ### File Provider
 
@@ -99,7 +99,7 @@ Setting `session_manager: ~` (YAML null) on an agent **explicitly opts it out** 
 
 ## Session ID Resolution
 
-When no `session_id` is provided, strands-compose generates a random UUID — meaning each run gets a fresh session. The resolution order is:
+When no `session_id` is provided, kaboo-workflows generates a random UUID — meaning each run gets a fresh session. The resolution order is:
 
 1. **Runtime override** — via `load_session(..., session_id="abc")`
 2. **`params.session_id`** — from YAML config
@@ -121,7 +121,7 @@ The class must be a subclass of `strands.session.SessionManager`. When `type` is
 
 ## Swarm Agents and Sessions
 
-**Important limitation**: agents that participate in a Swarm orchestration **cannot** have a session manager. This is a strands-agents limitation. If a global session manager is set and an agent is used in a swarm, strands-compose will raise a clear error:
+**Important limitation**: agents that participate in a Swarm orchestration **cannot** have a session manager. This is a strands-agents limitation. If a global session manager is set and an agent is used in a swarm, kaboo-workflows will raise a clear error:
 
 ```
 ConfigurationError: Agent 'drafter' is in swarm orchestration and cannot
@@ -134,7 +134,7 @@ The fix: add `session_manager: ~` to each swarm agent to opt out.
 > **Tips & Tricks**
 >
 > - For development, `file` provider with a fixed `session_id` is great — restart your script and the agent remembers your conversation.
-> - For server/API deployments, use `load_session()` with a per-request `session_id`. strands-compose
+> - For server/API deployments, use `load_session()` with a per-request `session_id`. kaboo-workflows
 >   computes a single `effective_session_id` from your value and threads it to every agent and
 >   orchestration, so all agents in one request share the same session folder. See
 >   [the multi-tenant pattern](#the-multi-tenant-server-pattern) below.
@@ -144,8 +144,8 @@ The fix: add `session_manager: ~` to each swarm agent to opt out.
 
 For web servers where each HTTP request needs its own session:
 
-```python
-from strands_compose import load_config, resolve_infra, load_session
+```python notest
+from kaboo_workflows import load_config, resolve_infra, load_session
 
 # Once at startup
 app_config = load_config("config.yaml")

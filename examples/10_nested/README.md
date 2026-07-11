@@ -6,7 +6,7 @@
 
 - **Referencing an orchestration inside another orchestration** — `content_team` (swarm)
   is used as a child node in `manager` (delegate)
-- **Topological sort** — strands-compose builds `content_team` before `manager` automatically
+- **Topological sort** — kaboo-workflows builds `content_team` before `manager` automatically
 - How agents, swarms, and graphs all become first-class nodes in a larger system
 
 ## How it works
@@ -39,20 +39,20 @@ orchestrations:
         description: "Quality assurance: checks the final content for accuracy and completeness."
 ```
 
-strands-compose topologically sorts the orchestrations: `content_team` is built first,
+kaboo-workflows topologically sorts the orchestrations: `content_team` is built first,
 then `manager` wraps it as a delegate tool.
 
 ## Good to know
 
 **Agents and orchestrations share a single namespace.** You can't have an agent and an
-orchestration with the same name — strands-compose raises an error.
+orchestration with the same name — kaboo-workflows raises an error.
 
 **Why YAML wins here.** The programmatic version would need ~60 lines to recreate what
 YAML expresses in 20. More importantly, the orchestration *structure* is immediately
 readable — you see the full system topology at a glance.
 
 **You can nest arbitrarily.** A graph can include a delegate which includes a swarm.
-As long as there are no cycles in the orchestration dependency graph, strands-compose
+As long as there are no cycles in the orchestration dependency graph, kaboo-workflows
 sorts and builds everything.
 
 ## Prerequisites

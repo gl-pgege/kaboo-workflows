@@ -6,7 +6,7 @@
 
 | Mode | Key | What it does |
 |---|---|---|
-| 1 | `server:` | Launch a local Python MCP server; strands-compose owns its full lifecycle |
+| 1 | `server:` | Launch a local Python MCP server; kaboo-workflows owns its full lifecycle |
 | 2 | `url:` | Connect to a real external MCP server over Streamable HTTP — no server setup |
 | 3 | `command:` *(commented)* | Spawn a local CLI tool that speaks MCP over stdio |
 
@@ -32,8 +32,8 @@ mcp_clients:
 ```
 
 `server.py` subclasses `MCPServer` and uses FastMCP's `@mcp.tool()` decorator.
-The `create()` factory is called by strands-compose with `params` from YAML.
-On `load()`, strands-compose starts the server, connects the client, and on exit
+The `create()` factory is called by kaboo-workflows with `params` from YAML.
+On `load()`, kaboo-workflows starts the server, connects the client, and on exit
 `mcp_lifecycle.stop()` tears everything down — you never manage threads or sockets.
 
 ### Mode 2 — real external HTTP server

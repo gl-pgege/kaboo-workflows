@@ -4,7 +4,7 @@
 
 ---
 
-The `tools` field on an agent is a list of spec strings that tell strands-compose where to find Python tool functions.
+The `tools` field on an agent is a list of spec strings that tell kaboo-workflows where to find Python tool functions.
 
 ```yaml
 agents:
@@ -53,7 +53,7 @@ The decorator registers the function's name, docstring (used as the tool descrip
 
 ## Single Function Lookups and Auto-Wrapping
 
-When you use the colon syntax to load a specific function (`./file.py:my_func`), strands-compose does something helpful: if the function isn't decorated with `@tool`, it auto-wraps it for you (and logs a warning). This is safe because the intent is unambiguous — you explicitly named the function:
+When you use the colon syntax to load a specific function (`./file.py:my_func`), kaboo-workflows does something helpful: if the function isn't decorated with `@tool`, it auto-wraps it for you (and logs a warning). This is safe because the intent is unambiguous — you explicitly named the function:
 
 ```yaml
 tools:

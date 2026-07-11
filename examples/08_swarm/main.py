@@ -1,7 +1,7 @@
 """08_swarm — Autonomous Handoffs.
 
 Peer agents hand work off to each other via handoff_to_agent.
-strands-compose builds the Swarm from config.yaml automatically.
+kaboo-workflows builds the Swarm from config.yaml automatically.
 
 Usage:
     uv run python examples/08_swarm/main.py

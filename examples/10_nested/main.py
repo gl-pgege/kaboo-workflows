@@ -1,7 +1,7 @@
 """10_nested — Nested Orchestration.
 
 A Swarm (content_team) embedded inside a Delegate (pipeline).
-strands-compose topological sort builds the inner swarm first, then wires
+kaboo-workflows topological sort builds the inner swarm first, then wires
 it as a delegate tool for the coordinator — all from config.yaml.
 
 Usage:

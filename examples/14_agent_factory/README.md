@@ -21,7 +21,7 @@ agents:
       personality: pirate
 ```
 
-strands-compose imports `create_agent` from `factory.py` and calls it with
+kaboo-workflows imports `create_agent` from `factory.py` and calls it with
 all the standard agent parameters **plus** everything in `agent_kwargs`.
 Your factory must return a `strands.Agent` instance.
 
@@ -30,7 +30,7 @@ Your factory must return a `strands.Agent` instance.
 > **⚠️ `agent_kwargs` is an expert feature.**
 >
 > `strands.Agent.__init__()` does **not** accept `**kwargs` — it has a fixed set
-> of explicit parameters.  strands-compose does **not** validate `agent_kwargs`
+> of explicit parameters.  kaboo-workflows does **not** validate `agent_kwargs`
 > at the schema level.  If invalid keys reach `Agent()`, you get a `TypeError`
 > at runtime.
 >
@@ -41,12 +41,12 @@ Your factory must return a `strands.Agent` instance.
 > See `factory.py` in this example for the recommended pattern.
 
 - You can also use `type:` with a module path: `my_package.factories:create_agent`.
-- If a factory returns something other than `strands.Agent`, strands-compose raises a `TypeError` immediately.
+- If a factory returns something other than `strands.Agent`, kaboo-workflows raises a `TypeError` immediately.
 
 ## Prerequisites
 
 ```bash
-pip install strands-compose
+pip install kaboo-workflows
 ```
 
 ## Run

@@ -10,7 +10,7 @@
 
 ## How it works
 
-Add a `session_manager` block to your config. With `provider: file`, strands-compose saves
+Add a `session_manager` block to your config. With `provider: file`, kaboo-workflows saves
 every turn to `.sessions/` on disk and restores it on the next `load()`.
 
 ```yaml

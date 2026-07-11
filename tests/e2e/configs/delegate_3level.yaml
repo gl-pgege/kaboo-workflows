@@ -1,0 +1,58 @@
+# Delegate nested 3 levels deep:
+#   top(coordinator) ─▶ research_team(lead) ─▶ field_team(field_researcher ─▶ verifier)
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: research_team, input: "research the topic"}
+        final_text: "Coordinator wrapped the chain."
+  lead:
+    stream: {title: "Team lead"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: field_team, input: "collect field data"}
+        final_text: "Lead assembled the findings."
+  field_researcher:
+    stream: {title: "Field research"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: verifier, input: "double-check the data"}
+        final_text: "Field research done."
+  verifier:
+    stream: {title: "Verifying"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        final_text: "Data verified."
+
+orchestrations:
+  field_team:
+    mode: delegate
+    entry_name: field_researcher
+    connections:
+      - {agent: verifier, description: "Double-check the collected data"}
+  research_team:
+    mode: delegate
+    entry_name: lead
+    connections:
+      - {agent: field_team, description: "Collect field data"}
+  top:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: research_team, description: "Research and verify"}
+
+entry: top

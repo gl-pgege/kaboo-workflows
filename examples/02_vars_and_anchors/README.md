@@ -12,11 +12,11 @@
 
 ## How it works
 
-The `vars:` block declares variables with fallback defaults. strands-compose resolves them
+The `vars:` block declares variables with fallback defaults. kaboo-workflows resolves them
 from environment variables first, then falls back to the inline default.
 
 Anchors are plain YAML — you mark a block with `&anchor_name` and reference it with
-`*anchor_name` anywhere in the same file. strands-compose doesn't do anything special here;
+`*anchor_name` anywhere in the same file. kaboo-workflows doesn't do anything special here;
 YAML handles the expansion.
 
 ```yaml
@@ -54,7 +54,7 @@ integer or boolean, use an anchor instead.
 another. For multi-file setups, see example 11.
 
 **`x-` prefix is a convention**, not a requirement. Keys starting with `x-` are ignored by
-strands-compose validation, so they're a safe place to park anchor definitions.
+kaboo-workflows validation, so they're a safe place to park anchor definitions.
 
 ## Prerequisites
 

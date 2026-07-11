@@ -1,7 +1,7 @@
 """09_graph — Graph Pipeline.
 
 A deterministic DAG: content_strategist -> content_writer -> copy_editor.
-strands-compose builds the graph from edges defined in config.yaml.
+kaboo-workflows builds the graph from edges defined in config.yaml.
 
 Usage:
     uv run python examples/09_graph/main.py

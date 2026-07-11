@@ -1,5 +1,5 @@
 name: Feature Request
-description: Suggest a new feature or enhancement for strands-compose
+description: Suggest a new feature or enhancement for kaboo-workflows
 title: "[FEATURE] "
 labels: ["enhancement", "triage"]
 assignees: []
@@ -7,14 +7,14 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for suggesting a new feature for strands-compose!
+        Thanks for suggesting a new feature for kaboo-workflows!
 
   - type: textarea
     id: problem-statement
     attributes:
       label: Problem Statement
       description: Describe the problem you're trying to solve. What is currently difficult or impossible to do?
-      placeholder: I would like strands-compose to...
+      placeholder: I would like kaboo-workflows to...
     validations:
       required: true
 

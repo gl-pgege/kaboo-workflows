@@ -1,7 +1,7 @@
 """Text analysis tools for the 03_tools example.
 
 Functions must be decorated with ``@tool`` from strands so that
-strands-compose can discover and register them with the agent.
+kaboo-workflows can discover and register them with the agent.
 """
 
 from strands.tools.decorator import tool

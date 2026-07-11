@@ -1,9 +1,9 @@
-"""Custom agent factory for strands-compose.
+"""Custom agent factory for kaboo-workflows.
 
 A factory is any callable that receives the standard agent parameters
 plus whatever you put in ``agent_kwargs`` and returns a ``strands.Agent``.
 
-strands-compose calls it like::
+kaboo-workflows calls it like::
 
     factory(
         name=...,

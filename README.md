@@ -4,8 +4,15 @@
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-gl--pgege.github.io-blue.svg)](https://gl-pgege.github.io/kaboo-workflows/)
 
-> Forked from [strands-compose](https://github.com/strands-compose/sdk-python). Extended with native AG-UI protocol support for CopilotKit frontends and AgentCore deployment.
+**[Documentation](https://gl-pgege.github.io/kaboo-workflows/)** ·
+**[Configuration guide](docs/configuration/)** ·
+**[Workflow guides](docs/workflows/)** ·
+**[Examples](examples/)** ·
+**[Live demo](https://github.com/gl-pgege/kaboo-workflows-demo)**
+
+> Extended with native AG-UI protocol support for CopilotKit frontends and AgentCore deployment. Now maintained at [gl-pgege/kaboo-workflows](https://github.com/gl-pgege/kaboo-workflows) (originally forked from strands-compose — see [Attribution](#attribution)).
 
 ---
 
@@ -49,7 +56,7 @@ entry: assistant
 
 ### 3. Create a tool
 
-```python
+```python notest
 # tools/calculator.py
 from strands.tools.decorator import tool
 
@@ -219,7 +226,7 @@ entry: pipeline
 
 ## Using as a Library
 
-```python
+```python notest
 from kaboo_workflows import load
 from kaboo_workflows.adapters import create_agui_app
 
@@ -230,6 +237,48 @@ result = resolved.entry("Hello!")
 # Option 2: Create a FastAPI app for custom middleware
 app = create_agui_app("config.yaml")
 ```
+
+`create_agui_app` lives in `kaboo_workflows.adapters` (it is intentionally not
+re-exported at the top level, to keep the top-level surface small).
+
+---
+
+## Public API
+
+The top-level `kaboo_workflows` package exports a curated surface; the full,
+auto-generated reference for every public module lives on the
+[documentation site](https://gl-pgege.github.io/kaboo-workflows/api-reference/).
+
+```python notest
+from kaboo_workflows import (
+    load, load_config, load_session, resolve_infra,   # config pipeline
+    make_event_queue, EventQueue,                       # streaming
+    StreamEvent, EventType,                             # event protocol
+    AppConfig, ConfigInput, ResolvedConfig, ResolvedInfra,
+    OrchestrationBuilder,
+    node_as_tool, node_as_async_tool, serialize_multiagent_result,
+    create_mcp_client, create_mcp_server, MCPLifecycle,
+    EventPublisher, MaxToolCallsGuard, StopGuard, ToolNameSanitizer,
+    AnsiRenderer, cli_errors,
+)
+```
+
+Public subpackages (import directly for the rest of the surface):
+
+| Import path | Highlights |
+|-------------|-----------|
+| `kaboo_workflows.adapters` | `create_agui_app` — the primary serving entrypoint |
+| `kaboo_workflows.config` | `load`, `load_config`, `load_session`, schema models (`AgentDef`, `AppConfig`, …) |
+| `kaboo_workflows.hooks` | `EventPublisher`, `HistoryHook`, `InterruptHook`, guards, `ToolNameSanitizer` |
+| `kaboo_workflows.mcp` | `MCPClient`, `MCPServer`, `MCPLifecycle`, transports |
+| `kaboo_workflows.tools` | `ask_user`, tool loaders, `node_as_tool` |
+| `kaboo_workflows.converters` | `StreamConverter`, `OpenAIStreamConverter`, `RawStreamConverter` |
+| `kaboo_workflows.renderers` | `AnsiRenderer` |
+| `kaboo_workflows.types` | `EventType`, `StreamEvent`, `SessionManifest` family |
+
+A completeness test (`tests/contract/test_public_api.py`) guarantees every public
+symbol has a docstring and an autodoc page, so this surface can never drift out of
+sync with the docs.
 
 ---
 
@@ -245,6 +294,15 @@ OPENROUTER_API_KEY=... uv run python examples/step1/main.py
 
 See [examples/](examples/) for the full list.
 
+### Live demo
+
+[kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) is a
+runnable, end-to-end reference: this library serves a YAML multi-agent pipeline as
+AG-UI SSE, behind a CopilotKit runtime
+([kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime)) and a React UI
+([kaboo-react](https://github.com/gl-pgege/kaboo-react)). See
+[the kaboo stack](https://gl-pgege.github.io/kaboo-docs/) for the whole picture.
+
 ---
 
 ## Developer Setup
@@ -255,7 +313,7 @@ cd kaboo-workflows
 uv sync --all-extras
 
 uv run just check        # lint + type check + security scan
-uv run just test         # pytest with coverage (221 tests)
+uv run just test         # pytest with coverage (>=70% gate)
 uv run just format       # auto-format
 ```
 
@@ -263,4 +321,4 @@ uv run just format       # auto-format
 
 ## Attribution
 
-Forked from [strands-compose/sdk-python](https://github.com/strands-compose/sdk-python) (Apache 2.0). Original work by [Michal Galuszka](https://github.com/strands-compose).
+Originally forked from [strands-compose/sdk-python](https://github.com/strands-compose/sdk-python) (Apache 2.0), original work by [Michal Galuszka](https://github.com/strands-compose). Now maintained as [kaboo-workflows](https://github.com/gl-pgege/kaboo-workflows).

@@ -19,7 +19,7 @@ agents:
 
 ## Writing a Factory
 
-strands-compose calls your factory with all standard agent parameters plus `agent_kwargs`:
+kaboo-workflows calls your factory with all standard agent parameters plus `agent_kwargs`:
 
 ```python
 # factory.py
@@ -89,7 +89,7 @@ orchestrations:
 > **Tips & Tricks**
 >
 > - Agent factories are great for custom `Agent` subclasses — your factory can return `MySpecialAgent(...)` which extends strands' `Agent`.
-> - The factory must return a `strands.Agent` instance — strands-compose checks this and raises `TypeError` if it doesn't.
+> - The factory must return a `strands.Agent` instance — kaboo-workflows checks this and raises `TypeError` if it doesn't.
 > - Use factory paths in the same format as hooks and tools: `./local/file.py:function_name` or `my_package.factory:create_agent`.
 
 ---

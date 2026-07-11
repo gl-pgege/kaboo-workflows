@@ -32,7 +32,7 @@ orchestrations:
         to: copy_editor
 ```
 
-That's it — three agents, two edges, one pipeline. strands-compose builds the DAG
+That's it — three agents, two edges, one pipeline. kaboo-workflows builds the DAG
 and runs each node in sequence.
 
 ## Good to know

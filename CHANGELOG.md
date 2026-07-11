@@ -85,7 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.1.0 — 2026-03-23
 
-Initial public release of **strands-compose** — declarative multi-agent orchestration for [strands-agents](https://github.com/strands-agents/sdk-python).
+Initial public release of **kaboo-workflows** — declarative multi-agent orchestration for [strands-agents](https://github.com/strands-agents/sdk-python).
 
 ### Added
 

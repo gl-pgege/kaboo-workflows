@@ -1,0 +1,72 @@
+# 15_deep_nesting — Delegation, 3 levels deep
+#
+#   research_pipeline (coordinator)
+#     └─▶ research_team (lead)
+#           └─▶ field_team (field_researcher ─▶ verifier)
+#
+# Each level is a delegate orchestration used as a connection of the level above,
+# so a single top-level entry drives a 3-deep chain. kaboo-workflows topologically
+# sorts the orchestrations: field_team is built before research_team before the top.
+#
+# Run:
+#   uv run python examples/15_deep_nesting/main.py
+
+models:
+  default:
+    provider: bedrock
+    model_id: openai.gpt-oss-20b-1:0
+
+x-hooks: &hooks
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
+    params: { max_calls: 20 }
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
+
+agents:
+  coordinator:
+    model: default
+    hooks: *hooks
+    system_prompt: |
+      You coordinate a research effort. Delegate the whole task to research_team,
+      then summarize what came back for the user. You do not research yourself.
+
+  lead:
+    model: default
+    hooks: *hooks
+    system_prompt: |
+      You lead a research team. Delegate field work to field_team, then assemble
+      their findings into a short briefing for the coordinator.
+
+  field_researcher:
+    model: default
+    hooks: *hooks
+    system_prompt: |
+      You gather field data on the requested topic. When you have a draft, ask
+      verifier to double-check it, then return the verified result.
+
+  verifier:
+    model: default
+    hooks: *hooks
+    system_prompt: |
+      You verify claims for accuracy. Confirm or correct the data you receive and
+      return a concise verified summary.
+
+orchestrations:
+  field_team:
+    mode: delegate
+    entry_name: field_researcher
+    connections:
+      - { agent: verifier, description: "Double-check the collected data" }
+
+  research_team:
+    mode: delegate
+    entry_name: lead
+    connections:
+      - { agent: field_team, description: "Collect and verify field data" }
+
+  research_pipeline:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - { agent: research_team, description: "Research the topic end to end" }
+
+entry: research_pipeline

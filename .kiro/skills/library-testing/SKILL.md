@@ -1,6 +1,6 @@
 ---
 name: library-testing
-description: Write, repair, and reason about tests for the strands-compose library in tests/. Use whenever adding, fixing, or reviewing tests, or deciding what to test for a library change. Defines what is worth testing, what is not, and how. Library tests only; not examples or docs prose.
+description: Write, repair, and reason about tests for the kaboo-workflows library in tests/. Use whenever adding, fixing, or reviewing tests, or deciding what to test for a library change. Defines what is worth testing, what is not, and how. Library tests only; not examples or docs prose.
 metadata:
   area: testing
   stack: pytest,pytest-asyncio,hypothesis,strands-agents,pydantic-v2
@@ -8,7 +8,7 @@ metadata:
 
 # Library Testing
 
-The testing doctrine for the **strands-compose library** (`src/strands_compose/`).
+The testing doctrine for the **kaboo-workflows library** (`src/kaboo_workflows/`).
 It defines **what is worth testing, what is not, and how**, so the suite stays
 small, fast, trustworthy, and cheap to live with. It describes principles and
 shapes, not a file list — resolvers, providers, and orchestration modes come and

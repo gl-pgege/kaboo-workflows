@@ -30,9 +30,9 @@ models:
 | Provider | Package Required | Example `model_id` |
 |----------|-----------------|---------------------|
 | `bedrock` | *(included)* | `us.anthropic.claude-sonnet-4-6-v1:0` |
-| `openai` | `pip install strands-compose[openai]` | `gpt-4o` |
-| `ollama` | `pip install strands-compose[ollama]` | `llama3.2` |
-| `gemini` | `pip install strands-compose[gemini]` | `gemini-2.0-flash` |
+| `openai` | `pip install kaboo-workflows[openai]` | `gpt-4o` |
+| `ollama` | `pip install kaboo-workflows[ollama]` | `llama3.2` |
+| `gemini` | `pip install kaboo-workflows[gemini]` | `gemini-2.0-flash` |
 
 ## How Agents Reference Models
 

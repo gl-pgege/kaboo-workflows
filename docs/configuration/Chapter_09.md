@@ -4,12 +4,12 @@
 
 ---
 
-The Model Context Protocol (MCP) lets agents connect to external tool servers. strands-compose supports three connection modes and manages the full server lifecycle.
+The Model Context Protocol (MCP) lets agents connect to external tool servers. kaboo-workflows supports three connection modes and manages the full server lifecycle.
 
 ## Architecture
 
 ```
-mcp_servers:  → Define managed local servers (strands-compose starts/stops them)
+mcp_servers:  → Define managed local servers (kaboo-workflows starts/stops them)
 mcp_clients:  → Define connections to servers (local, remote, or subprocess)
 agents:
   my_agent:
@@ -18,7 +18,7 @@ agents:
 
 ## Mode 1: Managed Local Server
 
-You define a server, strands-compose starts it in a background thread before creating agents, and stops it on shutdown:
+You define a server, kaboo-workflows starts it in a background thread before creating agents, and stops it on shutdown:
 
 ```yaml
 mcp_servers:
@@ -43,10 +43,10 @@ entry: assistant
 
 The `type` field points to a factory function that returns an `MCPServer` instance:
 
-```python
+```python notest
 # server.py
 from mcp.server.fastmcp import FastMCP
-from strands_compose.mcp import MCPServer
+from kaboo_workflows.mcp import MCPServer
 
 class CalculatorServer(MCPServer):
     def _register_tools(self, mcp: FastMCP) -> None:
@@ -133,7 +133,7 @@ Available options vary by transport:
 
 ## Lifecycle Management
 
-strands-compose handles the startup ordering automatically:
+kaboo-workflows handles the startup ordering automatically:
 
 1. Start all MCP **servers** (in parallel)
 2. Wait for all servers to be **ready** (TCP port check with configurable timeout)
@@ -146,7 +146,7 @@ On shutdown (via context manager or `.stop()`):
 
 Always use the MCP lifecycle context manager:
 
-```python
+```python notest
 resolved = load("config.yaml")
 
 with resolved.mcp_lifecycle:
@@ -155,7 +155,7 @@ with resolved.mcp_lifecycle:
 
 Or for async contexts:
 
-```python
+```python notest
 async with resolved.mcp_lifecycle:
     result = await resolved.entry.invoke_async("Hello!")
 ```

@@ -1,0 +1,80 @@
+# 16_swarm_in_graph — Swarm AND delegate inside one graph
+#
+#   pipeline (graph):
+#     strategist ─▶ [ research_team (swarm) , audit_team (delegate) ] ─▶ editor
+#
+# A graph's parallel batch can mix orchestration KINDS: one branch is an
+# autonomous peer swarm, the other is a coordinator that delegates to a checker.
+# Both run in parallel, then the editor merges their outputs.
+#
+# Run:
+#   uv run python examples/16_swarm_in_graph/main.py
+
+models:
+  default:
+    provider: bedrock
+    model_id: openai.gpt-oss-20b-1:0
+
+x-hooks: &hooks
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
+    params: { max_calls: 20 }
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
+
+agents:
+  strategist:
+    model: default
+    hooks: *hooks
+    system_prompt: "Turn the request into a short brief for the research and audit teams."
+
+  researcher_a:
+    model: default
+    hooks: *hooks
+    description: "Gathers primary facts, then hands off to researcher_b."
+    system_prompt: "Gather primary facts. Hand off to researcher_b to cross-check."
+
+  researcher_b:
+    model: default
+    hooks: *hooks
+    description: "Cross-checks and finalizes the research."
+    system_prompt: "Cross-check researcher_a's facts and produce the final research note."
+
+  auditor:
+    model: default
+    hooks: *hooks
+    system_prompt: "Audit the brief for risks. Delegate specific checks to checker, then summarize."
+
+  checker:
+    model: default
+    hooks: *hooks
+    description: "Runs a focused compliance/accuracy check."
+    system_prompt: "Perform the requested check and return a short pass/fail with reasons."
+
+  editor:
+    model: default
+    hooks: *hooks
+    system_prompt: "Merge the research note and the audit summary into one final report."
+
+orchestrations:
+  research_team:
+    mode: swarm
+    agents: [researcher_a, researcher_b]
+    entry_name: researcher_a
+    max_handoffs: 8
+
+  audit_team:
+    mode: delegate
+    entry_name: auditor
+    connections:
+      - { agent: checker, description: "Focused compliance/accuracy check" }
+
+  pipeline:
+    mode: graph
+    entry_name: strategist
+    chat_output: editor
+    edges:
+      - { from: strategist, to: research_team }
+      - { from: strategist, to: audit_team }
+      - { from: research_team, to: editor }
+      - { from: audit_team, to: editor }
+
+entry: pipeline

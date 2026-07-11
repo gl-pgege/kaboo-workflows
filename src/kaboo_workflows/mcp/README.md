@@ -1,6 +1,6 @@
 # MCP Module — Developer Guide
 
-This module manages the full lifecycle of [Model Context Protocol](https://modelcontextprotocol.io/) servers and clients within strands-compose.  It bridges the gap between the low-level `mcp` Python SDK (which provides `FastMCP` and transport primitives) and the strands agent framework (which consumes `MCPClient` as a tool provider).
+This module manages the full lifecycle of [Model Context Protocol](https://modelcontextprotocol.io/) servers and clients within kaboo-workflows.  It bridges the gap between the low-level `mcp` Python SDK (which provides `FastMCP` and transport primitives) and the strands agent framework (which consumes `MCPClient` as a tool provider).
 
 The compose config layer resolves YAML declarations into the objects defined here; this module knows nothing about YAML — it only deals with constructed Python objects and their lifecycle.
 

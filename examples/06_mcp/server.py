@@ -2,7 +2,7 @@
 
 Subclass MCPServer and implement _register_tools(mcp) to expose
 any Python functions as MCP tools. The create() factory at the
-bottom is called by strands-compose with the params from YAML.
+bottom is called by kaboo-workflows with the params from YAML.
 """
 
 from __future__ import annotations
@@ -63,10 +63,10 @@ class CalculatorServer(MCPServer):
 
 
 def create(name: str = "calculator", port: int = 9001) -> CalculatorServer:
-    """Factory called by strands-compose with params from YAML.
+    """Factory called by kaboo-workflows with params from YAML.
 
     Args:
-        name: Server name assigned by strands-compose (from the YAML key).
+        name: Server name assigned by kaboo-workflows (from the YAML key).
         port: The TCP port the MCP server will listen on.
 
     Returns:

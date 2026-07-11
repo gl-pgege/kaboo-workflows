@@ -1,6 +1,6 @@
 # Library Project Map
 
-Navigation aid for `src/strands_compose/`. Exact file names drift over time —
+Navigation aid for `src/kaboo_workflows/`. Exact file names drift over time —
 trust the **roles** and the "read first" pointers more than any single name.
 When in doubt, follow the pipeline: a config concept has a `*Def` in
 `schema.py`, a `resolve_*` in `resolvers/`, and (if it builds a strands object)
@@ -9,7 +9,7 @@ a factory in a subsystem package.
 ## Layout
 
 ```
-src/strands_compose/
+src/kaboo_workflows/
 ├── __init__.py          # PUBLIC API — load, load_config, resolve_infra, load_session,
 │                        #   ResolvedConfig, ResolvedInfra, EventQueue, StreamEvent, hooks, …
 ├── models.py            # model provider factory: create_model() → Bedrock/Ollama/OpenAI/Gemini
@@ -18,7 +18,7 @@ src/strands_compose/
 ├── utils.py             # load_object() — THE import resolver · load_module_from_file · cli_errors
 ├── wire.py              # EventQueue + make_event_queue — streaming plumbing (SESSION_START/END)
 ├── manifest.py          # build_manifest(): live objects → SessionManifest (pure introspection)
-├── cli.py               # `strands-compose check` / `load` sub-commands
+├── cli.py               # `kaboo-workflows check` / `load` sub-commands
 ├── config/
 │   ├── schema.py        # PURE Pydantic *Def models · AppConfig · COLLECTION_KEYS · JOINT_NAMESPACES
 │   ├── interpolation.py # ${VAR:-default} interpolation + x-* anchor stripping (two-pass vars)
@@ -120,5 +120,5 @@ for the chapter-by-chapter reference.
 - **Tooling:** `ruff` (lint + format), `ty` (type check), `bandit` (security),
   `pytest` + `pytest-asyncio` + coverage — orchestrated through `just`, run via
   `uv run just …`.
-- **Packaging:** hatchling builds `src/strands_compose`; console script
-  `strands-compose = strands_compose.cli:main`.
+- **Packaging:** hatchling builds `src/kaboo_workflows`; console script
+  `kaboo-workflows = kaboo_workflows.cli:main`.

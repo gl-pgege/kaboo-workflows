@@ -1,0 +1,65 @@
+# kaboo-workflows
+
+> YAML-driven multi-agent orchestration for strands-agents with native AG-UI / CopilotKit support. Describe models, agents, tools, hooks, MCP servers, and nested delegate/swarm/graph orchestrations in YAML; load() returns live, fully wired strands objects and kaboo-serve serves them as AG-UI Server-Sent Events.
+
+## Documentation
+
+- [Documentation site](https://gl-pgege.github.io/kaboo-workflows/)
+- [README](https://github.com/gl-pgege/kaboo-workflows/blob/main/README.md)
+- [API reference](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api-reference.md)
+- [kaboo-workflows](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/index.md)
+
+## Configuration
+
+- [Chapter 1: The Basics — Your First Config](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_01.md)
+- [Chapter 2: Models — Choosing Your LLM](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_02.md)
+- [Chapter 3: Variables — Environment-Driven Config](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_03.md)
+- [Chapter 4: YAML Anchors — DRY Config Blocks](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_04.md)
+- [Chapter 5: Tools — Giving Agents Superpowers](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_05.md)
+- [Chapter 6: Hooks — Middleware for Agents](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_06.md)
+- [Chapter 7: Session Persistence — Memory That Survives Restarts](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_07.md)
+- [Chapter 8: Conversation Managers — Controlling Context Windows](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_08.md)
+- [Chapter 9: MCP — External Tool Servers](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_09.md)
+- [Chapter 10: Orchestrations — Multi-Agent Systems](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_10.md)
+- [Chapter 11: Graph Conditions — Dynamic Routing](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_11.md)
+- [Chapter 12: Nested Orchestrations — Composing Systems](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_12.md)
+- [Chapter 13: Multi-File Configs — Splitting and Merging](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_13.md)
+- [Chapter 14: Agent Factories — Custom Agent Construction](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_14.md)
+- [Chapter 15: Event Streaming — Real-Time Observability](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_15.md)
+- [Chapter 16: Name Sanitization — How Names Are Handled](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_16.md)
+- [Chapter 17: The Loading Pipeline — What Happens Under the Hood](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_17.md)
+- [Chapter 18: Full Reference — Every Field at a Glance](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_18.md)
+- [Quick Recipes](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Quick_Recipes.md)
+- [YAML Configuration Guide](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/README.md)
+
+## Workflows
+
+- [Deep nested delegation (3+ levels)](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/workflows/deep-nesting.md)
+- [Errors & rejection](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/workflows/errors-and-rejection.md)
+- [Human-in-the-loop](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/workflows/human-in-the-loop.md)
+- [Multi-turn history](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/workflows/multi-turn-history.md)
+- [Parallel (top-level + nested)](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/workflows/parallel.md)
+- [Swarm + graph combined](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/workflows/swarm-and-graph.md)
+
+## API reference
+
+- [kaboo_workflows.adapters](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/adapters.md)
+- [kaboo_workflows.config](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/config.md)
+- [kaboo_workflows.converters](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/converters.md)
+- [kaboo_workflows.hooks](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/hooks.md)
+- [kaboo_workflows](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/kaboo_workflows.md)
+- [kaboo_workflows.mcp](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/mcp.md)
+- [kaboo_workflows.renderers](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/renderers.md)
+- [kaboo_workflows.tools](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/tools.md)
+- [kaboo_workflows.types](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/types.md)
+
+## Examples
+
+- [All examples](https://github.com/gl-pgege/kaboo-workflows/blob/main/examples)
+
+## The kaboo stack
+
+- [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) — CopilotKit runtime persistence
+- [kaboo-react](https://github.com/gl-pgege/kaboo-react) — agent-activity React UI
+- [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) — runnable end-to-end reference
+- [The kaboo stack](https://gl-pgege.github.io/kaboo-docs/) — umbrella landing

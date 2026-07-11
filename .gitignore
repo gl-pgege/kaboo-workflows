@@ -58,3 +58,6 @@ htmlcov/
 # MacOS and Windows system files
 .DS_Store
 Thumbs.db
+
+# MkDocs site build output
+/site/

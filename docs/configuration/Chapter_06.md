@@ -11,10 +11,10 @@ agents:
   assistant:
     model: default
     hooks:
-      - type: strands_compose.hooks:MaxToolCallsGuard
+      - type: kaboo_workflows.hooks:MaxToolCallsGuard
         params:
           max_calls: 10
-      - type: strands_compose.hooks:ToolNameSanitizer
+      - type: kaboo_workflows.hooks:ToolNameSanitizer
       - type: ./my_hooks.py:AuditLogger
         params:
           log_file: ./audit.log
@@ -29,7 +29,7 @@ Hooks can be specified in two ways:
 
 ```yaml
 hooks:
-  - type: strands_compose.hooks:MaxToolCallsGuard
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
     params:
       max_calls: 10
 ```
@@ -38,7 +38,7 @@ hooks:
 
 ```yaml
 hooks:
-  - strands_compose.hooks:ToolNameSanitizer
+  - kaboo_workflows.hooks:ToolNameSanitizer
 ```
 
 Both the `type` field and the string shorthand accept:
@@ -47,7 +47,7 @@ Both the `type` field and the string shorthand accept:
 
 ## Built-in Hooks
 
-strands-compose ships with three hooks:
+kaboo-workflows ships with three hooks:
 
 ### `MaxToolCallsGuard`
 
@@ -58,7 +58,7 @@ Limits how many tool calls an agent can make in a single invocation. Two-phase b
 
 ```yaml
 hooks:
-  - type: strands_compose.hooks:MaxToolCallsGuard
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
     params:
       max_calls: 15
 ```
@@ -69,7 +69,7 @@ Some models inject extra tokens into tool names (e.g., `search<|python_tag|>` in
 
 ```yaml
 hooks:
-  - type: strands_compose.hooks:ToolNameSanitizer
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
 ```
 
 No params needed — just add it.
@@ -81,7 +81,7 @@ A cooperative stop mechanism — set a flag on the guard and the agent stops cle
 `StopGuard` needs a Python callable for `stop_check`, so it's usually wired from Python rather than pure YAML:
 
 ```python
-from strands_compose.hooks import stop_guard_from_event
+from kaboo_workflows.hooks import stop_guard_from_event
 
 guard, stop = stop_guard_from_event()
 
@@ -161,7 +161,7 @@ orchestrations:
     mode: graph
     entry_name: writer
     hooks:
-      - type: strands_compose.hooks:MaxToolCallsGuard
+      - type: kaboo_workflows.hooks:MaxToolCallsGuard
         params: { max_calls: 30 }
     edges:
       - from: writer

@@ -1,8 +1,8 @@
 # YAML Configuration Guide
 
-**Everything you need to know about writing strands-compose YAML configs — from zero to production.**
+**Everything you need to know about writing kaboo-workflows YAML configs — from zero to production.**
 
-strands-compose lets you describe entire multi-agent systems in YAML and get back live, fully wired strands objects. This guide walks you through every configuration option, from the simplest one-agent setup to nested multi-orchestration systems with MCP servers, hooks, session persistence, conditional graph pipelines, and multi-file configs.
+kaboo-workflows lets you describe entire multi-agent systems in YAML and get back live, fully wired strands objects. This guide walks you through every configuration option, from the simplest one-agent setup to nested multi-orchestration systems with MCP servers, hooks, session persistence, conditional graph pipelines, and multi-file configs.
 
 No prior YAML expertise required. We start simple and build up.
 
@@ -33,6 +33,6 @@ No prior YAML expertise required. We start simple and build up.
 
 ---
 
-That covers everything strands-compose YAML has to offer. When in doubt, check the [examples](../../examples/) — each one is a self-contained demo of the concepts above. And remember: after `load()`, what you get back are plain strands objects. No wrappers, no subclasses. Just the real deal, fully wired and ready to go.
+That covers everything kaboo-workflows YAML has to offer. When in doubt, check the [examples](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples) — each one is a self-contained demo of the concepts above. And remember: after `load()`, what you get back are plain strands objects. No wrappers, no subclasses. Just the real deal, fully wired and ready to go.
 
 Happy composing! 🎼

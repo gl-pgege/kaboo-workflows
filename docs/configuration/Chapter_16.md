@@ -14,7 +14,7 @@ Names in config (agent names, model names, MCP client/server names, orchestratio
 
 ## Automatic Sanitization
 
-If you use characters outside the valid set (spaces, dots, special characters), strands-compose sanitizes them:
+If you use characters outside the valid set (spaces, dots, special characters), kaboo-workflows sanitizes them:
 
 - Invalid characters → underscores
 - Consecutive underscores → single underscore

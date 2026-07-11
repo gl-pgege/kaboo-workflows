@@ -4,7 +4,7 @@
 
 ---
 
-A strands-compose config is a YAML file with a handful of top-level sections. The only truly **required** fields are `agents` (at least one) and `entry` (which agent or orchestration to call).
+A kaboo-workflows config is a YAML file with a handful of top-level sections. The only truly **required** fields are `agents` (at least one) and `entry` (which agent or orchestration to call).
 
 Here is the absolute minimum:
 
@@ -18,8 +18,8 @@ entry: assistant
 
 That's it. One agent, one entry point. Load it in Python:
 
-```python
-from strands_compose import load
+```python notest
+from kaboo_workflows import load
 
 resolved = load("config.yaml")
 result = resolved.entry("Hello!")
@@ -43,7 +43,7 @@ Here is the full list of top-level keys you can put in a config file:
 | `mcp_clients` | dict | No | Named MCP client connections. |
 | `session_manager` | dict | No | Global session manager (inherited by all agents). |
 | `entry` | string | **Yes** | Name of the agent or orchestration to use as the entry point. |
-| `log_level` | string | No | Logging level for strands_compose. Default: `"WARNING"`. |
+| `log_level` | string | No | Logging level for kaboo_workflows. Default: `"WARNING"`. |
 
 Sections marked as **dict** are name-keyed dictionaries — you pick the name, and it becomes the identifier:
 

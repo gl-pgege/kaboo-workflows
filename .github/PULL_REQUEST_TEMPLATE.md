@@ -27,8 +27,11 @@ How have you tested the change?
 
 - [ ] I ran `uv run just check` (lint + type check)
 - [ ] I ran `uv run just test` for overall testing
+- [ ] I ran `uv run just test-docs` and `uv run mkdocs build --strict`
 - [ ] I added or updated tests that prove my fix is effective or my feature works
+- [ ] New public symbols have a docstring + an autodoc page (`docs/api/`)
 - [ ] I verified existing examples in `examples/` still work
+- [ ] I regenerated `llms.txt` / `llms-full.txt` if docs changed (`uv run just docs-llms`)
 
 ## Checklist
 

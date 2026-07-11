@@ -20,7 +20,7 @@ implementation details.
 
 ## How it works
 
-Explain the outer interface: which strands-compose functions or config keys
+Explain the outer interface: which kaboo-workflows functions or config keys
 are used and what they produce. Keep it high-level — show a snippet or a
 small diagram if helpful, but don't go deep into source code.
 

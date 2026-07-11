@@ -1,7 +1,7 @@
 """07_delegate — Multi-Agent Delegation.
 
 A coordinator agent calls researcher and writer as tools.
-strands-compose wires the connections from config.yaml automatically.
+kaboo-workflows wires the connections from config.yaml automatically.
 
 Usage:
     uv run python examples/07_delegate/main.py

@@ -6,13 +6,13 @@
 
 - `wire_event_queue()` — wire all agents and orchestrators to a single async queue that emits `StreamEvent`s
 - `AnsiRenderer` — built-in terminal renderer that prints events with colours as they arrive
-- How strands-compose turns agent lifecycle events into a consumable stream — the same
+- How kaboo-workflows turns agent lifecycle events into a consumable stream — the same
   mechanism that powers SSE endpoints, WebSocket feeds, and audit logs
 
 ## How it works
 
 ```python
-from strands_compose import load, AnsiRenderer
+from kaboo_workflows import load, AnsiRenderer
 
 resolved = load("config.yaml")
 queue = resolved.wire_event_queue()

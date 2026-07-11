@@ -1,0 +1,94 @@
+site_name: kaboo-workflows
+site_description: YAML-driven multi-agent orchestration with AG-UI and CopilotKit support.
+site_url: https://gl-pgege.github.io/kaboo-workflows/
+repo_url: https://github.com/gl-pgege/kaboo-workflows
+repo_name: gl-pgege/kaboo-workflows
+
+theme:
+  name: material
+  logo: assets/kaboo-icon.svg
+  favicon: assets/kaboo-icon.svg
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            members_order: source
+            separate_signature: true
+            merge_init_into_class: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Configuration:
+      - Overview: configuration/README.md
+      - configuration/Chapter_01.md
+      - configuration/Chapter_02.md
+      - configuration/Chapter_03.md
+      - configuration/Chapter_04.md
+      - configuration/Chapter_05.md
+      - configuration/Chapter_06.md
+      - configuration/Chapter_07.md
+      - configuration/Chapter_08.md
+      - configuration/Chapter_09.md
+      - configuration/Chapter_10.md
+      - configuration/Chapter_11.md
+      - configuration/Chapter_12.md
+      - configuration/Chapter_13.md
+      - configuration/Chapter_14.md
+      - configuration/Chapter_15.md
+      - configuration/Chapter_16.md
+      - configuration/Chapter_17.md
+      - configuration/Chapter_18.md
+      - Quick Recipes: configuration/Quick_Recipes.md
+  - Workflows:
+      - Deep nesting: workflows/deep-nesting.md
+      - Swarm + graph: workflows/swarm-and-graph.md
+      - Parallel: workflows/parallel.md
+      - Human-in-the-loop: workflows/human-in-the-loop.md
+      - Multi-turn history: workflows/multi-turn-history.md
+      - Errors & rejection: workflows/errors-and-rejection.md
+  - API reference:
+      - Overview: api-reference.md
+      - kaboo_workflows: api/kaboo_workflows.md
+      - adapters: api/adapters.md
+      - config: api/config.md
+      - hooks: api/hooks.md
+      - mcp: api/mcp.md
+      - tools: api/tools.md
+      - converters: api/converters.md
+      - renderers: api/renderers.md
+      - types: api/types.md

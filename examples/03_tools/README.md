@@ -5,7 +5,7 @@
 ## What this shows
 
 The `tools:` key in an agent config lets you point at your Python code.
-strands-compose loads it and registers matching functions with the agent.
+kaboo-workflows loads it and registers matching functions with the agent.
 
 ## How it works
 
@@ -32,7 +32,7 @@ Supported tool spec formats:
 ## Good to know
 
 **Decorate your tools with `@tool`.**
-We recommend always using `@tool` from strands. The decorator tells strands-compose which
+We recommend always using `@tool` from strands. The decorator tells kaboo-workflows which
 functions are tools and uses the docstring as the description the LLM sees.
 
 When you load a whole file or directory, only `@tool`-decorated functions are picked up —
@@ -40,7 +40,7 @@ plain functions are silently skipped. This is handy: you can keep helpers in the
 without worrying about them leaking as tools.
 
 When you name a function explicitly with a colon (`./tools.py:my_func`), `@tool` is
-optional — strands-compose will auto-wrap it for you (with a warning). But we still
+optional — kaboo-workflows will auto-wrap it for you (with a warning). But we still
 recommend adding `@tool` for clarity and to make sure the docstring-based description
 works as expected.
 
@@ -63,7 +63,7 @@ uv run python examples/03_tools/main.py
 
 - `Count the words and characters in: "The quick brown fox jumps over the lazy dog"`
 - `How many sentences does this paragraph have? "Alice was beginning to get very tired. She had nothing to do. Suddenly a white rabbit ran by."`
-- `Reverse the words in: "Hello world from strands-compose"`
+- `Reverse the words in: "Hello world from kaboo-workflows"`
 
 ## Advanced topic — suppress default callback logging
 

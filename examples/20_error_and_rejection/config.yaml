@@ -1,0 +1,52 @@
+# 20_error_and_rejection — When things go wrong
+#
+#   review_swarm (swarm): planner ─▶ researcher ─▶ writer
+#
+# Two failure modes, both handled safely:
+#
+#   1. Error isolation — if a node raises mid-run, the failure is isolated to that
+#      node (earlier nodes stay completed, its card is marked "error") and the run
+#      terminates instead of hanging.
+#   2. Rejection — the same gate mechanism as human-in-the-loop (example 18): if
+#      the user declines a gated tool, the tool receives a cancellation sentinel
+#      and the agent proceeds WITHOUT fabricating an approval; the run finishes
+#      cleanly.
+#
+# Run:
+#   uv run python examples/20_error_and_rejection/main.py
+
+models:
+  default:
+    provider: bedrock
+    model_id: openai.gpt-oss-20b-1:0
+
+x-hooks: &hooks
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
+    params: { max_calls: 20 }
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
+
+agents:
+  planner:
+    model: default
+    hooks: *hooks
+    description: "Plans the work, then hands off to researcher."
+    system_prompt: "Plan the task and hand off to researcher."
+  researcher:
+    model: default
+    hooks: *hooks
+    description: "Researches the plan, then hands off to writer."
+    system_prompt: "Research the plan. If a source is unavailable, say so plainly and hand off to writer."
+  writer:
+    model: default
+    hooks: *hooks
+    description: "Writes the final output from the research."
+    system_prompt: "Write the final output from the research. Do not invent facts you were not given."
+
+orchestrations:
+  review_swarm:
+    mode: swarm
+    agents: [planner, researcher, writer]
+    entry_name: planner
+    max_handoffs: 8
+
+entry: review_swarm

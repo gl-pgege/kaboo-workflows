@@ -4,7 +4,7 @@
 
 ---
 
-YAML has a built-in reuse mechanism: **anchors** (`&name`) and **aliases** (`*name`). strands-compose embraces this for eliminating copy-paste across your config.
+YAML has a built-in reuse mechanism: **anchors** (`&name`) and **aliases** (`*name`). kaboo-workflows embraces this for eliminating copy-paste across your config.
 
 ## The `x-` Scratch Pad
 
@@ -17,9 +17,9 @@ x-base_prompt: &base_prompt |
   Always be concise and clear.
 
 x-safety_hooks: &safety_hooks
-  - type: strands_compose.hooks:MaxToolCallsGuard
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
     params: { max_calls: 15 }
-  - type: strands_compose.hooks:ToolNameSanitizer
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
 
 x-model_params: &model_params
   max_tokens: 2048
@@ -51,7 +51,7 @@ entry: researcher
 1. **Define** with `&name`: `x-my_block: &my_block { key: value }`
 2. **Reference** with `*name`: `field: *my_block`
 
-The anchor creates a deep copy at the alias site. The `x-` prefix is a strands-compose convention — YAML anchors work on any key, but `x-` keys are cleaned up so they don't trigger "unknown field" errors.
+The anchor creates a deep copy at the alias site. The `x-` prefix is a kaboo-workflows convention — YAML anchors work on any key, but `x-` keys are cleaned up so they don't trigger "unknown field" errors.
 
 ## Combining Anchors with Variables
 
@@ -107,7 +107,7 @@ The `x-` prefix is simply cleaner for "scratch pad" blocks that don't belong to 
 >
 > - Use `x-` blocks at the top of your file to define your project's "design system" — shared prompts, hook lists, model params.
 > - Pair anchors with variables for maximum flexibility: anchors handle structure reuse, variables handle value swapping.
-> - YAML anchors are resolved by the YAML parser itself — strands-compose doesn't even see them. This means they work exactly as documented in the YAML spec.
+> - YAML anchors are resolved by the YAML parser itself — kaboo-workflows doesn't even see them. This means they work exactly as documented in the YAML spec.
 > - You can use `{ key: value }` inline syntax for short dicts in anchor definitions — great for concise params: `params: { max_calls: 15 }`.
 
 ---

@@ -1,0 +1,53 @@
+# 18_hitl — Human-in-the-loop, nested + parallel gates
+#
+#   review_team (delegate):
+#     coordinator ─▶ field_agent (interrupt: true, asks the user)
+#
+# The gated agent runs deep inside a delegate. When it calls `ask_user`, the
+# interrupt bubbles up to the single top-level handler and pauses the whole run
+# until the client resumes with an answer. `field_agent` can also ask SEVERAL
+# questions in one turn (parallel gated tool calls) — each surfaces as its own
+# interrupt with a distinct tool-call id, and the run resumes once all are
+# answered.
+#
+# Setting `interrupt: true` grants the agent the built-in `ask_user` tool.
+#
+# Run:
+#   uv run python examples/18_hitl/main.py
+
+models:
+  default:
+    provider: bedrock
+    model_id: openai.gpt-oss-20b-1:0
+
+x-hooks: &hooks
+  - type: kaboo_workflows.hooks:MaxToolCallsGuard
+    params: { max_calls: 20 }
+  - type: kaboo_workflows.hooks:ToolNameSanitizer
+
+agents:
+  coordinator:
+    model: default
+    hooks: *hooks
+    system_prompt: |
+      You coordinate a review. Delegate the work to field_agent and return its
+      result once it has confirmed the details with the user.
+
+  field_agent:
+    model: default
+    hooks: *hooks
+    interrupt: true
+    system_prompt: |
+      You do gated field work. Before finalizing anything risky, call ask_user to
+      confirm with the user. If several details are unclear, ask them together in
+      one ask_user call (a multi-question form) rather than guessing. Only proceed
+      once you have the user's answers.
+
+orchestrations:
+  review_team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - { agent: field_agent, description: "Does the gated field work with user confirmation" }
+
+entry: review_team

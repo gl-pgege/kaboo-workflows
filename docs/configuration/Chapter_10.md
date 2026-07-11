@@ -43,7 +43,7 @@ orchestrations:
 entry: team
 ```
 
-**How it works**: strands-compose **forks** a new agent from the `entry_name` agent's blueprint (model, system_prompt, hooks, tools) and adds delegate tools for each connection. The original `coordinator` agent is **never mutated**. Each connection becomes an async tool that the coordinator can call.
+**How it works**: kaboo-workflows **forks** a new agent from the `entry_name` agent's blueprint (model, system_prompt, hooks, tools) and adds delegate tools for each connection. The original `coordinator` agent is **never mutated**. Each connection becomes an async tool that the coordinator can call.
 
 **Fields**:
 
@@ -138,7 +138,7 @@ orchestrations:
 entry: pipeline
 ```
 
-**How it works**: strands-compose feeds the edges to strands' `GraphBuilder`, which constructs a topological execution plan. The `entry_name` must be a node with no incoming edges (the pipeline start).
+**How it works**: kaboo-workflows feeds the edges to strands' `GraphBuilder`, which constructs a topological execution plan. The `entry_name` must be a node with no incoming edges (the pipeline start).
 
 **Fields**:
 

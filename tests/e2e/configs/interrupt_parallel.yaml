@@ -1,0 +1,18 @@
+# Parallel gated tool calls in ONE step: a plain entry agent asks the user TWO
+# questions in a single assistant turn (two ask_user tool-uses with distinct
+# tool-use ids). Both interrupts must surface together and resume cleanly.
+agents:
+  assistant:
+    stream: {title: "Assistant"}
+    interrupt: true
+    model:
+      provider: tests.fakes.scripted_model:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - tools:
+              - {tool: ask_user, input: {question: "Approve step one?", options: ["yes", "no"]}}
+              - {tool: ask_user, input: {question: "Approve step two?", options: ["yes", "no"]}}
+        final_text: "Both steps approved."
+
+entry: assistant

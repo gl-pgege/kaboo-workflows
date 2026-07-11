@@ -1,0 +1,49 @@
+# Parallel at the top level AND nested parallelism inside a sub-graph:
+#   strategist ─▶ [ writer , subteam ] ─▶ editor
+#   subteam (graph): sub_lead ─▶ [ sa , sb ] ─▶ sub_end
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  strategist:
+    stream: {title: "Strategy"}
+    model: {provider: *m, model_id: scripted, params: {final_text: "Outline ready."}}
+  writer:
+    stream: {title: "Draft"}
+    model: {provider: *m, model_id: scripted, params: {final_text: "Draft written."}}
+  sub_lead:
+    stream: {title: "Sub lead"}
+    model: {provider: *m, model_id: scripted, params: {final_text: "Sub plan ready."}}
+  sa:
+    stream: {title: "Branch A"}
+    model: {provider: *m, model_id: scripted, params: {final_text: "Branch A done."}}
+  sb:
+    stream: {title: "Branch B"}
+    model: {provider: *m, model_id: scripted, params: {final_text: "Branch B done."}}
+  sub_end:
+    stream: {title: "Sub merge"}
+    model: {provider: *m, model_id: scripted, params: {final_text: "Sub report merged."}}
+  editor:
+    stream: {title: "Editing"}
+    model: {provider: *m, model_id: scripted, params: {final_text: "Edited final report."}}
+
+orchestrations:
+  subteam:
+    mode: graph
+    entry_name: sub_lead
+    chat_output: sub_end
+    edges:
+      - {from: sub_lead, to: sa}
+      - {from: sub_lead, to: sb}
+      - {from: sa, to: sub_end}
+      - {from: sb, to: sub_end}
+  pipeline:
+    mode: graph
+    entry_name: strategist
+    chat_output: editor
+    edges:
+      - {from: strategist, to: writer}
+      - {from: strategist, to: subteam}
+      - {from: writer, to: editor}
+      - {from: subteam, to: editor}
+
+entry: pipeline

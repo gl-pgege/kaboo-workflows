@@ -4,7 +4,7 @@
 
 ## What this shows
 
-- `load(["base.yaml", "agents.yaml"])` — pass a list and strands-compose merges them
+- `load(["base.yaml", "agents.yaml"])` — pass a list and kaboo-workflows merges them
 - Neither file is complete on its own; together they form a runnable config
 - Agents in `agents.yaml` reference models defined in `base.yaml` — cross-file references just work
 - `vars:` are scoped per file — each source resolves its own variables independently

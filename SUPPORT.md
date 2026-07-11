@@ -10,12 +10,12 @@
 
 If you encounter a bug or have a feature request:
 
-1. Search [existing issues](https://github.com/strands-compose/sdk-python/issues) to avoid duplicates
+1. Search [existing issues](https://github.com/gl-pgege/kaboo-workflows/issues) to avoid duplicates
 2. Open a new issue with:
    - Clear title describing the problem
    - Steps to reproduce (for bugs)
    - Minimal `config.yaml` that reproduces the issue
-   - Python version and strands-compose version
+   - Python version and kaboo-workflows version
 
 ## Security
 
@@ -26,9 +26,9 @@ If you discover a potential security issue, please see [SECURITY.md](SECURITY.md
 - If you see tool name errors, ensure the sanitizer is included in your hooks list
 
 **Import errors:**
-- Install optional dependencies: `pip install strands-compose[ollama]` for Ollama, `pip install strands-compose[openai]` for OpenAI
+- Install optional dependencies: `pip install kaboo-workflows[ollama]` for Ollama, `pip install kaboo-workflows[openai]` for OpenAI
 - Ensure Python 3.11+ is being used
 
 ## Strands Agents SDK
 
-strands-compose is built on top of the [Strands Agents SDK](https://github.com/strands-agents/harness-sdk). For questions about the underlying agent framework, model providers, or hook system, refer to the Strands documentation.
+kaboo-workflows is built on top of the [Strands Agents SDK](https://github.com/strands-agents/harness-sdk). For questions about the underlying agent framework, model providers, or hook system, refer to the Strands documentation.
