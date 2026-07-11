@@ -34,7 +34,7 @@ jobs:
         run: uv sync --all-groups --all-extras
 
       - name: Ruff — format check
-        run: uv run just check-format
+        run: uv run just check-format-ci
 
       - name: Ruff — lint
         run: uv run just check-code

@@ -7,11 +7,17 @@ check: check-format check-code check-type check-security
 check-code:
     uv run ruff check {{SOURCES}} {{TESTS}} {{EXAMPLES}}
 
-# check code format
+# check code format (auto-fixes locally)
 [group('check')]
 check-format:
     uv run ruff check --select=I --fix {{SOURCES}} {{TESTS}} {{EXAMPLES}}
     uv run ruff format {{SOURCES}} {{TESTS}} {{EXAMPLES}}
+    uv run ruff format --check {{SOURCES}} {{TESTS}} {{EXAMPLES}}
+
+# CI: verify formatting without writing (fails instead of silently auto-fixing)
+[group('check')]
+check-format-ci:
+    uv run ruff check --select=I {{SOURCES}} {{TESTS}} {{EXAMPLES}}
     uv run ruff format --check {{SOURCES}} {{TESTS}} {{EXAMPLES}}
 
 # check code security
