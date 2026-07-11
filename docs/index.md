@@ -12,14 +12,18 @@ any [CopilotKit](https://copilotkit.ai) frontend can consume.
 
 <div class="grid cards" markdown>
 
-- **Quick start** — install, write a config, serve it. See the
-  [README](https://github.com/gl-pgege/kaboo-workflows#quick-start).
-- **[Configuration guide](configuration/README.md)** — the complete 18-chapter
-  reference for every YAML option.
+- **[Getting started](getting-started.md)** — install, write a config, and serve
+  or drive it from Python in a few minutes.
+- **[Concepts](concepts.md)** — the mental model: `load()` returns plain strands
+  objects; orchestration shapes; the AG-UI event stream.
+- **[Configuration reference](configuration/README.md)** — the complete
+  18-chapter reference for every YAML option.
 - **[Workflow guides](workflows/deep-nesting.md)** — worked, tested examples of
   deep nesting, swarm+graph, parallelism, HITL, history, and error handling.
 - **[API reference](api-reference.md)** — the full public Python surface,
   auto-generated from docstrings.
+- **[Troubleshooting](troubleshooting.md)** — fixes for the common first-run
+  errors.
 
 </div>
 

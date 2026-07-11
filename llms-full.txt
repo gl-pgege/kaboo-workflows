@@ -494,6 +494,82 @@ Shared event protocol and session manifest models.
       show_root_heading: true
       members_order: source
 
+# docs/concepts.md
+
+# Concepts
+
+A mental model for how kaboo-workflows turns a YAML file into a running,
+streaming multi-agent system.
+
+## `load()` returns plain strands objects
+
+kaboo-workflows is a **resolver**, not a runtime wrapper. `load(config)` reads
+your YAML, resolves every reference, and returns live
+[strands-agents](https://github.com/strands-agents/harness-sdk) objects —
+`strands.Agent`, `Swarm`, `Graph` — with nothing wrapping them. Whatever you can
+do with a hand-built strands object, you can do with the one kaboo hands back.
+
+```mermaid
+flowchart LR
+    YAML["config.yaml"] -->|load| Resolved["ResolvedConfig"]
+    Resolved --> Entry["resolved.entry<br/>(strands Agent / Swarm / Graph)"]
+    Entry -->|"kaboo-serve"| SSE["AG-UI SSE endpoint"]
+    SSE -->|"Server-Sent Events"| CK["CopilotKit frontend"]
+```
+
+## The pieces
+
+A config wires together a handful of resolvable sections (each has its own
+chapter in the [Configuration reference](configuration/README.md)):
+
+| Section | What it is |
+|---------|-----------|
+| `models` | Named model providers (`openai`, `ollama`, `gemini`, Bedrock, …). |
+| `agents` | Named agents: a model, a system prompt, tools, and hooks. |
+| `tools` | Python `@tool` functions loaded from files, plus built-ins like `ask_user`. |
+| `hooks` | Lifecycle hooks — event publishing, interrupts/HITL, guards. |
+| `mcp` | Model Context Protocol servers/clients, lifecycle-managed for you. |
+| `orchestrations` | How agents compose into a multi-agent system. |
+| `entry` | The root agent or orchestration a run starts from. |
+
+## Orchestration shapes
+
+Agents compose through orchestrations, which nest arbitrarily:
+
+- **delegate** — an entry agent calls other agents as tools (see
+  [deep nesting](workflows/deep-nesting.md)).
+- **swarm** — agents hand off to one another until one produces the answer.
+- **graph** — an explicit DAG of agents with edges and an entry point.
+- **parallel** — fan out to several branches and merge (see
+  [parallel](workflows/parallel.md)).
+- **nested** — any orchestration can be a node inside another (see
+  [swarm + graph](workflows/swarm-and-graph.md)).
+
+## Serving: the AG-UI event stream
+
+`kaboo-serve` (or `create_agui_app` in `kaboo_workflows.adapters`) wraps the
+resolved entry with [ag-ui-strands](https://github.com/ag-ui-protocol/ag-ui) and
+exposes it as an AG-UI SSE endpoint. A single run emits a well-formed event
+stream:
+
+```text
+RUN_STARTED → TEXT_MESSAGE_* → TOOL_CALL_* → ACTIVITY_SNAPSHOT → RUN_FINISHED
+```
+
+`ACTIVITY_SNAPSHOT` events carry the hierarchical activity tree that
+[kaboo-react](https://github.com/gl-pgege/kaboo-react) renders, while
+[kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) can persist and
+replay the whole stream. Human-in-the-loop pauses surface as interrupts on
+`RUN_FINISHED` and resume cleanly — see
+[human-in-the-loop](workflows/human-in-the-loop.md).
+
+## Where to go next
+
+- **[Getting started](getting-started.md)** if you haven't run it yet.
+- **[Configuration reference](configuration/README.md)** for the exhaustive
+  option list.
+- **[Troubleshooting](troubleshooting.md)** when something doesn't resolve.
+
 # docs/configuration/Chapter_01.md
 
 # Chapter 1: The Basics — Your First Config
@@ -2942,6 +3018,108 @@ That covers everything kaboo-workflows YAML has to offer. When in doubt, check t
 
 Happy composing! 🎼
 
+# docs/getting-started.md
+
+# Getting started
+
+This page takes you from an empty directory to a running multi-agent server in
+a few minutes. Every snippet here is exercised in CI.
+
+!!! note "Compatibility"
+    kaboo-workflows requires **Python 3.12+** and is built on
+    [strands-agents](https://github.com/strands-agents/harness-sdk). Model
+    provider SDKs are optional extras (`openai`, `ollama`, `gemini`,
+    `agentcore-memory`) — install the one you need.
+
+## 1. Install
+
+```bash
+pip install "kaboo-workflows[openai]"
+# or with uv
+uv add "kaboo-workflows[openai]"
+```
+
+## 2. Write a config
+
+The whole system is a single YAML file: models, agents, tools, and the `entry`
+point. Save this as `config.yaml`:
+
+```yaml
+vars:
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+
+models:
+  default:
+    provider: openai
+    model_id: anthropic/claude-sonnet-4
+    params:
+      client_args:
+        base_url: https://openrouter.ai/api/v1
+        api_key: ${OPENROUTER_API_KEY}
+
+agents:
+  assistant:
+    model: default
+    system_prompt: "You are a helpful assistant."
+
+entry: assistant
+```
+
+`${VAR}` interpolates from the environment (see
+[Chapter 1](configuration/Chapter_01.md)), so no secrets live in the file.
+
+## 3a. Serve it (AG-UI SSE)
+
+`kaboo-serve` resolves the config and serves your agents as AG-UI
+Server-Sent Events that any [CopilotKit](https://copilotkit.ai) frontend can
+consume:
+
+```bash
+OPENROUTER_API_KEY=sk-... uv run kaboo-serve config.yaml
+```
+
+The server listens on `http://localhost:8080` — `POST /invocations` for the
+event stream and `GET /ping` for health.
+
+## 3b. Or drive it from Python
+
+`load()` hands back live, fully wired `strands` objects. There are no wrappers:
+`resolved.entry` is a real `strands.Agent` (or a `Swarm`/`Graph` for
+orchestrations), so you call it directly.
+
+```{.python notest}
+from kaboo_workflows import load
+
+resolved = load("config.yaml")
+agent = resolved.entry              # a plain strands.Agent
+try:
+    agent("What is 15 * 23?")       # streams the reply to stdout
+finally:
+    resolved.mcp_lifecycle.stop()   # always release MCP servers/clients
+```
+
+Wrap CLI-style entrypoints in `cli_errors()` for friendly error messages:
+
+```{.python notest}
+from kaboo_workflows import cli_errors, load
+
+with cli_errors():
+    resolved = load("config.yaml")
+    resolved.entry("Hello!")
+```
+
+## Next steps
+
+- **[Concepts](concepts.md)** — the mental model behind `load()` and serving.
+- **[Configuration reference](configuration/README.md)** — every YAML option,
+  chapter by chapter.
+- **[Workflows](workflows/deep-nesting.md)** — worked, tested multi-agent
+  patterns (delegate, swarm, graph, parallel, HITL).
+- **[Examples](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples)** —
+  ~20 self-contained, load-tested example projects.
+- **[Troubleshooting](troubleshooting.md)** — fixes for the common first-run
+  errors.
+
 # docs/index.md
 
 # kaboo-workflows
@@ -2958,14 +3136,18 @@ any [CopilotKit](https://copilotkit.ai) frontend can consume.
 
 <div class="grid cards" markdown>
 
-- **Quick start** — install, write a config, serve it. See the
-  [README](https://github.com/gl-pgege/kaboo-workflows#quick-start).
-- **[Configuration guide](configuration/README.md)** — the complete 18-chapter
-  reference for every YAML option.
+- **[Getting started](getting-started.md)** — install, write a config, and serve
+  or drive it from Python in a few minutes.
+- **[Concepts](concepts.md)** — the mental model: `load()` returns plain strands
+  objects; orchestration shapes; the AG-UI event stream.
+- **[Configuration reference](configuration/README.md)** — the complete
+  18-chapter reference for every YAML option.
 - **[Workflow guides](workflows/deep-nesting.md)** — worked, tested examples of
   deep nesting, swarm+graph, parallelism, HITL, history, and error handling.
 - **[API reference](api-reference.md)** — the full public Python surface,
   auto-generated from docstrings.
+- **[Troubleshooting](troubleshooting.md)** — fixes for the common first-run
+  errors.
 
 </div>
 
@@ -2990,6 +3172,77 @@ Nothing documented here ships without a test: every example config is
 load-validated, every complex workflow guide is backed by a passing end-to-end
 test, executable doc snippets run in CI, and a completeness gate guarantees every
 public symbol has a docstring and an API page.
+
+# docs/troubleshooting.md
+
+# Troubleshooting
+
+Fixes for the errors you're most likely to hit first. If something here doesn't
+cover your case, check the [Configuration reference](configuration/README.md) or
+open an issue.
+
+## Config won't load / validation errors
+
+kaboo-workflows validates the whole config up front and raises a precise error
+pointing at the offending key. Common causes:
+
+- **Unknown agent/model reference** — an `agents.*.model` or `entry` names
+  something that isn't defined. Names must match a key under `models:` /
+  `agents:` exactly.
+- **Missing `entry`** — every config needs an `entry` naming the root agent or
+  orchestration.
+- **Bad tool path** — `tools: [./tools/foo.py]` paths are resolved relative to
+  the config file; a missing file or a file with no `@tool`-decorated function
+  raises at load time.
+
+Wrap your entrypoint in `cli_errors()` (from `kaboo_workflows`) to get a
+formatted, human-readable message instead of a raw traceback.
+
+## Provider / credentials errors
+
+- **`${OPENROUTER_API_KEY}` is empty** — `${VAR}` interpolates from the
+  environment. Export it before running (`OPENROUTER_API_KEY=sk-... kaboo-serve
+  config.yaml`). Interpolation happens *before* the model is constructed, so a
+  missing var usually surfaces as an auth error from the provider.
+- **`ModuleNotFoundError` for a provider** — install the matching extra:
+  `pip install "kaboo-workflows[openai]"` (also `ollama`, `gemini`,
+  `agentcore-memory`).
+
+## MCP lifecycle
+
+- **Server not ready / client can't connect** — the lifecycle starts all
+  servers before any client. If you call `load()` yourself, remember it starts
+  the lifecycle for you; you are responsible for stopping it.
+- **Hanging process on exit** — always stop the lifecycle in a `finally`:
+
+```{.python notest}
+from kaboo_workflows import load
+
+resolved = load("config.yaml")
+try:
+    resolved.entry("hello")
+finally:
+    resolved.mcp_lifecycle.stop()
+```
+
+See the [MCP guide](configuration/Chapter_09.md) for details.
+
+## Serving / CORS
+
+- **Frontend can't reach the server** — `kaboo-serve` listens on
+  `http://localhost:8080` (`POST /invocations`, `GET /ping`). Point your
+  CopilotKit `runtimeUrl` (or a dev proxy) at it.
+- **CORS blocked in the browser** — serve the frontend through the same origin
+  or a dev proxy rather than hitting `:8080` cross-origin. The
+  [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) shows
+  a working proxy setup.
+
+## Nothing streams back
+
+A malformed client transcript (a dangling or duplicate tool result) makes the
+model reject the history — an event-less hang. The adapter detects imbalance and
+fails fast with a `MALFORMED_HISTORY` error rather than hanging silently; check
+that each assistant tool call has exactly one matching tool result.
 
 # docs/workflows/deep-nesting.md
 

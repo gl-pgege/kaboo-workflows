@@ -47,13 +47,19 @@ markdown_extensions:
       permalink: true
   - pymdownx.highlight
   - pymdownx.inlinehilite
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
 
 nav:
   - Home: index.md
-  - Configuration:
+  - Getting started: getting-started.md
+  - Concepts: concepts.md
+  - Configuration reference:
       - Overview: configuration/README.md
       - configuration/Chapter_01.md
       - configuration/Chapter_02.md
@@ -92,3 +98,5 @@ nav:
       - converters: api/converters.md
       - renderers: api/renderers.md
       - types: api/types.md
+  - Troubleshooting: troubleshooting.md
+  - Ecosystem: https://gl-pgege.github.io/kaboo-docs/
