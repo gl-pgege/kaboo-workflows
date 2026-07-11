@@ -281,7 +281,7 @@ def make_event_queue(
         # Stash the instance so the AG-UI adapter can forward it to the per-thread
         # clone ag-ui-strands executes for a plain-agent entry (that clone does not
         # inherit this blueprint's HookRegistry). See create_agui_app.
-        agent._kaboo_event_publisher = pub  # type: ignore[attr-defined]
+        setattr(agent, "_kaboo_event_publisher", pub)
         logger.debug("agent=<%s>, stream_group=<%s> | wired EventPublisher", name, sg)
 
         # Client-driven history for every agent except the chat owner, whose

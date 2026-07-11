@@ -7,10 +7,14 @@ We drive it directly and observe the emitted StreamEvents — no private handler
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 
 from kaboo_workflows.hooks import EventPublisher
 from kaboo_workflows.hooks.event_publisher import _extract_incoming_task
 from kaboo_workflows.types import EventType
+
+if TYPE_CHECKING:
+    from strands.hooks.events import AfterToolCallEvent
 
 
 def _publisher() -> tuple[EventPublisher, list]:
@@ -96,11 +100,17 @@ def test_callback_exception_is_swallowed_not_propagated():
     pub.as_callback_handler()(data="hi")
 
 
-def _tool_end_event(*, status: str, exception=None) -> SimpleNamespace:
-    return SimpleNamespace(
-        tool_use={"name": "research_fetch_report", "toolUseId": "t1"},
-        exception=exception,
-        result={"status": status, "content": [{"text": "boom" if status == "error" else "ok"}]},
+def _tool_end_event(*, status: str, exception=None) -> AfterToolCallEvent:
+    return cast(
+        "AfterToolCallEvent",
+        SimpleNamespace(
+            tool_use={"name": "research_fetch_report", "toolUseId": "t1"},
+            exception=exception,
+            result={
+                "status": status,
+                "content": [{"text": "boom" if status == "error" else "ok"}],
+            },
+        ),
     )
 
 

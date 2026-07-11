@@ -288,10 +288,11 @@ def _resolve_history(
         group, _title = stream_groups.get(name, (name, name))
         key = group
         enabled = default_enabled
-        if agent_def.history is not None:
-            enabled = agent_def.history.enabled
-            if agent_def.history.group:
-                key = agent_def.history.group
+        agent_history = agent_def.history
+        if agent_history is not None and not isinstance(agent_history, bool):
+            enabled = agent_history.enabled
+            if agent_history.group:
+                key = agent_history.group
         history[name] = (key, enabled)
     return history
 

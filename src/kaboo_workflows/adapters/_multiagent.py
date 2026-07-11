@@ -28,6 +28,7 @@ from ag_ui.core import (
 from ag_ui.core import (
     RunErrorEvent,
     RunFinishedEvent,
+    RunFinishedInterruptOutcome,
     RunStartedEvent,
     StateSnapshotEvent,
     TextMessageContentEvent,
@@ -116,7 +117,7 @@ class StrandsMultiAgent:
 
         try:
             await merged.put(
-                RunStartedEvent(type=AGUIEventType.RUN_STARTED, threadId=thread_id, runId=run_id)
+                RunStartedEvent(type=AGUIEventType.RUN_STARTED, thread_id=thread_id, run_id=run_id)
             )
 
             if resume_entries is not None:
@@ -125,7 +126,7 @@ class StrandsMultiAgent:
                 task = _extract_user_task(input_data)
             logger.info("multiagent.consume task=%r", task)
 
-            node_text: dict[str, str] = {}
+            node_text: dict[str | None, str] = {}
             last_completed: str | None = None
             text_started = False
             final_result: Any = None
@@ -153,7 +154,7 @@ class StrandsMultiAgent:
                                 await merged.put(
                                     TextMessageStartEvent(
                                         type=AGUIEventType.TEXT_MESSAGE_START,
-                                        messageId=message_id,
+                                        message_id=message_id,
                                         role="assistant",
                                     )
                                 )
@@ -161,7 +162,7 @@ class StrandsMultiAgent:
                             await merged.put(
                                 TextMessageContentEvent(
                                     type=AGUIEventType.TEXT_MESSAGE_CONTENT,
-                                    messageId=message_id,
+                                    message_id=message_id,
                                     delta=str(delta),
                                 )
                             )
@@ -186,7 +187,7 @@ class StrandsMultiAgent:
 
             if text_started:
                 await merged.put(
-                    TextMessageEndEvent(type=AGUIEventType.TEXT_MESSAGE_END, messageId=message_id)
+                    TextMessageEndEvent(type=AGUIEventType.TEXT_MESSAGE_END, message_id=message_id)
                 )
 
             # History write-back so members' client-driven transcripts persist.
@@ -204,9 +205,11 @@ class StrandsMultiAgent:
                 await merged.put(
                     RunFinishedEvent(
                         type=AGUIEventType.RUN_FINISHED,
-                        threadId=thread_id,
-                        runId=run_id,
-                        outcome={"type": "interrupt", "interrupts": agui_interrupts},
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        outcome=RunFinishedInterruptOutcome.model_validate(
+                            {"interrupts": agui_interrupts}
+                        ),
                     )
                 )
                 return
@@ -223,25 +226,27 @@ class StrandsMultiAgent:
                     await merged.put(
                         TextMessageStartEvent(
                             type=AGUIEventType.TEXT_MESSAGE_START,
-                            messageId=message_id,
+                            message_id=message_id,
                             role="assistant",
                         )
                     )
                     await merged.put(
                         TextMessageContentEvent(
                             type=AGUIEventType.TEXT_MESSAGE_CONTENT,
-                            messageId=message_id,
+                            message_id=message_id,
                             delta=text,
                         )
                     )
                     await merged.put(
                         TextMessageEndEvent(
-                            type=AGUIEventType.TEXT_MESSAGE_END, messageId=message_id
+                            type=AGUIEventType.TEXT_MESSAGE_END, message_id=message_id
                         )
                     )
 
             await merged.put(
-                RunFinishedEvent(type=AGUIEventType.RUN_FINISHED, threadId=thread_id, runId=run_id)
+                RunFinishedEvent(
+                    type=AGUIEventType.RUN_FINISHED, thread_id=thread_id, run_id=run_id
+                )
             )
         except Exception as exc:  # noqa: BLE001 - surface any run failure as RUN_ERROR
             logger.error("multi-agent run failed: %s", exc, exc_info=True)

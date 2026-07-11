@@ -136,9 +136,12 @@ def _extract_incoming_task(messages: Any, max_len: int = 400) -> str | None:
         has_tool_result = any(isinstance(b, dict) and "toolResult" in b for b in blocks)
         if has_tool_result:
             continue
-        texts = [
-            b["text"] for b in blocks if isinstance(b, dict) and isinstance(b.get("text"), str)
-        ]
+        texts: list[str] = []
+        for b in blocks:
+            if isinstance(b, dict):
+                block_text = b.get("text")
+                if isinstance(block_text, str):
+                    texts.append(block_text)
         text = "\n".join(t for t in texts if t.strip()).strip()
         if not text:
             continue

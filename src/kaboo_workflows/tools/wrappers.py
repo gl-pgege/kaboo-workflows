@@ -83,7 +83,7 @@ def _interrupt_responses_from_result(
 ) -> list[dict[str, Any]]:
     """Forward interrupts raised mid-run up to the coordinator and collect responses."""
     responses: list[dict[str, Any]] = []
-    for intr in result.interrupts:
+    for intr in result.interrupts or []:
         user_response = tool_context.interrupt(intr.id, reason=intr.reason)
         responses.append({"interruptResponse": {"interruptId": intr.id, "response": user_response}})
     return responses
@@ -109,14 +109,14 @@ def _node_as_tool(
         async def delegate(tool_context: ToolContext, input: str) -> dict[str, Any]:
             with delegation_context(tool_context.tool_use.get("toolUseId")):
                 resume = _pending_interrupt_responses(node, tool_context)
-                result = await node.invoke_async(resume if resume is not None else input)
+                result = await node.invoke_async(cast(Any, resume if resume is not None else input))
                 while (
                     isinstance(result, AgentResult)
                     and result.stop_reason == "interrupt"
                     and result.interrupts
                 ):
                     responses = _interrupt_responses_from_result(result, tool_context)
-                    result = await node.invoke_async(responses)
+                    result = await node.invoke_async(cast(Any, responses))
                 return _message_to_tool_result(extract_last_message(result))
 
     else:
@@ -125,14 +125,14 @@ def _node_as_tool(
         def delegate(tool_context: ToolContext, input: str) -> dict[str, Any]:
             with delegation_context(tool_context.tool_use.get("toolUseId")):
                 resume = _pending_interrupt_responses(node, tool_context)
-                result = node(resume if resume is not None else input)
+                result = node(cast(Any, resume if resume is not None else input))
                 while (
                     isinstance(result, AgentResult)
                     and result.stop_reason == "interrupt"
                     and result.interrupts
                 ):
                     responses = _interrupt_responses_from_result(result, tool_context)
-                    result = node(responses)
+                    result = node(cast(Any, responses))
                 return _message_to_tool_result(extract_last_message(result))
 
     return delegate

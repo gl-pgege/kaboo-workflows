@@ -10,8 +10,16 @@ superseded interrupt) rather than emitting a malformed stream.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
-from ag_ui.core import AssistantMessage, FunctionCall, ToolCall, ToolMessage, UserMessage
+from ag_ui.core import (
+    AssistantMessage,
+    FunctionCall,
+    RunAgentInput,
+    ToolCall,
+    ToolMessage,
+    UserMessage,
+)
 
 from kaboo_workflows._context import HistoryExchange
 from kaboo_workflows.adapters.agui import (
@@ -80,7 +88,7 @@ def test_dangling_call_is_closed_in_place() -> None:
         messages=[_assistant_call("a1", "tc1"), UserMessage(id="u2", content="new turn")]
     )
 
-    closed = _close_abandoned_tool_calls(data)
+    closed = _close_abandoned_tool_calls(cast(RunAgentInput, data))
 
     assert closed == ["tc1"]
     roles = [m.role for m in data.messages]
@@ -95,7 +103,7 @@ def test_balanced_transcript_is_left_unchanged() -> None:
     original = [_assistant_call("a1", "tc1"), _tool_result("t1", "tc1")]
     data = SimpleNamespace(messages=list(original))
 
-    closed = _close_abandoned_tool_calls(data)
+    closed = _close_abandoned_tool_calls(cast(RunAgentInput, data))
 
     assert closed == []
     assert data.messages == original
@@ -118,7 +126,7 @@ def test_collapses_multi_interrupt_delegate_results_to_the_last() -> None:
         ]
     )
 
-    dropped = _collapse_duplicate_tool_results(data)
+    dropped = _collapse_duplicate_tool_results(cast(RunAgentInput, data))
 
     assert dropped == {"tc1": 2}
     roles = [m.role for m in data.messages]
@@ -139,7 +147,7 @@ def test_collapse_leaves_a_balanced_transcript_untouched() -> None:
     ]
     data = SimpleNamespace(messages=list(original))
 
-    dropped = _collapse_duplicate_tool_results(data)
+    dropped = _collapse_duplicate_tool_results(cast(RunAgentInput, data))
 
     assert dropped == {}
     assert data.messages == original
@@ -156,7 +164,7 @@ def test_collapse_is_per_tool_call_id() -> None:
         ]
     )
 
-    dropped = _collapse_duplicate_tool_results(data)
+    dropped = _collapse_duplicate_tool_results(cast(RunAgentInput, data))
 
     assert dropped == {"tc1": 1}
     result_ids = [m.tool_call_id for m in data.messages if m.role == "tool"]
@@ -175,7 +183,7 @@ def test_normalize_repairs_dupes_and_reports_clean_residual() -> None:
         ]
     )
 
-    repairs = normalize_client_transcript(data, close_dangling=False)
+    repairs = normalize_client_transcript(cast(RunAgentInput, data), close_dangling=False)
 
     assert repairs.collapsed == {"tc1": 1}
     assert repairs.backfill_ids == []
@@ -190,13 +198,13 @@ def test_normalize_closes_dangling_only_when_superseded() -> None:
         )
 
     # Not superseded: a dangling call is foreign — left for the residual to refuse.
-    kept = normalize_client_transcript(_data(), close_dangling=False)
+    kept = normalize_client_transcript(cast(RunAgentInput, _data()), close_dangling=False)
     assert kept.backfill_ids == []
     assert kept.residual is not None
     assert "missing a result" in kept.residual
 
     # Superseded: the abandoned call is closed and reported for frontend backfill.
-    repaired = normalize_client_transcript(_data(), close_dangling=True)
+    repaired = normalize_client_transcript(cast(RunAgentInput, _data()), close_dangling=True)
     assert repaired.backfill_ids == ["tc1"]
     assert repaired.residual is None
 
@@ -205,7 +213,7 @@ def test_normalize_leaves_a_clean_transcript_untouched() -> None:
     original = [_assistant_call("a1", "tc1"), _tool_result("t1", "tc1")]
     data = SimpleNamespace(messages=list(original))
 
-    repairs = normalize_client_transcript(data, close_dangling=True)
+    repairs = normalize_client_transcript(cast(RunAgentInput, data), close_dangling=True)
 
     assert repairs == ([], {}, None)
     assert data.messages == original

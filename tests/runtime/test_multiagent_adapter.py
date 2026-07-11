@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import cast
 
-from ag_ui.core import EventType
+from ag_ui.core import EventType, RunAgentInput
 from strands import Agent
 from strands.multiagent import GraphBuilder, Swarm
+from strands.multiagent.base import MultiAgentBase
+from strands.multiagent.graph import Graph
 
 from kaboo_workflows._context import HistoryExchange
 from kaboo_workflows.adapters import _multiagent as ma
@@ -26,7 +29,7 @@ def _agent(name: str, chunks: list[str]) -> Agent:
     return Agent(name=name, model=FakeModel(chunks), system_prompt="x")
 
 
-def _graph(chat_terminal_chunks: list[str]) -> tuple:
+def _graph(chat_terminal_chunks: list[str]) -> Graph:
     a = _agent("a", ["draft"])
     b = _agent("b", chat_terminal_chunks)
     builder = GraphBuilder()
@@ -172,7 +175,7 @@ def test_extract_user_task_returns_latest_user_message():
             SimpleNamespace(role="user", content="second"),
         ]
     )
-    assert ma._extract_user_task(input_data) == "second"
+    assert ma._extract_user_task(cast(RunAgentInput, input_data)) == "second"
 
 
 def test_build_resume_responses_maps_pending_interrupts(monkeypatch):
@@ -181,7 +184,8 @@ def test_build_resume_responses_maps_pending_interrupts(monkeypatch):
         ma.bridge, "pending_interrupts", lambda o, unresolved_only=True: {"i1": object()}
     )
     responses = ma._build_resume_responses(
-        orchestrator, [{"interruptId": "i1", "status": "resolved", "payload": {"ok": True}}]
+        cast(MultiAgentBase, orchestrator),
+        [{"interruptId": "i1", "status": "resolved", "payload": {"ok": True}}],
     )
     assert responses == [{"interruptResponse": {"interruptId": "i1", "response": {"ok": True}}}]
 
@@ -190,7 +194,7 @@ def test_build_resume_responses_defaults_unaddressed_to_cancelled(monkeypatch):
     monkeypatch.setattr(
         ma.bridge, "pending_interrupts", lambda o, unresolved_only=True: {"i1": object()}
     )
-    responses = ma._build_resume_responses(object(), [])
+    responses = ma._build_resume_responses(cast(MultiAgentBase, object()), [])
     assert responses[0]["interruptResponse"]["response"] == {"status": "cancelled"}
 
 

@@ -11,10 +11,14 @@ activation: it reuses the existing group and emits no group-resetting start.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 
 from kaboo_workflows._context import set_activity_context
 from kaboo_workflows.hooks import EventPublisher
 from kaboo_workflows.types import EventType
+
+if TYPE_CHECKING:
+    from strands.hooks.events import BeforeInvocationEvent
 
 
 def _publisher() -> tuple[EventPublisher, list]:
@@ -28,12 +32,15 @@ def _publisher() -> tuple[EventPublisher, list]:
     return pub, events
 
 
-def _start_event(*, resuming: bool = False) -> SimpleNamespace:
+def _start_event(*, resuming: bool = False) -> BeforeInvocationEvent:
     interrupt_state = SimpleNamespace(activated=True) if resuming else None
     agent = SimpleNamespace(_interrupt_state=interrupt_state, messages=[])
-    return SimpleNamespace(
-        agent=agent,
-        messages=[{"role": "user", "content": [{"text": "do the work"}]}],
+    return cast(
+        "BeforeInvocationEvent",
+        SimpleNamespace(
+            agent=agent,
+            messages=[{"role": "user", "content": [{"text": "do the work"}]}],
+        ),
     )
 
 

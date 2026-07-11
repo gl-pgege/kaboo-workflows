@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from ag_ui.core import (
@@ -77,7 +78,13 @@ def _patch_bridge(monkeypatch: pytest.MonkeyPatch):
 async def _drive(agent: _FakeAguiAgent, *, backfill: list[str] | None = None) -> list:
     merged: asyncio.Queue = asyncio.Queue()
     input_data = SimpleNamespace(thread_id="t", run_id="r")
-    await _consume_run(agent, input_data, merged, HistoryExchange(), backfill_tool_calls=backfill)
+    await _consume_run(
+        cast(Any, agent),
+        cast(Any, input_data),
+        merged,
+        HistoryExchange(),
+        backfill_tool_calls=backfill,
+    )
     items: list = []
     while not merged.empty():
         items.append(merged.get_nowait())

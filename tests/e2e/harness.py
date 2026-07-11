@@ -90,7 +90,7 @@ class TurnResult:
         return sorted(self.groups.keys())
 
     def agent_names(self) -> set[str]:
-        return {g.get("agentName") for g in self.groups.values()}
+        return {str(g["agentName"]) for g in self.groups.values() if g.get("agentName") is not None}
 
     def group(self, group_id: str) -> dict[str, Any]:
         return self.groups[group_id]

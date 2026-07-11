@@ -991,7 +991,7 @@ dev = [
     { name = "ruff", specifier = ">=0.14.8" },
     { name = "rust-just", specifier = ">=1.42.4" },
     { name = "twine", specifier = ">=5.0" },
-    { name = "ty", specifier = ">=0.0.29" },
+    { name = "ty", specifier = "==0.0.56" },
 ]
 docs = [
     { name = "mkdocs-material", specifier = ">=9.5" },

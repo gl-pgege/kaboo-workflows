@@ -32,6 +32,7 @@ from ag_ui.core import (
     RunAgentInput,
     RunErrorEvent,
     RunFinishedEvent,
+    RunFinishedInterruptOutcome,
     RunStartedEvent,
     ToolCallResultEvent,
     ToolMessage,
@@ -154,9 +155,9 @@ def _maybe_inject_interrupt_outcome(
     logger.debug("injecting interrupt outcome: %s", [i["id"] for i in agui_interrupts])
     return RunFinishedEvent(
         type=AGUIEventType.RUN_FINISHED,
-        threadId=event.thread_id,
-        runId=event.run_id,
-        outcome={"type": "interrupt", "interrupts": agui_interrupts},
+        thread_id=event.thread_id,
+        run_id=event.run_id,
+        outcome=RunFinishedInterruptOutcome.model_validate({"interrupts": agui_interrupts}),
     )
 
 
@@ -202,8 +203,8 @@ def _terminal_result_event(tc_id: str, content: str) -> ToolCallResultEvent:
     """
     return ToolCallResultEvent(
         type=AGUIEventType.TOOL_CALL_RESULT,
-        toolCallId=tc_id,
-        messageId=str(uuid.uuid4()),
+        tool_call_id=tc_id,
+        message_id=str(uuid.uuid4()),
         content=content,
         role="tool",
     )
@@ -529,8 +530,8 @@ def _make_activity_pump(
             if registry.apply(thread_id, event):
                 await merged.put(
                     ActivitySnapshotEvent(
-                        messageId=f"kaboo.activity.{thread_id}",
-                        activityType="kaboo.activity",
+                        message_id=f"kaboo.activity.{thread_id}",
+                        activity_type="kaboo.activity",
                         content=registry.snapshot(thread_id),
                         replace=True,
                     )
@@ -544,7 +545,7 @@ async def _sse_response(
     activity_pump: Any,
     encoder: EventEncoder,
     merged: asyncio.Queue[Any],
-) -> AsyncIterator[bytes]:
+) -> AsyncIterator[str]:
     """Stream encoded AG-UI events; run the run + activity pumps concurrently."""
     run_task = asyncio.create_task(consume())
     activity_task = asyncio.create_task(activity_pump())
@@ -604,7 +605,9 @@ def _add_kaboo_endpoint(
 ) -> None:
     @app.post(path)
     async def kaboo_endpoint(input_data: RunAgentInput, request: Request) -> StreamingResponse:
-        encoder = EventEncoder(accept=request.headers.get("accept"))
+        # ag_ui's EventEncoder(accept: str = None) is mis-stubbed (default None
+        # but annotated str); passing the optional Accept header through is correct.
+        encoder = EventEncoder(accept=request.headers.get("accept"))  # ty: ignore[invalid-argument-type]
         thread_id = input_data.thread_id or bridge.DEFAULT_THREAD
         resume_entries = _parse_resume_entries(input_data)
         turn_id = _resolve_turn_id(
@@ -647,20 +650,22 @@ def _add_kaboo_endpoint(
                         ]
                         run_id = input_data.run_id or str(uuid.uuid4())
 
-                        async def replay_multiagent_interrupt() -> AsyncIterator[bytes]:
+                        async def replay_multiagent_interrupt() -> AsyncIterator[str]:
                             yield encoder.encode(
                                 RunStartedEvent(
                                     type=AGUIEventType.RUN_STARTED,
-                                    threadId=thread_id,
-                                    runId=run_id,
+                                    thread_id=thread_id,
+                                    run_id=run_id,
                                 )
                             )
                             yield encoder.encode(
                                 RunFinishedEvent(
                                     type=AGUIEventType.RUN_FINISHED,
-                                    threadId=thread_id,
-                                    runId=run_id,
-                                    outcome={"type": "interrupt", "interrupts": agui_interrupts},
+                                    thread_id=thread_id,
+                                    run_id=run_id,
+                                    outcome=RunFinishedInterruptOutcome.model_validate(
+                                        {"interrupts": agui_interrupts}
+                                    ),
                                 )
                             )
 
@@ -684,12 +689,12 @@ def _add_kaboo_endpoint(
             if strands_agent is None:
                 logger.error("no strands agent for thread_id=%s during resume", thread_id)
 
-                async def error_gen() -> AsyncIterator[bytes]:
+                async def error_gen() -> AsyncIterator[str]:
                     yield encoder.encode(
                         RunStartedEvent(
                             type=AGUIEventType.RUN_STARTED,
-                            threadId=thread_id,
-                            runId=input_data.run_id,
+                            thread_id=thread_id,
+                            run_id=input_data.run_id,
                         )
                     )
                     yield encoder.encode(
@@ -742,18 +747,20 @@ def _add_kaboo_endpoint(
                     ]
                     run_id = input_data.run_id or str(uuid.uuid4())
 
-                    async def replay_interrupt() -> AsyncIterator[bytes]:
+                    async def replay_interrupt() -> AsyncIterator[str]:
                         yield encoder.encode(
                             RunStartedEvent(
-                                type=AGUIEventType.RUN_STARTED, threadId=thread_id, runId=run_id
+                                type=AGUIEventType.RUN_STARTED, thread_id=thread_id, run_id=run_id
                             )
                         )
                         yield encoder.encode(
                             RunFinishedEvent(
                                 type=AGUIEventType.RUN_FINISHED,
-                                threadId=thread_id,
-                                runId=run_id,
-                                outcome={"type": "interrupt", "interrupts": agui_interrupts},
+                                thread_id=thread_id,
+                                run_id=run_id,
+                                outcome=RunFinishedInterruptOutcome.model_validate(
+                                    {"interrupts": agui_interrupts}
+                                ),
                             )
                         )
 
@@ -775,10 +782,10 @@ def _add_kaboo_endpoint(
             logger.error("refusing malformed transcript: %s", repairs.residual)
             run_id = input_data.run_id or str(uuid.uuid4())
 
-            async def malformed_gen() -> AsyncIterator[bytes]:
+            async def malformed_gen() -> AsyncIterator[str]:
                 yield encoder.encode(
                     RunStartedEvent(
-                        type=AGUIEventType.RUN_STARTED, threadId=thread_id, runId=run_id
+                        type=AGUIEventType.RUN_STARTED, thread_id=thread_id, run_id=run_id
                     )
                 )
                 yield encoder.encode(

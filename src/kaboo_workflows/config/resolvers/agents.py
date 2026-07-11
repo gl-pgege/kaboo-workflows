@@ -124,8 +124,8 @@ def build_agent_from_def(
 
     # 6b. Resolve interrupt configuration
     agent_kwargs = dict(agent_def.agent_kwargs)
-    if agent_def.interrupt is not None and agent_def.interrupt is not False:
-        interrupt = agent_def.interrupt
+    interrupt = agent_def.interrupt
+    if interrupt is not None and not isinstance(interrupt, bool):
         if interrupt.tools:
             hooks.append(InterruptHook(tools=interrupt.tools, agent_name=name))
         if interrupt.ask_user:
@@ -181,7 +181,7 @@ def build_agent_from_def(
     # here lets the AG-UI adapter forward them so interrupt/HITL hooks fire on
     # the executing per-thread clone, not just this blueprint. See
     # ``get_agent_hook_providers`` and ``create_agui_app``.
-    agent._kaboo_hook_providers = list(all_hooks)  # type: ignore[attr-defined]
+    setattr(agent, "_kaboo_hook_providers", list(all_hooks))
 
     return agent
 
