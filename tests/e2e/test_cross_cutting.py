@@ -11,7 +11,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from ag_ui.core import EventType as AGUIEventType
 
 from .harness import Pipeline, run_pipeline
 

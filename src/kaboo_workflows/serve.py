@@ -29,15 +29,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8080, help="Bind port (default: 8080)")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
     parser.add_argument("--log-level", default="INFO", help="Log level (default: INFO)")
-    parser.add_argument(
-        "--endpoint", default="/invocations", help="AG-UI agent endpoint path"
-    )
-    parser.add_argument(
-        "--ping-path", default="/ping", help="Health check path ('' to disable)"
-    )
-    parser.add_argument(
-        "--activity-path", default="/activity-stream", help="Activity SSE stream path"
-    )
+    parser.add_argument("--endpoint", default="/invocations", help="AG-UI agent endpoint path")
+    parser.add_argument("--ping-path", default="/ping", help="Health check path ('' to disable)")
     parser.add_argument(
         "--cors-origin",
         action="append",
@@ -50,7 +43,9 @@ def main() -> None:
 
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
     handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s", datefmt="%H:%M:%S"))
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
+    )
     for name in ("kaboo_workflows",):
         pkg_logger = logging.getLogger(name)
         pkg_logger.setLevel(log_level)
@@ -60,7 +55,6 @@ def main() -> None:
         args.config,
         endpoint=args.endpoint,
         ping_path=args.ping_path or None,
-        activity_path=args.activity_path,
         cors_origins=args.cors_origins,
     )
     uvicorn.run(app, host=args.host, port=args.port)

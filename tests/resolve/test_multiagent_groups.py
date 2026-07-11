@@ -136,7 +136,7 @@ def test_nested_delegate_entry_collapses_children_not_orphaned():
     assert groups["lead"][0] == "coordinator.research_team"
     # child parents to the EMITTED orchestration group, not `...research_team.lead`
     assert groups["field_researcher"][0] == "coordinator.research_team.field_researcher"
-    assert _parents_all_exist(groups) == []
+    assert _orphans(config, groups) == []
 
 
 def test_delegate_targeting_swarm_no_double_prefix():
@@ -156,7 +156,7 @@ def test_delegate_targeting_swarm_no_double_prefix():
     assert groups["sw"][0] == "mgr.sw"
     assert groups["p"][0] == "mgr.sw.p"
     assert groups["w"][0] == "mgr.sw.w"
-    assert _parents_all_exist(groups) == []
+    assert _orphans(config, groups) == []
 
 
 def test_delegate_nested_in_graph_collapses_entry():
@@ -176,7 +176,7 @@ def test_delegate_nested_in_graph_collapses_entry():
     assert groups["lead"][0] == "pipe.team"
     assert groups["helper"][0] == "pipe.team.helper"
     assert groups["ce"][0] == "pipe.ce"
-    assert _parents_all_exist(groups) == []
+    assert _orphans(config, groups) == []
 
 
 def test_chat_output_resolves_explicit_swarm_node():

@@ -63,6 +63,5 @@ def build_delegate_schema_prompt(
     return (
         "\n\n--- Delegate Agent Output Schemas ---\n"
         "The following agents you can delegate to return structured JSON responses. "
-        "Use these schemas to understand the data you will receive.\n\n"
-        + "\n\n".join(sections)
+        "Use these schemas to understand the data you will receive.\n\n" + "\n\n".join(sections)
     )

@@ -12,14 +12,13 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-import pytest
 from ag_ui.core import EventType
 from strands import Agent
 from strands.multiagent import GraphBuilder, Swarm
 
 from kaboo_workflows._context import HistoryExchange
 from kaboo_workflows.adapters import _multiagent as ma
-from kaboo_workflows.adapters._multiagent import StrandsMultiAgent, _DONE
+from kaboo_workflows.adapters._multiagent import _DONE, StrandsMultiAgent
 from tests.fakes.strands import FakeModel
 
 
@@ -184,9 +183,7 @@ def test_build_resume_responses_maps_pending_interrupts(monkeypatch):
     responses = ma._build_resume_responses(
         orchestrator, [{"interruptId": "i1", "status": "resolved", "payload": {"ok": True}}]
     )
-    assert responses == [
-        {"interruptResponse": {"interruptId": "i1", "response": {"ok": True}}}
-    ]
+    assert responses == [{"interruptResponse": {"interruptId": "i1", "response": {"ok": True}}}]
 
 
 def test_build_resume_responses_defaults_unaddressed_to_cancelled(monkeypatch):

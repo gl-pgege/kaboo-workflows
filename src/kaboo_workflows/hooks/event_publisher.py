@@ -136,7 +136,9 @@ def _extract_incoming_task(messages: Any, max_len: int = 400) -> str | None:
         has_tool_result = any(isinstance(b, dict) and "toolResult" in b for b in blocks)
         if has_tool_result:
             continue
-        texts = [b["text"] for b in blocks if isinstance(b, dict) and isinstance(b.get("text"), str)]
+        texts = [
+            b["text"] for b in blocks if isinstance(b, dict) and isinstance(b.get("text"), str)
+        ]
         text = "\n".join(t for t in texts if t.strip()).strip()
         if not text:
             continue
@@ -155,7 +157,7 @@ def _pick_task_line(text: str) -> str:
         idx = text.find(label)
         if idx == -1:
             continue
-        section = text[idx + len(label):]
+        section = text[idx + len(label) :]
         section = section.split("\n\n", 1)[0]
         section = section.strip()
         if section:
@@ -305,19 +307,21 @@ class EventPublisher(HookProvider):
                 StreamEvent(
                     type=EventType.STREAM_GROUP_START,
                     agent_name=self._agent_name,
-                    data=self._enrich({
-                        "parent_group": parent,
-                        # The tool-call id the coordinator used to delegate to this
-                        # agent. Stable key for correlating the inline card in the
-                        # UI with this group (see delegation_context / _activity).
-                        "tool_call_id": get_delegation_id(),
-                        # The task this agent was handed (its latest human/handoff
-                        # message), shown on the card; and whether this agent's text
-                        # IS the chat reply (so the UI suppresses only its duplicate).
-                        "task": task,
-                        "is_chat_reply": self._is_chat_reply,
-                        "inline_chat_owner": self._inline_chat_owner,
-                    }),
+                    data=self._enrich(
+                        {
+                            "parent_group": parent,
+                            # The tool-call id the coordinator used to delegate to this
+                            # agent. Stable key for correlating the inline card in the
+                            # UI with this group (see delegation_context / _activity).
+                            "tool_call_id": get_delegation_id(),
+                            # The task this agent was handed (its latest human/handoff
+                            # message), shown on the card; and whether this agent's text
+                            # IS the chat reply (so the UI suppresses only its duplicate).
+                            "task": task,
+                            "is_chat_reply": self._is_chat_reply,
+                            "inline_chat_owner": self._inline_chat_owner,
+                        }
+                    ),
                 ),
             )
         self._callback(
@@ -341,12 +345,14 @@ class EventPublisher(HookProvider):
             StreamEvent(
                 type=EventType.TOOL_START,
                 agent_name=self._agent_name,
-                data=self._enrich({
-                    "tool_name": raw_name,
-                    "tool_label": tool_label,
-                    "tool_use_id": tool_use_id,
-                    "tool_input": event.tool_use.get("input", {}),
-                }),
+                data=self._enrich(
+                    {
+                        "tool_name": raw_name,
+                        "tool_label": tool_label,
+                        "tool_use_id": tool_use_id,
+                        "tool_input": event.tool_use.get("input", {}),
+                    }
+                ),
             ),
         )
 
@@ -361,20 +367,25 @@ class EventPublisher(HookProvider):
 
         logger.debug(
             "TOOL_END agent=%s tool=%s tool_use_id=%s status=%s",
-            self._agent_name, raw_name, tool_use_id, status,
+            self._agent_name,
+            raw_name,
+            tool_use_id,
+            status,
         )
         self._callback(
             StreamEvent(
                 type=EventType.TOOL_END,
                 agent_name=self._agent_name,
-                data=self._enrich({
-                    "tool_name": raw_name,
-                    "tool_label": tool_label,
-                    "tool_use_id": tool_use_id,
-                    "status": status,
-                    "error": str(event.exception) if event.exception else None,
-                    "tool_result": _extract_result_text(event.result, self._max_result_len),
-                }),
+                data=self._enrich(
+                    {
+                        "tool_name": raw_name,
+                        "tool_label": tool_label,
+                        "tool_use_id": tool_use_id,
+                        "status": status,
+                        "error": str(event.exception) if event.exception else None,
+                        "tool_result": _extract_result_text(event.result, self._max_result_len),
+                    }
+                ),
             ),
         )
 
@@ -402,11 +413,13 @@ class EventPublisher(HookProvider):
                     StreamEvent(
                         type=EventType.INTERRUPT,
                         agent_name=self._agent_name,
-                        data=self._enrich({
-                            "interrupt_id": interrupt.id,
-                            "name": interrupt.name,
-                            "reason": interrupt.reason,
-                        }),
+                        data=self._enrich(
+                            {
+                                "interrupt_id": interrupt.id,
+                                "name": interrupt.name,
+                                "reason": interrupt.reason,
+                            }
+                        ),
                     ),
                 )
             return
@@ -415,22 +428,24 @@ class EventPublisher(HookProvider):
         invocation = metrics.latest_agent_invocation
         usage = invocation.usage if invocation else metrics.accumulated_usage
 
-        data: dict[str, Any] = self._enrich({
-            "usage": {
-                "input_tokens": usage.get("inputTokens", 0),
-                "output_tokens": usage.get("outputTokens", 0),
-                "total_tokens": usage.get("totalTokens", 0),
-            },
-            "text": str(result) if result is not None else "",
-            "message": result.message if result is not None else {},
-        })
+        data: dict[str, Any] = self._enrich(
+            {
+                "usage": {
+                    "input_tokens": usage.get("inputTokens", 0),
+                    "output_tokens": usage.get("outputTokens", 0),
+                    "total_tokens": usage.get("totalTokens", 0),
+                },
+                "text": str(result) if result is not None else "",
+                "message": result.message if result is not None else {},
+            }
+        )
 
         structured = getattr(result, "structured_output", None) if result is not None else None
         if structured is not None:
             try:
                 data["structured_output"] = structured.model_dump()
                 data["output_schema_name"] = type(structured).__name__
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
         self._callback(
@@ -467,10 +482,12 @@ class EventPublisher(HookProvider):
             StreamEvent(
                 type=EventType.ERROR,
                 agent_name=self._agent_name,
-                data=self._enrich({
-                    "text": f"{event.exception}",
-                    "exception_type": type(event.exception).__name__,
-                }),
+                data=self._enrich(
+                    {
+                        "text": f"{event.exception}",
+                        "exception_type": type(event.exception).__name__,
+                    }
+                ),
             ),
         )
 
@@ -567,11 +584,13 @@ class EventPublisher(HookProvider):
                     StreamEvent(
                         type=EventType.HANDOFF,
                         agent_name=self._agent_name,
-                        data=self._enrich({
-                            "from_node_ids": kwargs.get("from_node_ids", []),
-                            "to_node_ids": kwargs.get("to_node_ids", []),
-                            "message": kwargs.get("message"),
-                        }),
+                        data=self._enrich(
+                            {
+                                "from_node_ids": kwargs.get("from_node_ids", []),
+                                "to_node_ids": kwargs.get("to_node_ids", []),
+                                "message": kwargs.get("message"),
+                            }
+                        ),
                     )
                 )
 

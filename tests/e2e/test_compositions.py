@@ -18,9 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from ag_ui.core import EventType as AGUIEventType
 
-from .harness import Pipeline, TurnResult, run_pipeline
+from .harness import TurnResult, run_pipeline
 
 CONFIGS = Path(__file__).parent / "configs"
 

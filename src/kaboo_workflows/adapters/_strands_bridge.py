@@ -61,9 +61,7 @@ def pending_interrupts(strands_agent: Any, *, unresolved_only: bool = True) -> d
     if istate is None or not getattr(istate, "interrupts", None):
         return {}
     if unresolved_only:
-        return {
-            iid: intr for iid, intr in istate.interrupts.items() if intr.response is None
-        }
+        return {iid: intr for iid, intr in istate.interrupts.items() if intr.response is None}
     return dict(istate.interrupts)
 
 

@@ -9,6 +9,7 @@ Provides helpers for:
 
 from __future__ import annotations
 
+from .ask_user import ask_user
 from .extractors import serialize_multiagent_result
 from .loaders import (
     load_tool_function,
@@ -18,7 +19,6 @@ from .loaders import (
     resolve_tool_spec,
     resolve_tool_specs,
 )
-from .ask_user import ask_user
 from .wrappers import (
     node_as_async_tool,
     node_as_tool,

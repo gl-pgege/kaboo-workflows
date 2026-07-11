@@ -157,18 +157,12 @@ def _auto_resolve_stream_groups(
         drilling into the orchestration).
         """
         member_def = app_config.orchestrations.get(member)
-        entry = (
-            member_def.entry_name
-            if isinstance(member_def, DelegateOrchestrationDef)
-            else None
-        )
+        entry = member_def.entry_name if isinstance(member_def, DelegateOrchestrationDef) else None
         target = f"{prefix}.{member}"
         groups[member] = (target, member.replace("_", " ").title())
         members.append(member)
         for inner in orch_members.get(member, []):
-            old_group, old_title = groups.get(
-                inner, (inner, inner.replace("_", " ").title())
-            )
+            old_group, old_title = groups.get(inner, (inner, inner.replace("_", " ").title()))
             if entry is not None and (old_group == entry or old_group.startswith(f"{entry}.")):
                 new_group = target + old_group[len(entry) :]
             elif old_group == member or old_group.startswith(f"{member}."):
@@ -230,16 +224,13 @@ def _auto_resolve_stream_groups(
                 # swarm/graph connection already embeds its own name, so re-root it
                 # under the delegating entry's group without doubling the segment.
                 inner_entry = (
-                    orch_cfg.entry_name
-                    if isinstance(orch_cfg, DelegateOrchestrationDef)
-                    else None
+                    orch_cfg.entry_name if isinstance(orch_cfg, DelegateOrchestrationDef) else None
                 )
                 for inner_name in orch_members.get(conn.agent, []):
                     if inner_name in groups:
                         old_group, old_title = groups[inner_name]
                         if inner_entry is not None and (
-                            old_group == inner_entry
-                            or old_group.startswith(f"{inner_entry}.")
+                            old_group == inner_entry or old_group.startswith(f"{inner_entry}.")
                         ):
                             new_group = orch_group_path + old_group[len(inner_entry) :]
                         elif old_group == conn.agent or old_group.startswith(f"{conn.agent}."):

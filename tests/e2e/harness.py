@@ -96,9 +96,7 @@ class TurnResult:
         return self.groups[group_id]
 
     def children_of(self, parent: str | None) -> list[str]:
-        return sorted(
-            gid for gid, g in self.groups.items() if g.get("parentGroup") == parent
-        )
+        return sorted(gid for gid, g in self.groups.items() if g.get("parentGroup") == parent)
 
 
 class Pipeline:
@@ -201,7 +199,7 @@ class Pipeline:
                 continue
             events.append(item)
 
-        groups = self.registry._snapshot(thread_id).get("groups", {})
+        groups = self.registry.snapshot(thread_id).get("groups", {})
         # Deep-ish copy of the mutable group dicts so later turns can't rewrite
         # what a prior TurnResult observed.
         snapshot = {gid: dict(g) for gid, g in groups.items()}

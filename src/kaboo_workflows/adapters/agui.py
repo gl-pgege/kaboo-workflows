@@ -4,10 +4,11 @@ Bridges kaboo-workflows (YAML -> strands.Agent) with ag-ui-strands
 (strands.Agent -> AG-UI SSE). This is the primary serving mechanism
 for kaboo-workflows, producing CopilotKit-compatible event streams.
 
-Provides a ``/activity-stream`` SSE endpoint for real-time hierarchical
-sub-agent visibility that frontends can subscribe to directly. Activity is
-scoped per ``thread_id``; a client may pass ``?threadId=<id>`` to isolate a
-single conversation, or omit it to receive a merged (single-tenant) view.
+Hierarchical sub-agent activity rides the same run stream: it is emitted as
+AG-UI ``ACTIVITY_SNAPSHOT`` events interleaved on the ``/invocations`` endpoint
+(scoped per ``thread_id``), so a single canonical stream carries everything and
+frontends read it via the AG-UI agent subscription — there is no separate
+activity SSE endpoint.
 
 Usage::
 
@@ -27,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ag_ui.core import (
+    ActivitySnapshotEvent,
     RunAgentInput,
     RunErrorEvent,
     RunFinishedEvent,
@@ -181,13 +183,9 @@ def _build_resume_responses(
         else:
             # No resume entry addressed this interrupt. Never silently approve —
             # default to a safe rejection so an unhandled approval can't execute.
-            logger.warning(
-                "resume did not address interrupt %s; defaulting to cancelled", intr_id
-            )
+            logger.warning("resume did not address interrupt %s; defaulting to cancelled", intr_id)
             user_resp = {"status": "cancelled"}
-        responses.append(
-            {"interruptResponse": {"interruptId": intr_id, "response": user_resp}}
-        )
+        responses.append({"interruptResponse": {"interruptId": intr_id, "response": user_resp}})
     return responses
 
 
@@ -261,9 +259,7 @@ def _close_abandoned_tool_calls(input_data: RunAgentInput) -> list[str]:
     """
     messages = list(input_data.messages or [])
     result_ids = {
-        getattr(m, "tool_call_id", None)
-        for m in messages
-        if getattr(m, "role", None) == "tool"
+        getattr(m, "tool_call_id", None) for m in messages if getattr(m, "role", None) == "tool"
     }
     closed: list[str] = []
     repaired: list[Any] = []
@@ -328,11 +324,7 @@ def _collapse_duplicate_tool_results(input_data: RunAgentInput) -> dict[str, int
     dropped: dict[str, int] = {}
     for i, msg in enumerate(messages):
         tcid = getattr(msg, "tool_call_id", None)
-        if (
-            getattr(msg, "role", None) == "tool"
-            and tcid in dupes
-            and i != last_index[tcid]
-        ):
+        if getattr(msg, "role", None) == "tool" and tcid in dupes and i != last_index[tcid]:
             dropped[tcid] = dropped.get(tcid, 0) + 1
             continue
         kept.append(msg)
@@ -502,14 +494,17 @@ def _make_activity_pump(
     event_queue: EventQueue,
     registry: ActivityRegistry,
     entry_name: str,
+    merged: asyncio.Queue[Any],
     *,
     entry_inline: bool = False,
 ) -> Any:
     """Build a task coroutine that folds queue events into the registry.
 
     Events are routed by the ``thread_id`` stamped on them (via contextvars) so
-    the correct conversation's ``/activity-stream`` receives them regardless of
-    which concurrent request task drained the shared queue.
+    the correct conversation's activity is updated regardless of which concurrent
+    request task drained the shared queue. Whenever a folded event changes the
+    state, a fresh ``ACTIVITY_SNAPSHOT`` is put onto *merged* so it interleaves
+    live on the run's ``/invocations`` stream.
 
     The entry node's events are dropped by default because its text is the chat
     reply (rendered by the host) and re-surfacing it would duplicate the answer.
@@ -531,7 +526,15 @@ def _make_activity_pump(
             if event.agent_name == entry_name and not entry_inline:
                 continue
             thread_id = event.data.get("thread_id") or bridge.DEFAULT_THREAD
-            registry.apply(thread_id, event)
+            if registry.apply(thread_id, event):
+                await merged.put(
+                    ActivitySnapshotEvent(
+                        messageId=f"kaboo.activity.{thread_id}",
+                        activityType="kaboo.activity",
+                        content=registry.snapshot(thread_id),
+                        replace=True,
+                    )
+                )
 
     return pump_activity
 
@@ -596,7 +599,6 @@ def _add_kaboo_endpoint(
     registry: ActivityRegistry,
     entry_name: str,
     path: str,
-    activity_path: str,
     *,
     entry_inline: bool = False,
 ) -> None:
@@ -624,7 +626,7 @@ def _add_kaboo_endpoint(
 
         merged: asyncio.Queue[Any] = asyncio.Queue()
         activity_pump = _make_activity_pump(
-            event_queue, registry, entry_name, entry_inline=entry_inline
+            event_queue, registry, entry_name, merged, entry_inline=entry_inline
         )
 
         # First-class Swarm/Graph entry: kaboo owns the run loop (ag-ui-strands
@@ -803,41 +805,12 @@ def _add_kaboo_endpoint(
             media_type=encoder.get_content_type(),
         )
 
-    @app.get(activity_path)
-    async def activity_stream(request: Request) -> StreamingResponse:
-        thread_id = request.query_params.get("threadId")
-        q, initial = registry.subscribe(thread_id)
-
-        async def generate() -> AsyncIterator[str]:
-            yield initial
-            try:
-                while True:
-                    try:
-                        yield await asyncio.wait_for(q.get(), timeout=15.0)
-                    except (TimeoutError, asyncio.TimeoutError):
-                        yield ": keepalive\n\n"
-            except asyncio.CancelledError:
-                pass
-            finally:
-                registry.unsubscribe(thread_id, q)
-
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
 
 def create_agui_app(
     config_path: str | Path,
     *,
     endpoint: str = "/invocations",
     ping_path: str | None = "/ping",
-    activity_path: str = "/activity-stream",
     cors_origins: list[str] | None = None,
     cors_allow_credentials: bool = True,
 ) -> FastAPI:
@@ -847,7 +820,6 @@ def create_agui_app(
         config_path: Path to the kaboo-workflows YAML config.
         endpoint: Path for the AG-UI agent endpoint.
         ping_path: Path for the health check endpoint. ``None`` to disable.
-        activity_path: Path for the hierarchical activity SSE stream.
         cors_origins: Allowed CORS origins. Defaults to ``["*"]``. Pass an
             explicit allow-list for production deployments.
         cors_allow_credentials: Whether to allow credentialed CORS requests.
@@ -926,7 +898,12 @@ def create_agui_app(
     )
 
     _add_kaboo_endpoint(
-        app, agui_agent, event_queue, registry, entry_name, endpoint, activity_path,
+        app,
+        agui_agent,
+        event_queue,
+        registry,
+        entry_name,
+        endpoint,
         entry_inline=entry_inline,
     )
     if ping_path is not None:

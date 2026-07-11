@@ -233,9 +233,7 @@ def build_delegate(
     schema_supplement = build_delegate_schema_prompt(config.connections, agent_defs)
     if schema_supplement:
         base_prompt = entry_def.system_prompt or ""
-        entry_def = entry_def.model_copy(
-            update={"system_prompt": base_prompt + schema_supplement}
-        )
+        entry_def = entry_def.model_copy(update={"system_prompt": base_prompt + schema_supplement})
 
     # Build a NEW agent from the (possibly overridden) blueprint + delegate tools.
     agent = build_agent_from_def(

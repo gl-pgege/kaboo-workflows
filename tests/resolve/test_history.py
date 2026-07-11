@@ -79,9 +79,7 @@ def test_history_group_shares_one_key() -> None:
 def test_chat_owner_is_delegate_entry_blueprint() -> None:
     cfg = app_config(
         agents={"coordinator": agent_def(), "worker": agent_def()},
-        orchestrations={
-            "pipeline": delegate_orchestration("coordinator", {"worker": "do work"})
-        },
+        orchestrations={"pipeline": delegate_orchestration("coordinator", {"worker": "do work"})},
         entry="pipeline",
     )
 

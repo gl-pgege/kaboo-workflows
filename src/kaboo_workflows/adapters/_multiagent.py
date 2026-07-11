@@ -7,7 +7,8 @@ This module is kaboo's own multi-agent run loop: it drives
 ``orchestrator.stream_async(task)`` directly, streams a designated node's text
 as the assistant reply, maps orchestrator-level interrupts to AG-UI HITL, and
 emits the terminal result — while the shared ``EventPublisher``/``EventQueue``
-(already wired onto every member) continues to feed ``/activity-stream``.
+(already wired onto every member) continues to feed the ``ACTIVITY_SNAPSHOT``
+events interleaved on the run stream.
 
 Chat voice: only the ``chat_output`` node's text becomes the chat bubble. Every
 member run (including ``chat_output``) still renders as an activity card, so the
@@ -53,7 +54,7 @@ class StrandsMultiAgent:
     """Drive a Swarm/Graph orchestration as a first-class AG-UI chat entry.
 
     A single wired orchestrator instance is shared across threads (its members
-    carry the ``EventPublisher`` hooks that power ``/activity-stream``, so a
+    carry the ``EventPublisher`` hooks that power the activity snapshots, so a
     fresh per-thread instance would lose that wiring). strands resets member
     state per run and restores it from the interrupt context on resume, so
     sequential turns on one thread are correct; concurrent runs across
@@ -115,9 +116,7 @@ class StrandsMultiAgent:
 
         try:
             await merged.put(
-                RunStartedEvent(
-                    type=AGUIEventType.RUN_STARTED, threadId=thread_id, runId=run_id
-                )
+                RunStartedEvent(type=AGUIEventType.RUN_STARTED, threadId=thread_id, runId=run_id)
             )
 
             if resume_entries is not None:
@@ -144,8 +143,7 @@ class StrandsMultiAgent:
                     if delta:
                         if node_id not in node_text:
                             logger.info(
-                                "multiagent.node_stream first-delta node_id=%s "
-                                "is_chat_output=%s",
+                                "multiagent.node_stream first-delta node_id=%s is_chat_output=%s",
                                 node_id,
                                 node_id == self.chat_output,
                             )
@@ -188,18 +186,14 @@ class StrandsMultiAgent:
 
             if text_started:
                 await merged.put(
-                    TextMessageEndEvent(
-                        type=AGUIEventType.TEXT_MESSAGE_END, messageId=message_id
-                    )
+                    TextMessageEndEvent(type=AGUIEventType.TEXT_MESSAGE_END, messageId=message_id)
                 )
 
             # History write-back so members' client-driven transcripts persist.
             snapshot = _history_snapshot(input_data, exchange)
             if snapshot is not None:
                 await merged.put(
-                    StateSnapshotEvent(
-                        type=AGUIEventType.STATE_SNAPSHOT, snapshot=snapshot
-                    )
+                    StateSnapshotEvent(type=AGUIEventType.STATE_SNAPSHOT, snapshot=snapshot)
                 )
 
             if self.is_interrupt_active():
@@ -247,16 +241,12 @@ class StrandsMultiAgent:
                     )
 
             await merged.put(
-                RunFinishedEvent(
-                    type=AGUIEventType.RUN_FINISHED, threadId=thread_id, runId=run_id
-                )
+                RunFinishedEvent(type=AGUIEventType.RUN_FINISHED, threadId=thread_id, runId=run_id)
             )
         except Exception as exc:  # noqa: BLE001 - surface any run failure as RUN_ERROR
             logger.error("multi-agent run failed: %s", exc, exc_info=True)
             await merged.put(
-                RunErrorEvent(
-                    type=AGUIEventType.RUN_ERROR, message=str(exc), code="AGENT_ERROR"
-                )
+                RunErrorEvent(type=AGUIEventType.RUN_ERROR, message=str(exc), code="AGENT_ERROR")
             )
         finally:
             await merged.put(_DONE)
@@ -300,13 +290,9 @@ def _build_resume_responses(
         if intr_id in lookup:
             user_resp = lookup[intr_id]
         else:
-            logger.warning(
-                "resume did not address interrupt %s; defaulting to cancelled", intr_id
-            )
+            logger.warning("resume did not address interrupt %s; defaulting to cancelled", intr_id)
             user_resp = {"status": "cancelled"}
-        responses.append(
-            {"interruptResponse": {"interruptId": intr_id, "response": user_resp}}
-        )
+        responses.append({"interruptResponse": {"interruptId": intr_id, "response": user_resp}})
     return responses
 
 

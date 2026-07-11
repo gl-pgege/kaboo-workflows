@@ -1,19 +1,14 @@
-"""Per-conversation activity registry for the ``/activity-stream`` endpoint.
+"""Per-conversation activity state builder.
 
-Replaces the previous process-global ``_activity_state`` / ``_activity_subscribers``
-so that concurrent conversations in a single self-hosted process no longer
-clobber one another. State and subscribers are keyed by ``thread_id``.
-
-A subscriber may also register with ``thread_id=None`` to receive a merged view
-of every conversation — this is the backward-compatible single-tenant mode used
-when a client connects to ``/activity-stream`` without a ``threadId`` query
-parameter.
+Folds kaboo ``StreamEvent``s into a hierarchical activity snapshot
+(``{groups: {...}}``) keyed by ``thread_id``. The snapshot is emitted onto the
+AG-UI run stream as ``ACTIVITY_SNAPSHOT`` events (see ``agui.py``), so there is
+no separate SSE endpoint or subscriber machinery here — this is state only.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
+import copy
 import logging
 import threading
 from typing import Any
@@ -31,7 +26,7 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
     coalesced into a single text entry.
 
     Returns:
-        ``True`` if the state changed (and subscribers should be notified),
+        ``True`` if the state changed (and a fresh snapshot should be emitted),
         ``False`` for events that carry no stream group (nothing to render).
     """
     group = event.data.get("stream_group", "")
@@ -138,77 +133,40 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
 
 
 class ActivityRegistry:
-    """Thread-scoped store of hierarchical activity + SSE subscribers.
+    """Thread-scoped builder of hierarchical activity state.
 
     One instance is created per :func:`create_agui_app` and captured in the
     endpoint closures. All mutation is guarded by a lock so concurrent request
-    tasks and the ``/activity-stream`` generators stay consistent.
+    tasks stay consistent. Snapshots are read via :meth:`snapshot` and emitted
+    on the run stream as ``ACTIVITY_SNAPSHOT`` events.
     """
-
-    _ALL = None
 
     def __init__(self) -> None:
         self._states: dict[str, dict[str, Any]] = {}
-        self._subscribers: dict[str | None, list[asyncio.Queue[str]]] = {}
         self._lock = threading.Lock()
-
-    # -- state -------------------------------------------------------------
 
     def _state_for(self, thread_id: str) -> dict[str, Any]:
         return self._states.setdefault(thread_id, {"groups": {}})
 
-    def _snapshot(self, thread_id: str | None) -> dict[str, Any]:
-        """Return the current state for *thread_id* (merged view for ``None``)."""
-        if thread_id is None:
-            merged: dict[str, Any] = {"groups": {}}
-            for st in self._states.values():
-                merged["groups"].update(st["groups"])
-            return merged
-        return self._states.get(thread_id, {"groups": {}})
+    def apply(self, thread_id: str, event: StreamEvent) -> bool:
+        """Fold *event* into *thread_id*'s state.
 
-    def apply(self, thread_id: str, event: StreamEvent) -> None:
-        """Fold *event* into *thread_id*'s state and notify subscribers."""
+        Returns ``True`` when the state changed (caller should emit a fresh
+        snapshot), ``False`` for events that carry no stream group.
+        """
         with self._lock:
             state = self._state_for(thread_id)
-            changed = _update_activity_state(state, event)
-            if not changed:
-                return
-            payload = f"data: {json.dumps(state)}\n\n"
-            all_payload = f"data: {json.dumps(self._snapshot(None))}\n\n"
-            thread_subs = list(self._subscribers.get(thread_id, []))
-            all_subs = list(self._subscribers.get(self._ALL, []))
-        self._deliver(thread_id, thread_subs, payload)
-        self._deliver(self._ALL, all_subs, all_payload)
+            return _update_activity_state(state, event)
 
-    # -- subscribers -------------------------------------------------------
+    def snapshot(self, thread_id: str) -> dict[str, Any]:
+        """Return a deep copy of the activity state for *thread_id* (``{groups: {...}}``).
 
-    def subscribe(self, thread_id: str | None) -> tuple[asyncio.Queue[str], str]:
-        """Register a subscriber. Returns the queue and an initial snapshot payload."""
-        q: asyncio.Queue[str] = asyncio.Queue(maxsize=200)
+        Deep-copied because the returned snapshot is encoded later on the SSE
+        loop, after the lock is released, while subsequent events may still be
+        mutating the live state.
+        """
         with self._lock:
-            self._subscribers.setdefault(thread_id, []).append(q)
-            initial = f"data: {json.dumps(self._snapshot(thread_id))}\n\n"
-        return q, initial
-
-    def unsubscribe(self, thread_id: str | None, q: asyncio.Queue[str]) -> None:
-        with self._lock:
-            subs = self._subscribers.get(thread_id)
-            if subs and q in subs:
-                subs.remove(q)
-
-    def _deliver(
-        self, thread_id: str | None, subs: list[asyncio.Queue[str]], payload: str
-    ) -> None:
-        dead: list[asyncio.Queue[str]] = []
-        for q in subs:
-            try:
-                q.put_nowait(payload)
-            except asyncio.QueueFull:
-                dead.append(q)
-        if dead:
-            with self._lock:
-                live = self._subscribers.get(thread_id)
-                if live:
-                    for q in dead:
-                        if q in live:
-                            live.remove(q)
+            state = self._states.get(thread_id)
+            if state is None:
+                return {"groups": {}}
+            return copy.deepcopy(state)

@@ -17,6 +17,9 @@ stay deterministic. Each step is one of:
   tool's first schema property; a dict is passed through. Delegate connections
   surface as tools named after the connection target, so ``{"tool": "analyst"}``
   triggers a delegation.
+- ``{"tools": [<tool-action>, ...]}`` — call several tools in ONE assistant
+  message (parallel tool calls), each with its own tool-use id. Used to drive
+  parallel gated tools / simultaneous interrupts in a single step.
 - ``{"handoff": "<agent>", "message": "<text>"}`` — sugar for the swarm
   ``handoff_to_agent`` tool; fills the target/message against its live schema.
 - ``{"text": "<final answer>"}`` — stream text and end the turn.
@@ -64,7 +67,11 @@ class ScriptedModel(Model):
         if _is_fresh_human_turn(messages):
             self._step = 0
 
-        action = self._script[self._step] if self._step < len(self._script) else {"text": self._final_text}
+        action = (
+            self._script[self._step]
+            if self._step < len(self._script)
+            else {"text": self._final_text}
+        )
         self._step += 1
 
         if "error" in action:
@@ -77,12 +84,36 @@ class ScriptedModel(Model):
             yield {"contentBlockDelta": {"delta": {"text": action["text"]}}}
             yield {"contentBlockStop": {}}
             yield {"messageStop": {"stopReason": "end_turn"}}
+        elif "tools" in action:
+            for sub in action["tools"]:
+                spec = _resolve_tool_spec(sub, tool_specs or [])
+                tool_input = _build_tool_input(sub, spec)
+                yield {
+                    "contentBlockStart": {
+                        "start": {
+                            "toolUse": {
+                                "name": spec["name"],
+                                "toolUseId": f"call-{uuid.uuid4().hex[:8]}",
+                            }
+                        }
+                    }
+                }
+                yield {
+                    "contentBlockDelta": {"delta": {"toolUse": {"input": json.dumps(tool_input)}}}
+                }
+                yield {"contentBlockStop": {}}
+            yield {"messageStop": {"stopReason": "tool_use"}}
         else:
             spec = _resolve_tool_spec(action, tool_specs or [])
             tool_input = _build_tool_input(action, spec)
             yield {
                 "contentBlockStart": {
-                    "start": {"toolUse": {"name": spec["name"], "toolUseId": f"call-{uuid.uuid4().hex[:8]}"}}
+                    "start": {
+                        "toolUse": {
+                            "name": spec["name"],
+                            "toolUseId": f"call-{uuid.uuid4().hex[:8]}",
+                        }
+                    }
                 }
             }
             yield {"contentBlockDelta": {"delta": {"toolUse": {"input": json.dumps(tool_input)}}}}
