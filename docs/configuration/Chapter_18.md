@@ -15,6 +15,7 @@ orchestrations: {}    # Named orchestration definitions
 mcp_servers: {}       # Named MCP server definitions
 mcp_clients: {}       # Named MCP client connections
 session_manager: {}   # Global session manager
+attachments: {}       # Global reference/attachment policy (AttachmentsDef)
 entry: "name"         # Required: entry point agent or orchestration
 log_level: "WARNING"  # Optional: DEBUG, INFO, WARNING, ERROR
 ```
@@ -45,6 +46,27 @@ agents:
     tool_labels: {}                # Tool name -> display label mapping
     conversation_manager: null     # ConversationManagerDef
     session_manager: null          # Per-agent SessionManagerDef (overrides global)
+    attachments: null              # none | reference | inline | bool | {enabled, inline}
+```
+
+## AttachmentsDef
+
+```yaml
+attachments:
+  default: reference | none        # Baseline for agents without their own attachments:
+  tool: true                       # Expose list_references / fetch_attachment tools
+```
+
+Per-agent override on `AgentDef.attachments` (shorthands normalize to `{enabled, inline}`):
+
+```yaml
+agents:
+  vision:
+    attachments: inline            # manifest + inline media (ContentBlocks)
+  researcher:
+    attachments: reference         # manifest only (inherits if omitted)
+  writer:
+    attachments: none              # excluded from references
 ```
 
 ## HookDef
@@ -151,5 +173,7 @@ orchestrations:
 ```
 
 ---
+
+[Next: Chapter 19 — Attachments & Multimodal →](Chapter_19.md)
 
 **Bonus**: [Quick Recipes →](Quick_Recipes.md)

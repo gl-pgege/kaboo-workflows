@@ -164,6 +164,38 @@ class HistoryDef(BaseModel):
     group: str | None = None
 
 
+class AttachmentsDef(BaseModel):
+    """Global reference/attachment behavior.
+
+    References (file attachments and custom entities cited via ``@`` in the
+    frontend) are propagated to in-scope agents as a lightweight text manifest,
+    with an optional shared tool to fetch/resolve them on demand.
+
+    - ``default`` — baseline policy for agents that do not set their own
+      ``attachments:``. ``"reference"`` injects the manifest; ``"none"``
+      excludes agents by default.
+    - ``tool`` — expose the built-in ``list_references`` / ``fetch_attachment``
+      tools so in-scope agents can resolve a reference to text/bytes/URL.
+    """
+
+    default: Literal["reference", "none"] = "reference"
+    tool: bool = True
+
+
+class AgentAttachmentsDef(BaseModel):
+    """Per-agent reference policy (normalized form).
+
+    - ``enabled`` — whether this agent is in scope for references at all. When
+      ``False`` the agent receives no manifest (``attachments: none``).
+    - ``inline`` — whether the agent additionally receives resolved media as
+      strands ``ContentBlock``s so a vision/doc-capable model literally sees the
+      file (heavier; opt-in per agent).
+    """
+
+    enabled: bool = True
+    inline: bool = False
+
+
 class AgentDef(BaseModel):
     """Top-level agent definition.
 
@@ -214,6 +246,7 @@ class AgentDef(BaseModel):
     stream: StreamDef | None = None
     interrupt: InterruptDef | bool | None = None
     history: HistoryDef | bool | None = None
+    attachments: AgentAttachmentsDef | str | bool | None = None
     output_schema: str | None = None
 
     @model_validator(mode="after")
@@ -230,6 +263,30 @@ class AgentDef(BaseModel):
             self.history = HistoryDef()
         elif self.history is False:
             self.history = HistoryDef(enabled=False)
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_attachments(self) -> AgentDef:
+        """Normalize ``attachments:`` shorthand to a full AgentAttachmentsDef.
+
+        Accepts ``none``/``false`` (excluded), ``reference`` (manifest only),
+        ``inline``/``true`` (manifest + inline media), or a full mapping. Leaves
+        ``None`` untouched so the agent inherits the global default.
+        """
+        att = self.attachments
+        if att is None or isinstance(att, AgentAttachmentsDef):
+            return self
+        if att is False or att == "none":
+            self.attachments = AgentAttachmentsDef(enabled=False)
+        elif att is True or att == "inline":
+            self.attachments = AgentAttachmentsDef(enabled=True, inline=True)
+        elif att == "reference":
+            self.attachments = AgentAttachmentsDef(enabled=True, inline=False)
+        else:
+            raise ValueError(
+                f"Invalid attachments value {att!r}. Use 'none', 'reference', "
+                "'inline', a boolean, or a mapping like {inline: true}."
+            )
         return self
 
 
@@ -427,6 +484,8 @@ class AppConfig(BaseModel):
     ``False`` so sub-agents are stateless per run unless opted in. The entry
     agent is unaffected — its transcript is always the CopilotKit chat.
     """
+    attachments: AttachmentsDef = Field(default_factory=AttachmentsDef)
+    """Global reference/attachment policy (manifest + optional resolver tool)."""
     log_level: str = "WARNING"
 
     @model_validator(mode="after")

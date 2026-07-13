@@ -29,6 +29,7 @@
 - [Chapter 16: Name Sanitization — How Names Are Handled](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_16.md)
 - [Chapter 17: The Loading Pipeline — What Happens Under the Hood](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_17.md)
 - [Chapter 18: Full Reference — Every Field at a Glance](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_18.md)
+- [Chapter 19: Attachments & Multimodal — References for Every Agent](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Chapter_19.md)
 - [Quick Recipes](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/Quick_Recipes.md)
 - [YAML Configuration Guide](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/configuration/README.md)
 
@@ -61,5 +62,5 @@
 
 - [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) — CopilotKit runtime persistence
 - [kaboo-react](https://github.com/gl-pgege/kaboo-react) — agent-activity React UI
-- [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo) — runnable end-to-end reference
+- [kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo) — runnable end-to-end reference
 - [The kaboo stack](https://gl-pgege.github.io/kaboo-docs/) — umbrella landing

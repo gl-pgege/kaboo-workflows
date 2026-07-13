@@ -36,7 +36,7 @@ kaboo-workflows is the orchestration engine. It pairs with:
   Postgres `ThreadStore`s).
 - **[kaboo-react](https://github.com/gl-pgege/kaboo-react)** — React components
   for rendering agent activity.
-- **[kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-docs/tree/main/examples/kaboo-workflows-demo)** —
+- **[kaboo-workflows-demo](https://github.com/gl-pgege/kaboo-workflows-demo)** —
   a runnable, end-to-end reference wiring all three together.
 
 See [the kaboo stack](https://gl-pgege.github.io/kaboo-docs/) for the whole

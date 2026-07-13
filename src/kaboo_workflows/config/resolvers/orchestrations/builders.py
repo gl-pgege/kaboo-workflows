@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from strands.tools.mcp import MCPClient as StrandsMCPClient
 
     from ....types import Node
-    from ...schema import AgentDef, SessionManagerDef
+    from ...schema import AgentDef, AttachmentsDef, SessionManagerDef
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ class OrchestrationBuilder:
         *,
         global_session_manager_def: SessionManagerDef | None = None,
         session_id: str | None = None,
+        attachments: AttachmentsDef | None = None,
     ) -> None:
         """Initialize the OrchestrationBuilder.
 
@@ -74,10 +75,13 @@ class OrchestrationBuilder:
             session_id: Effective session id threaded down from ``load_session``.
                 Passed as ``session_id_override`` to every
                 ``resolve_session_manager`` call made by leaf builders.
+            attachments: Global reference/attachment policy, forwarded to the
+                forked delegate manager so it matches declared agents.
         """
         self._configs = configs
         self._global_sm_def = global_session_manager_def
         self._session_id = session_id
+        self._attachments = attachments
         self._nodes: dict[str, Node] = dict(agents)
         self._built: dict[str, Node] = {}
         self._agent_defs = agent_defs
@@ -131,6 +135,7 @@ class OrchestrationBuilder:
                 self._mcp_clients,
                 global_session_manager_def=self._global_sm_def,
                 session_id=self._session_id,
+                attachments=self._attachments,
             )
         if isinstance(cfg, SwarmOrchestrationDef):
             return build_swarm(
@@ -164,6 +169,7 @@ def build_delegate(
     *,
     global_session_manager_def: SessionManagerDef | None = None,
     session_id: str | None = None,
+    attachments: AttachmentsDef | None = None,
 ) -> Agent:
     """Build delegate orchestration: construct a new Agent with delegate tools.
 
@@ -185,6 +191,8 @@ def build_delegate(
             orchestration nor the entry agent declares a ``session_manager:``.
         session_id: Effective session id threaded down from ``load_session``.
             Passed as ``session_id_override`` to ``resolve_session_manager``.
+        attachments: Global reference/attachment policy applied to the forked
+            manager agent (so the delegate entry gets the same manifest/tools).
 
     Returns:
         A **new** Agent with delegate tools registered.
@@ -245,6 +253,7 @@ def build_delegate(
         session_id=session_id,
         extra_tools=delegate_tools,
         extra_hooks=orch_hooks,
+        attachments=attachments,
     )
 
     logger.info(

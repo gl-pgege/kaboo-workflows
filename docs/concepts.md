@@ -32,6 +32,7 @@ chapter in the [Configuration reference](configuration/README.md)):
 | `hooks` | Lifecycle hooks — event publishing, interrupts/HITL, guards. |
 | `mcp` | Model Context Protocol servers/clients, lifecycle-managed for you. |
 | `orchestrations` | How agents compose into a multi-agent system. |
+| `attachments` | How references (files + custom entities cited via `@`) reach agents. |
 | `entry` | The root agent or orchestration a run starts from. |
 
 ## Orchestration shapes
@@ -64,6 +65,17 @@ RUN_STARTED → TEXT_MESSAGE_* → TOOL_CALL_* → ACTIVITY_SNAPSHOT → RUN_FIN
 replay the whole stream. Human-in-the-loop pauses surface as interrupts on
 `RUN_FINISHED` and resume cleanly — see
 [human-in-the-loop](workflows/human-in-the-loop.md).
+
+## References & attachments
+
+Anything a user cites from the frontend with `@` — an uploaded file or a pointer
+to a custom entity (a table, a dashboard) — is a **reference**. The AG-UI layer
+gives inline media to the entry agent automatically; the `attachments:` config
+extends that to any agent in a pipeline via a lightweight **manifest**, an
+on-demand **tool** (`fetch_attachment` / `list_references`), and opt-in
+**inline** `ContentBlock`s for vision/doc-capable models. File attachments are
+resolved by the built-in tool; custom object kinds are resolved by your own MCP
+tool. See [Attachments & Multimodal](configuration/Chapter_19.md).
 
 ## Where to go next
 

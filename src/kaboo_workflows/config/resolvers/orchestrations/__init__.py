@@ -67,6 +67,7 @@ def resolve_orchestrations(
         mcp_clients,
         global_session_manager_def=global_session_manager_def,
         session_id=session_id,
+        attachments=config.attachments,
     ).build_all()
 
 

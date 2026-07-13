@@ -269,6 +269,7 @@ def load_session(
         global_session_manager_def=config.session_manager,
         session_id=effective_session_id,
         orchestration_agent_names=orchestration_agent_names,
+        attachments=config.attachments,
     )
     orchestrators = resolve_orchestrations(
         config,

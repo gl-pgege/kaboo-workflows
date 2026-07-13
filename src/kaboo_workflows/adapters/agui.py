@@ -50,8 +50,11 @@ from strands.multiagent.base import MultiAgentBase
 from kaboo_workflows import load
 from kaboo_workflows._context import (
     HistoryExchange,
+    Reference,
     set_activity_context,
     set_history_exchange,
+    set_inline_requests,
+    set_references,
 )
 from kaboo_workflows.config.resolvers import resolve_session_manager
 from kaboo_workflows.config.resolvers.agents import get_agent_hook_providers
@@ -393,6 +396,109 @@ def _parse_resume_entries(input_data: RunAgentInput) -> list[dict[str, Any]] | N
     ]
 
 
+_ATTACHMENT_PART_TYPES = ("image", "audio", "video", "document")
+
+
+def _latest_user_message(input_data: RunAgentInput) -> Any | None:
+    """Return the most recent ``user`` message, or ``None``."""
+    for msg in reversed(input_data.messages or []):
+        if getattr(msg, "role", None) == "user":
+            return msg
+    return None
+
+
+def _parse_attachment_parts(message: Any) -> list[Reference]:
+    """Extract attachment references from a user message's content parts.
+
+    Only multimodal parts (image/audio/video/document) become references; a
+    plain-text message yields none. The reference id is read from the part's
+    ``metadata`` (``kaboo_id``, minted by the frontend) so the manifest, the
+    resolver tool, and the model all agree on the same key; a part without one
+    gets a deterministic fallback (``<message id>:<index>``) stable within the
+    message.
+    """
+    content = getattr(message, "content", None)
+    if not isinstance(content, list):
+        return []
+    msg_id = getattr(message, "id", None) or "ref"
+    refs: list[Reference] = []
+    for i, part in enumerate(content):
+        ptype = getattr(part, "type", None)
+        if ptype not in _ATTACHMENT_PART_TYPES:
+            continue
+        source = getattr(part, "source", None)
+        meta = getattr(part, "metadata", None)
+        meta = meta if isinstance(meta, dict) else {}
+        kind = meta.get("kaboo_kind") or ptype
+        ref_id = meta.get("kaboo_id") or f"{msg_id}:{i}"
+        name = meta.get("kaboo_name") or meta.get("filename") or f"{kind}-{i}"
+        refs.append(
+            Reference(
+                kind=str(kind),
+                id=str(ref_id),
+                name=str(name),
+                transport="attachment",
+                mime_type=getattr(source, "mime_type", None),
+                source=getattr(source, "type", None),
+                value=getattr(source, "value", None),
+                meta={k: v for k, v in meta.items() if not str(k).startswith("kaboo_")},
+            )
+        )
+    return refs
+
+
+def _parse_object_references(input_data: RunAgentInput) -> list[Reference]:
+    """Extract object (pointer-only) references from ``state.kaboo_references``.
+
+    Custom entities (tables, dashboards, …) are cited by the frontend and travel
+    in AG-UI state rather than on the message. Each entry supplies ``kind``,
+    ``id`` and ``name``; ``meta`` is passed through for the user's resolver tool.
+    """
+    state = input_data.state
+    if not isinstance(state, dict):
+        return []
+    raw = state.get("kaboo_references")
+    if not isinstance(raw, list):
+        return []
+    refs: list[Reference] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        ref_id = entry.get("id")
+        if not ref_id:
+            continue
+        meta = entry.get("meta")
+        refs.append(
+            Reference(
+                kind=str(entry.get("kind") or "object"),
+                id=str(ref_id),
+                name=str(entry.get("name") or ref_id),
+                transport="object",
+                meta=meta if isinstance(meta, dict) else {},
+            )
+        )
+    return refs
+
+
+def _parse_references(input_data: RunAgentInput) -> list[Reference]:
+    """Build the request's full reference registry from message parts + state.
+
+    Combines blob-capable attachment references (multimodal message parts) with
+    pointer-only object references (``state.kaboo_references``) into one list,
+    deduped by id (message parts win on collision).
+    """
+    refs: list[Reference] = []
+    message = _latest_user_message(input_data)
+    if message is not None:
+        refs.extend(_parse_attachment_parts(message))
+    seen = {r.id for r in refs}
+    for ref in _parse_object_references(input_data):
+        if ref.id not in seen:
+            refs.append(ref)
+            seen.add(ref.id)
+    return refs
+
+
 def _enrich_history_snapshot(agui_event: Any, exchange: HistoryExchange) -> None:
     """Merge this run's sub-agent transcripts into a STATE_SNAPSHOT in place.
 
@@ -413,6 +519,24 @@ def _enrich_history_snapshot(agui_event: Any, exchange: HistoryExchange) -> None
             list(merged_history),
             {k: len(v) for k, v in exchange.outbound.items()},
         )
+
+
+def _restore_snapshot_user_content(agui_event: Any, originals: dict[str, Any]) -> None:
+    """Put structured multimodal user content back on a MESSAGES_SNAPSHOT.
+
+    ag-ui-strands seeds each ``MessagesSnapshotEvent`` from the input messages
+    but coerces every user ``content`` to text (``str(content)``), which turns a
+    multimodal message (text + attachment parts) into a Python repr string. The
+    frontend keys off these snapshots, so it would render that repr instead of
+    the file card. We swap the original parts (kept by message id) back in so the
+    snapshot the frontend persists matches what it sent.
+    """
+    for msg in getattr(agui_event, "messages", None) or []:
+        if getattr(msg, "role", None) != "user":
+            continue
+        original = originals.get(getattr(msg, "id", None))
+        if original is not None:
+            msg.content = original
 
 
 async def _consume_run(
@@ -444,6 +568,17 @@ async def _consume_run(
     """
     unresolved_tool_calls: dict[str, str] = {}
     pending_backfill = list(backfill_tool_calls or [])
+    # Original multimodal user content, keyed by message id. ag-ui-strands
+    # rebuilds MESSAGES_SNAPSHOT with a stringified (`str(content)`) view of the
+    # user message, which would clobber the frontend's structured attachment
+    # parts with a Python repr. We restore the real parts on the way out.
+    original_user_content = {
+        mid: content
+        for m in (getattr(input_data, "messages", None) or [])
+        if getattr(m, "role", None) == "user"
+        and isinstance((content := getattr(m, "content", None)), list)
+        and (mid := getattr(m, "id", None))
+    }
     try:
         async for agui_event in agui_agent.run(input_data):
             etype = getattr(agui_event, "type", None)
@@ -455,6 +590,8 @@ async def _consume_run(
                     unresolved_tool_calls.pop(tc_id, None)
             elif etype == AGUIEventType.STATE_SNAPSHOT:
                 _enrich_history_snapshot(agui_event, exchange)
+            elif etype == AGUIEventType.MESSAGES_SNAPSHOT and original_user_content:
+                _restore_snapshot_user_content(agui_event, original_user_content)
 
             if _is_run_finished(agui_event):
                 replaced = _maybe_inject_interrupt_outcome(
@@ -626,6 +763,17 @@ def _add_kaboo_endpoint(
                 inbound_history = raw_history
         exchange = HistoryExchange(inbound=inbound_history)
         set_history_exchange(exchange)
+
+        # Client-supplied references (file attachments on the message + custom
+        # entities in state.kaboo_references). Parsed once per request and bound
+        # to the context so the per-agent ReferenceHook and built-in reference
+        # tools can inject the manifest / resolve pointers. Set before any task
+        # is created so the run task inherits the same list.
+        set_references(_parse_references(input_data))
+        # On-demand media the model fetches via fetch_attachment is materialized
+        # into a user message (not a tool result) so it works across providers.
+        # Bind the shared set here so the run task and its tool threads share it.
+        set_inline_requests(set())
 
         merged: asyncio.Queue[Any] = asyncio.Queue()
         activity_pump = _make_activity_pump(

@@ -9,7 +9,9 @@ from strands import Agent
 
 from ...exceptions import ConfigurationError
 from ...hooks.interrupt_hook import InterruptHook
+from ...hooks.reference_hook import ReferenceHook
 from ...tools.ask_user import ask_user
+from ...tools.references import fetch_attachment, list_references
 from ...utils import load_object
 from .conversation_manager import resolve_conversation_manager
 from .hooks import resolve_hook_entry
@@ -23,7 +25,7 @@ if TYPE_CHECKING:
     from strands.session.session_manager import SessionManager
     from strands.tools.mcp import MCPClient as StrandsMCPClient
 
-    from ..schema import AgentDef, SessionManagerDef
+    from ..schema import AgentDef, AttachmentsDef, SessionManagerDef
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ def build_agent_from_def(
     extra_tools: list[Any] | None = None,
     extra_hooks: list[Any] | None = None,
     orchestration_agent_names: set[str] | None = None,
+    attachments: AttachmentsDef | None = None,
 ) -> Agent:
     """Build a single Agent from an AgentDef blueprint.
 
@@ -62,6 +65,13 @@ def build_agent_from_def(
         extra_tools: Additional tools to append (e.g. delegate tools).
         extra_hooks: Additional hooks to append (e.g. orchestration-level hooks).
         orchestration_agent_names: Agent names in swarm/graph orchestrations (fail-fast on SM).
+        attachments: Global reference/attachment policy from ``AppConfig``. When
+            the agent is in scope (its own ``attachments:`` or the global
+            ``default``), a :class:`~kaboo_workflows.hooks.ReferenceHook` is
+            attached (so the manifest reaches this agent AND, via hook
+            forwarding, the entry clone) and — when the global ``tool`` flag is
+            set — the built-in ``list_references`` / ``fetch_attachment`` tools
+            are registered.
 
     Returns:
         A freshly constructed strands Agent.
@@ -130,6 +140,24 @@ def build_agent_from_def(
             hooks.append(InterruptHook(tools=interrupt.tools, agent_name=name))
         if interrupt.ask_user:
             tools.append(ask_user)
+
+    # 6bb. Resolve reference/attachment policy. Attach the ReferenceHook at
+    # build time (not wire time) so it rides `_kaboo_hook_providers`: the
+    # blueprint fires it for sub-agents, and the AG-UI adapter forwards it to
+    # the per-thread entry clone — the same forwarding path used for HITL hooks.
+    ref_default = attachments.default if attachments is not None else "reference"
+    ref_tool = attachments.tool if attachments is not None else True
+    agent_attachments = agent_def.attachments
+    if agent_attachments is not None and not isinstance(agent_attachments, (bool, str)):
+        ref_enabled = agent_attachments.enabled
+        ref_inline = agent_attachments.inline
+    else:
+        ref_enabled = ref_default != "none"
+        ref_inline = False
+    if ref_enabled:
+        hooks.append(ReferenceHook(enabled=True, inline=ref_inline, tool_enabled=ref_tool))
+        if ref_tool:
+            tools.extend([list_references, fetch_attachment])
 
     # 6c. Resolve output_schema
     if agent_def.output_schema is not None:
@@ -205,6 +233,7 @@ def resolve_agents(
     global_session_manager_def: SessionManagerDef | None = None,
     session_id: str | None = None,
     orchestration_agent_names: set[str] | None = None,
+    attachments: AttachmentsDef | None = None,
 ) -> dict[str, Agent]:
     """Resolve all agents -- flat, no dependencies between them.
 
@@ -248,6 +277,7 @@ def resolve_agents(
             global_session_manager_def=global_session_manager_def,
             session_id=session_id,
             orchestration_agent_names=orchestration_agent_names,
+            attachments=attachments,
         )
         resolved[name] = agent
         logger.info("agent=<%s>, type=<%s> | resolved agent", name, agent_def.type or "Agent")

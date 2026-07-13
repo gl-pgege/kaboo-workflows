@@ -79,6 +79,7 @@ nav:
       - configuration/Chapter_16.md
       - configuration/Chapter_17.md
       - configuration/Chapter_18.md
+      - configuration/Chapter_19.md
       - Quick Recipes: configuration/Quick_Recipes.md
   - Workflows:
       - Deep nesting: workflows/deep-nesting.md
