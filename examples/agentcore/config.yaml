@@ -1,0 +1,57 @@
+# agentcore — pluggable auth for MCP (AgentCore Gateway)
+#
+# The AgentCore Gateway is just an MCP server: point an mcp_clients entry at its
+# /mcp URL. Outbound auth is declared with `auth:` — kaboo-workflows attaches the
+# right httpx.Auth for the transport (a dedicated client for streamable-http, or
+# the `auth` kwarg for SSE). Swap the strategy per client without code changes.
+
+models:
+  default:
+    provider: bedrock
+    model_id: anthropic.claude-sonnet-4-20250514-v1:0
+
+mcp_clients:
+
+  # AgentCore Gateway as an MCP target.
+  #
+  # auth strategies (pick one):
+  #   relay   — forward the inbound caller token (per-request identity)
+  #   obo     — AgentCore On-Behalf-Of exchange for a downstream resource
+  #   m2m     — client-credentials machine token (request-independent)
+  #   static  — a fixed API key / bearer
+  gateway:
+    url: ${GATEWAY_URL:-https://my-gateway.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp}
+    transport: streamable-http
+    auth: relay
+
+    # OBO variant — exchange the caller's WorkloadAccessToken for a downstream token:
+    # auth:
+    #   type: obo
+    #   params:
+    #     provider: ${OBO_PROVIDER_NAME}
+    #     region: us-east-1
+
+    # M2M variant — the workflow service's own machine identity:
+    # auth:
+    #   type: m2m
+    #   params:
+    #     token_url: ${M2M_TOKEN_URL}
+    #     client_id: ${M2M_CLIENT_ID}
+    #     client_secret: ${M2M_CLIENT_SECRET}
+    #     audience: ${GATEWAY_AUDIENCE}
+
+    # Static variant — a long-lived key:
+    # auth:
+    #   type: static
+    #   params:
+    #     token: ${GATEWAY_API_KEY}
+
+agents:
+  assistant:
+    model: default
+    mcp:
+      - gateway
+    system_prompt: |
+      You are an enterprise assistant. Use the gateway tools to answer questions.
+
+entry: assistant

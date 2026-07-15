@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from ._context import Principal, get_auth_context, set_auth_context
+from .auth import (
+    M2MClientCredentialsAuth,
+    OBOTokenAuth,
+    RelayTokenAuth,
+    StaticTokenAuth,
+    build_auth,
+)
 from .config import (
     AppConfig,
     ConfigInput,
@@ -42,19 +50,26 @@ __all__ = [
     "EventQueue",
     "EventType",
     "ImportResolutionError",
+    "M2MClientCredentialsAuth",
     "MCPLifecycle",
     "MaxToolCallsGuard",
+    "OBOTokenAuth",
     "OrchestrationBuilder",
+    "Principal",
+    "RelayTokenAuth",
     "ResolvedConfig",
     "ResolvedInfra",
     "SchemaValidationError",
+    "StaticTokenAuth",
     "StopGuard",
     "StreamEvent",
     "ToolNameSanitizer",
     "UnresolvedReferenceError",
+    "build_auth",
     "cli_errors",
     "create_mcp_client",
     "create_mcp_server",
+    "get_auth_context",
     "load",
     "load_config",
     "load_session",
@@ -63,4 +78,5 @@ __all__ = [
     "node_as_tool",
     "resolve_infra",
     "serialize_multiagent_result",
+    "set_auth_context",
 ]

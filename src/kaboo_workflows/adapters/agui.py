@@ -21,11 +21,12 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from ag_ui.core import (
     ActivitySnapshotEvent,
@@ -50,8 +51,10 @@ from strands.multiagent.base import MultiAgentBase
 from kaboo_workflows import load
 from kaboo_workflows._context import (
     HistoryExchange,
+    Principal,
     Reference,
     set_activity_context,
+    set_auth_context,
     set_history_exchange,
     set_inline_requests,
     set_references,
@@ -67,7 +70,16 @@ from ._activity import ActivityRegistry
 from ._multiagent import StrandsMultiAgent
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
+
+    AuthVerifier = Callable[[Request], Principal | None | Awaitable[Principal | None]]
+    """User-supplied inbound auth verifier.
+
+    Receives the FastAPI :class:`~fastapi.Request` and returns a
+    :class:`~kaboo_workflows._context.Principal` (or ``None`` for an anonymous
+    caller). May be sync or async. Raise (e.g.
+    :class:`fastapi.HTTPException`) to reject the request.
+    """
 
 logger = logging.getLogger(__name__)
 
@@ -730,6 +742,24 @@ def _resolve_turn_id(thread_id: str, run_id: str | None, *, is_resume: bool) -> 
     return turn_id
 
 
+async def _verify_inbound(auth: AuthVerifier | None, request: Request) -> Principal | None:
+    """Run the user-supplied inbound verifier (sync or async) and bind identity.
+
+    Returns the resolved :class:`Principal` (``None`` when no verifier is
+    configured). The verifier may raise to reject the request; the exception
+    propagates to FastAPI unchanged (e.g. ``HTTPException`` -> 401).
+    """
+    if auth is None:
+        set_auth_context(None)
+        return None
+    result = auth(request)
+    if inspect.isawaitable(result):
+        result = await result
+    principal = cast("Principal | None", result)
+    set_auth_context(principal)
+    return principal
+
+
 def _add_kaboo_endpoint(
     app: FastAPI,
     agui_agent: StrandsAgent | StrandsMultiAgent,
@@ -739,6 +769,7 @@ def _add_kaboo_endpoint(
     path: str,
     *,
     entry_inline: bool = False,
+    auth: AuthVerifier | None = None,
 ) -> None:
     @app.post(path)
     async def kaboo_endpoint(input_data: RunAgentInput, request: Request) -> StreamingResponse:
@@ -751,6 +782,12 @@ def _add_kaboo_endpoint(
             thread_id, input_data.run_id, is_resume=resume_entries is not None
         )
         set_activity_context(thread_id, input_data.run_id, turn_id)
+
+        # Inbound auth: validate/extract the caller identity and bind it to the
+        # request context BEFORE any run task or MCP client starts, so outbound
+        # auth strategies (relay / OBO) and per-request MCP clients inherit it
+        # via contextvars.copy_context(). A raise here rejects the request.
+        await _verify_inbound(auth, request)
 
         # Client-driven per-agent history. Sub-agents seed their transcripts
         # from this exchange (via HistoryHook) and capture back into it; the
@@ -968,6 +1005,7 @@ def create_agui_app(
     ping_path: str | None = "/ping",
     cors_origins: list[str] | None = None,
     cors_allow_credentials: bool = True,
+    auth: AuthVerifier | None = None,
 ) -> FastAPI:
     """Create a FastAPI app serving AG-UI SSE from a YAML config.
 
@@ -978,6 +1016,15 @@ def create_agui_app(
         cors_origins: Allowed CORS origins. Defaults to ``["*"]``. Pass an
             explicit allow-list for production deployments.
         cors_allow_credentials: Whether to allow credentialed CORS requests.
+        auth: Optional inbound auth verifier. Receives each ``/invocations``
+            request and returns a
+            :class:`~kaboo_workflows._context.Principal` (or ``None`` for an
+            anonymous caller); raise to reject (e.g.
+            :class:`fastapi.HTTPException` -> 401). The resolved identity is
+            bound to the request context so outbound MCP auth strategies can
+            relay/exchange from it. When ``None`` (default) the endpoint trusts
+            its caller — only safe behind an authenticating proxy or the
+            AgentCore Runtime authorizer.
 
     Returns:
         A FastAPI application with AG-UI SSE streaming.
@@ -1060,6 +1107,7 @@ def create_agui_app(
         entry_name,
         endpoint,
         entry_inline=entry_inline,
+        auth=auth,
     )
     if ping_path is not None:
         add_ping(app, ping_path)

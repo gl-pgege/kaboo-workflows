@@ -12,7 +12,7 @@ Key Features:
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -85,6 +85,33 @@ class MCPServerDef(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class MCPClientAuthDef(BaseModel):
+    """Outbound auth for an MCP client (streamable-http / SSE only).
+
+    ``type`` selects a built-in strategy from
+    :func:`~kaboo_workflows.auth.build_auth`:
+
+    - ``relay`` — forward the inbound caller token (see
+      :class:`~kaboo_workflows.auth.RelayTokenAuth`).
+    - ``obo`` — AgentCore On-Behalf-Of exchange
+      (:class:`~kaboo_workflows.auth.OBOTokenAuth`); requires ``provider``.
+    - ``m2m`` — client-credentials machine token
+      (:class:`~kaboo_workflows.auth.M2MClientCredentialsAuth`).
+    - ``static`` — a fixed token (:class:`~kaboo_workflows.auth.StaticTokenAuth`).
+
+    ``params`` are forwarded as constructor kwargs to the chosen strategy.
+
+    Note: ``relay`` / ``obo`` derive from the *per-request* caller identity and
+    are reliable only when the MCP client is created per request (started inside
+    the request context). On a long-lived shared client (``create_agui_app``),
+    prefer ``static`` / ``m2m`` (machine identity) unless the deployment is
+    process-per-session (e.g. AgentCore Runtime).
+    """
+
+    type: Literal["relay", "obo", "m2m", "static"]
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
 class MCPClientDef(BaseModel):
     """MCP client connection definition.
 
@@ -92,7 +119,9 @@ class MCPClientDef(BaseModel):
 
     ``params`` are forwarded to strands MCPClient (e.g., startup_timeout,
     tool_filters, prefix). ``transport_options`` are forwarded to the
-    transport factory (e.g., headers, auth, timeout, http_client).
+    transport factory (e.g., headers, auth, timeout, http_client). ``auth``
+    declaratively attaches an outbound auth strategy (see
+    :class:`MCPClientAuthDef`).
     """
 
     server: str | None = None
@@ -102,6 +131,14 @@ class MCPClientDef(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     transport_options: dict[str, Any] = Field(default_factory=dict)
     tool_labels: dict[str, str] = Field(default_factory=dict)
+    auth: MCPClientAuthDef | str | None = None
+
+    @model_validator(mode="after")
+    def _normalize_auth(self) -> MCPClientDef:
+        """Normalize ``auth: <strategy>`` shorthand to a full MCPClientAuthDef."""
+        if isinstance(self.auth, str):
+            self.auth = MCPClientAuthDef(type=cast("Any", self.auth))
+        return self
 
     @model_validator(mode="after")
     def _exactly_one_connection_mode(self) -> MCPClientDef:
@@ -115,6 +152,11 @@ class MCPClientDef(BaseModel):
         if count > 1:
             raise ValueError(
                 "MCPClientDef requires exactly one of 'server', 'url', or 'command'; got multiple."
+            )
+        if self.auth is not None and self.command is not None:
+            raise ValueError(
+                "MCPClientDef 'auth' is not supported for stdio (command) transport; "
+                "use 'url' or 'server' (HTTP/SSE)."
             )
         return self
 

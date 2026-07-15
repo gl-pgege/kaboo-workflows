@@ -13,7 +13,7 @@ from ...utils import load_object
 if TYPE_CHECKING:
     from strands.tools.mcp import MCPClient as StrandsMCPClient
 
-    from ..schema import MCPClientDef, MCPServerDef
+    from ..schema import MCPClientAuthDef, MCPClientDef, MCPServerDef
 
 
 def resolve_tools(tool_specs: list[str]) -> list[Any]:
@@ -94,13 +94,51 @@ def resolve_mcp_client(
             )
         server = servers[client_def.server]
 
+    transport_options = _apply_client_auth(client_def, server)
+
     kwargs: dict[str, Any] = {
         "server": server,
         "url": client_def.url,
         "command": client_def.command,
-        "transport_options": client_def.transport_options or None,
+        "transport_options": transport_options or None,
         **client_def.params,
     }
     if client_def.transport is not None:
         kwargs["transport"] = cast(MCP_TRANSPORT, client_def.transport)
     return create_mcp_client(**kwargs)
+
+
+def _apply_client_auth(
+    client_def: MCPClientDef,
+    server: MCPServer | None,
+) -> dict[str, Any]:
+    """Return ``transport_options`` with any declarative ``auth:`` wired in.
+
+    Builds the strategy from :class:`~kaboo_workflows.config.schema.MCPClientAuthDef`
+    and attaches it for the effective transport (``auth`` for SSE, a dedicated
+    ``httpx.AsyncClient`` for streamable-http). Returns the options unchanged
+    when the client declares no ``auth:``.
+    """
+    options = dict(client_def.transport_options or {})
+    if client_def.auth is None:
+        return options
+
+    from ...auth import apply_auth_to_transport_options, build_auth
+
+    auth_def = cast("MCPClientAuthDef", client_def.auth)
+    auth_obj = build_auth(auth_def.type, auth_def.params)
+    return apply_auth_to_transport_options(
+        options, auth_obj, transport=_effective_transport(client_def, server)
+    )
+
+
+def _effective_transport(client_def: MCPClientDef, server: MCPServer | None) -> str:
+    """Resolve the transport used for auth wiring (explicit or URL-detected)."""
+    if client_def.transport is not None:
+        return client_def.transport
+    url = client_def.url or (getattr(server, "url", None) if server is not None else None)
+    if url:
+        from ...mcp.client import _detect_transport
+
+        return _detect_transport(url)
+    return "streamable-http"

@@ -227,3 +227,49 @@ def request_inline(reference_id: str) -> None:
     requests = _current_inline_requests.get()
     if requests is not None:
         requests.add(reference_id)
+
+
+@dataclass
+class Principal:
+    """Authenticated caller identity for the current request.
+
+    Produced by an inbound auth verifier (see
+    :func:`~kaboo_workflows.adapters.agui.create_agui_app`) and bound to the
+    request context so outbound MCP auth strategies (relay / OBO) can derive a
+    downstream token from the same identity.
+
+    Attributes:
+        token: The raw inbound bearer credential (no ``Bearer `` prefix), e.g.
+            the user JWT or an AgentCore ``WorkloadAccessToken``. ``None`` when
+            the caller was not authenticated (or auth is disabled).
+        claims: Verified claims (decoded JWT payload, introspection result, …).
+            Empty when the verifier only relays without validating.
+        headers: Selected inbound headers the verifier chose to carry forward
+            (e.g. ``WorkloadAccessToken``), so strategies can read a token from
+            a non-``Authorization`` header when needed.
+    """
+
+    token: str | None = None
+    claims: dict[str, Any] = field(default_factory=dict)
+    headers: dict[str, str] = field(default_factory=dict)
+
+
+_current_principal: contextvars.ContextVar[Principal | None] = contextvars.ContextVar(
+    "kaboo_principal", default=None
+)
+
+
+def set_auth_context(principal: Principal | None) -> None:
+    """Bind the current request's :class:`Principal`.
+
+    Call at the start of each request handler, before creating the run task, so
+    tasks (and MCP clients started within this context via
+    ``contextvars.copy_context()``) inherit the identity. Outbound MCP auth
+    strategies read it via :func:`get_auth_context`.
+    """
+    _current_principal.set(principal)
+
+
+def get_auth_context() -> Principal | None:
+    """Return the current request's :class:`Principal` (or ``None``)."""
+    return _current_principal.get()
