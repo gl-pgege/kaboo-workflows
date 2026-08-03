@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## v0.13.0 (2026-08-02)
+
+### Feat
+
+- **context**: `forwarded_props` is now first-class — the AG-UI request's `forwardedProps` (the host's per-run side channel: run-scoped credentials, tenant context, per-run agent config) is bound per request and readable anywhere via `get_forwarded_props()`; every agent also receives a copy in its state (`ForwardedPropsHook`)
+- **attachments**: pluggable, optionally-authorized reference fetching — all attachment URL fetches funnel through `fetch_reference_bytes`; configure `attachments.base_url` / `authorization` (`forwarded_props:<key>` or `env:<VAR>`, applied strictly to own-origin URLs) or register a custom `ReferenceFetcher` via `set_reference_fetcher`; ag-ui-strands' entry-message media fetching is routed through the same funnel (gaining the scheme guard and 25 MB cap)
+- **attachments**: `content_url_template` — object references of kind `"attachment"` with a `meta.url` (or a synthesizable one) are upgraded to fetchable attachment transport, so `fetch_attachment` works on every turn, not only the first
+- **runtime**: config-gated per-invocation agent overrides — `runtime.allow_invocation_overrides: true` applies `forwardedProps.agent_config` (`system_prompt` / `model_id`) to the executing per-thread agent before each invocation, letting one runtime process serve many host-defined agent types
+- **models**: the `openai` provider now defaults `client_args.timeout` to 180s and `max_retries` to 2, so a stalled provider/router connection fails visibly instead of hanging a run forever; user-supplied values always win
+
 ## v0.12.0 (2026-07-23)
 
 ### Feat
