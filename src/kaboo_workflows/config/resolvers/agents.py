@@ -137,7 +137,13 @@ def build_agent_from_def(
     interrupt = agent_def.interrupt
     if interrupt is not None and not isinstance(interrupt, bool):
         if interrupt.tools:
-            hooks.append(InterruptHook(tools=interrupt.tools, agent_name=name))
+            hooks.append(
+                InterruptHook(
+                    tools=interrupt.tools,
+                    agent_name=name,
+                    ttl_seconds=interrupt.ttl_seconds,
+                )
+            )
         if interrupt.ask_user:
             tools.append(ask_user)
 

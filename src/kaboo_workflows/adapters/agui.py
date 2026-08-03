@@ -67,6 +67,7 @@ from kaboo_workflows.wire import EventQueue
 
 from . import _strands_bridge as bridge
 from ._activity import ActivityRegistry
+from ._interrupts import map_strands_interrupt_to_agui as _map_strands_interrupt_to_agui
 from ._multiagent import StrandsMultiAgent
 
 if TYPE_CHECKING:
@@ -91,55 +92,6 @@ class _RawSSE:
 
     def __init__(self, payload: str) -> None:
         self.payload = payload
-
-
-def _tool_call_id_from_interrupt_id(interrupt_id: Any) -> str | None:
-    """Extract the originating tool-call id from a strands interrupt id.
-
-    Interrupts raised from a ``BeforeToolCallEvent`` hook use the id
-    ``v1:before_tool_call:<toolUseId>:<uuid>`` while interrupts raised from
-    inside a tool via ``ToolContext.interrupt`` use ``v1:tool_call:<toolUseId>:
-    <uuid>`` (see ``strands.hooks.events`` / ``strands.types.tools``). In both
-    cases the tool-use id is the third segment. Forwarding it lets the frontend
-    correlate the interrupt with its tool-call card so the answered Q&A can be
-    rendered inline in the transcript.
-    """
-    parts = str(interrupt_id).split(":")
-    if len(parts) >= 4 and parts[1] in ("before_tool_call", "tool_call"):
-        return parts[2]
-    return None
-
-
-def _map_strands_interrupt_to_agui(interrupt: Any) -> dict[str, Any]:
-    """Translate a strands ``Interrupt`` into an AG-UI interrupt descriptor."""
-    reason = interrupt.reason
-    agui_interrupt: dict[str, Any] = {"id": interrupt.id}
-
-    tool_call_id = _tool_call_id_from_interrupt_id(interrupt.id)
-    if tool_call_id:
-        agui_interrupt["toolCallId"] = tool_call_id
-
-    if isinstance(reason, dict):
-        rtype = reason.get("type", "")
-        if rtype == "approval":
-            agui_interrupt["reason"] = "tool_call"
-            agui_interrupt["message"] = reason.get("message", "Approval required")
-        elif rtype == "form":
-            questions = reason.get("questions", [])
-            first_q = questions[0]["question"] if questions else "Input required"
-            agui_interrupt["reason"] = "input_required"
-            agui_interrupt["message"] = first_q
-        else:
-            agui_interrupt["reason"] = "confirmation"
-            agui_interrupt["message"] = reason.get("message", str(reason))
-        agui_interrupt["metadata"] = reason
-    else:
-        message = str(reason) if reason else "Agent requires input"
-        agui_interrupt["reason"] = "confirmation"
-        agui_interrupt["message"] = message
-        agui_interrupt["metadata"] = {"type": "approval", "message": message}
-
-    return agui_interrupt
 
 
 def _is_run_finished(event: Any) -> bool:
@@ -822,13 +774,13 @@ def _add_kaboo_endpoint(
         # so the transcript-imbalance / abandoned-tool-call machinery below does
         # not apply — a superseded interrupt is simply cleared.
         if isinstance(agui_agent, StrandsMultiAgent):
-            if not resume_entries and agui_agent.is_interrupt_active():
+            if not resume_entries and agui_agent.is_interrupt_active(thread_id):
                 last_role = input_data.messages[-1].role if input_data.messages else None
                 if last_role == "user":
                     logger.debug("multiagent: new user turn with stale interrupt; clearing")
-                    agui_agent.deactivate_interrupts()
+                    agui_agent.deactivate_interrupts(thread_id)
                 else:
-                    pending = agui_agent.pending_interrupts(unresolved_only=True)
+                    pending = agui_agent.pending_interrupts(thread_id, unresolved_only=True)
                     if pending:
                         agui_interrupts = [
                             _map_strands_interrupt_to_agui(intr) for intr in pending.values()

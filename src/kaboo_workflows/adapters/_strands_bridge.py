@@ -57,12 +57,42 @@ def pending_interrupts(strands_agent: Any, *, unresolved_only: bool = True) -> d
     DEPENDS ON strands internal: ``_InterruptState.interrupts`` and
     ``Interrupt.response``.
     """
-    istate = get_interrupt_state(strands_agent)
+    return pending_interrupts_of(
+        get_interrupt_state(strands_agent), unresolved_only=unresolved_only
+    )
+
+
+def pending_interrupts_of(istate: Any, *, unresolved_only: bool = True) -> dict[str, Any]:
+    """Return the pending interrupts of a detached ``_InterruptState``.
+
+    Used by the multi-agent adapter, which parks each thread's interrupt state
+    off-orchestrator between runs (see ``StrandsMultiAgent``).
+
+    DEPENDS ON strands internal: ``_InterruptState.interrupts`` and
+    ``Interrupt.response``.
+    """
     if istate is None or not getattr(istate, "interrupts", None):
         return {}
     if unresolved_only:
         return {iid: intr for iid, intr in istate.interrupts.items() if intr.response is None}
     return dict(istate.interrupts)
+
+
+def swap_interrupt_state(strands_agent: Any, state: Any | None = None) -> Any | None:
+    """Install *state* (or a fresh, inert one) and return the previous state.
+
+    The seam for per-thread interrupt isolation on a shared orchestrator: the
+    caller parks the returned state per thread and re-installs it on that
+    thread's next run, so a gate paused on one conversation can never be seen
+    (or clobbered) by a run on another.
+
+    DEPENDS ON strands internal: ``_interrupt_state`` / ``_InterruptState``.
+    """
+    from strands.interrupt import _InterruptState
+
+    previous = getattr(strands_agent, "_interrupt_state", None)
+    strands_agent._interrupt_state = state if state is not None else _InterruptState()
+    return previous
 
 
 def deactivate_interrupts(strands_agent: Any) -> None:

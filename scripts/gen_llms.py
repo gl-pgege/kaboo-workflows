@@ -73,7 +73,7 @@ def build_llms_txt() -> str:
         if p.parent == DOCS and p.name in {"index.md", "api-reference.md"}
     ]
 
-    out: list[str] = [f"# kaboo-workflows\n", f"> {SUMMARY}\n"]
+    out: list[str] = ["# kaboo-workflows\n", f"> {SUMMARY}\n"]
 
     out.append("## Documentation\n")
     out.append(f"- [Documentation site]({SITE})")

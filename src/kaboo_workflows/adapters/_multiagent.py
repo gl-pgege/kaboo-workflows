@@ -18,6 +18,7 @@ carries the text.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -37,10 +38,9 @@ from ag_ui.core import (
 )
 
 from . import _strands_bridge as bridge
+from ._interrupts import map_strands_interrupt_to_agui as _map_strands_interrupt_to_agui
 
 if TYPE_CHECKING:
-    import asyncio
-
     from ag_ui.core import RunAgentInput
     from strands.multiagent.base import MultiAgentBase
 
@@ -56,11 +56,17 @@ class StrandsMultiAgent:
 
     A single wired orchestrator instance is shared across threads (its members
     carry the ``EventPublisher`` hooks that power the activity snapshots, so a
-    fresh per-thread instance would lose that wiring). strands resets member
-    state per run and restores it from the interrupt context on resume, so
-    sequential turns on one thread are correct; concurrent runs across
-    different threads share the orchestrator's ``_interrupt_state`` — the same
-    process-level constraint kaboo already documents for sub-agents.
+    fresh per-thread instance would lose that wiring). Two measures make that
+    safe across conversations:
+
+    - **Single-flight execution**: a lock serializes runs, so two threads never
+      drive the orchestrator (and its members' message state) concurrently.
+    - **Per-thread interrupt state**: each run installs its own thread's
+      ``_InterruptState`` on the orchestrator and parks it again afterwards,
+      so a gate paused on one conversation is invisible to — and cannot be
+      clobbered by — runs on any other. strands restores member state from the
+      interrupt context on resume, so the parked state carries everything a
+      paused thread needs.
     """
 
     def __init__(
@@ -73,17 +79,24 @@ class StrandsMultiAgent:
         self.orchestrator = orchestrator
         self.name = name
         self.chat_output = chat_output
+        self._run_lock = asyncio.Lock()
+        self._parked_interrupts: dict[str, Any] = {}
 
-    # -- interrupt helpers (delegate to the shared bridge) -----------------
+    # -- interrupt helpers (thread-scoped, reading the parked state) --------
 
-    def is_interrupt_active(self) -> bool:
-        return bridge.is_interrupt_active(self.orchestrator)
+    def is_interrupt_active(self, thread_id: str) -> bool:
+        state = self._parked_interrupts.get(thread_id)
+        return bool(state is not None and getattr(state, "activated", False))
 
-    def pending_interrupts(self, *, unresolved_only: bool = True) -> dict[str, Any]:
-        return bridge.pending_interrupts(self.orchestrator, unresolved_only=unresolved_only)
+    def pending_interrupts(self, thread_id: str, *, unresolved_only: bool = True) -> dict[str, Any]:
+        return bridge.pending_interrupts_of(
+            self._parked_interrupts.get(thread_id), unresolved_only=unresolved_only
+        )
 
-    def deactivate_interrupts(self) -> None:
-        bridge.deactivate_interrupts(self.orchestrator)
+    def deactivate_interrupts(self, thread_id: str) -> None:
+        state = self._parked_interrupts.pop(thread_id, None)
+        if state is not None and getattr(state, "activated", False):
+            state.deactivate()
 
     # -- run loop ----------------------------------------------------------
 
@@ -119,7 +132,30 @@ class StrandsMultiAgent:
             await merged.put(
                 RunStartedEvent(type=AGUIEventType.RUN_STARTED, thread_id=thread_id, run_id=run_id)
             )
+            async with self._run_lock:
+                await self._run(input_data, merged, exchange, resume_entries, run_id, message_id)
+        except Exception as exc:  # noqa: BLE001 - surface any run failure as RUN_ERROR
+            logger.error("multi-agent run failed: %s", exc, exc_info=True)
+            await merged.put(
+                RunErrorEvent(type=AGUIEventType.RUN_ERROR, message=str(exc), code="AGENT_ERROR")
+            )
+        finally:
+            await merged.put(_DONE)
 
+    async def _run(
+        self,
+        input_data: RunAgentInput,
+        merged: asyncio.Queue[Any],
+        exchange: HistoryExchange,
+        resume_entries: list[dict[str, Any]] | None,
+        run_id: str,
+        message_id: str,
+    ) -> None:
+        thread_id = input_data.thread_id or bridge.DEFAULT_THREAD
+        # Install this thread's interrupt state for the duration of the run;
+        # it is parked again (or discarded once settled) in the finally below.
+        bridge.swap_interrupt_state(self.orchestrator, self._parked_interrupts.pop(thread_id, None))
+        try:
             if resume_entries is not None:
                 task: Any = _build_resume_responses(self.orchestrator, resume_entries)
             else:
@@ -182,7 +218,7 @@ class StrandsMultiAgent:
                 last_completed,
                 text_started,
                 final_result is not None,
-                self.is_interrupt_active(),
+                bridge.is_interrupt_active(self.orchestrator),
             )
 
             if text_started:
@@ -197,8 +233,8 @@ class StrandsMultiAgent:
                     StateSnapshotEvent(type=AGUIEventType.STATE_SNAPSHOT, snapshot=snapshot)
                 )
 
-            if self.is_interrupt_active():
-                pending = self.pending_interrupts(unresolved_only=True)
+            if bridge.is_interrupt_active(self.orchestrator):
+                pending = bridge.pending_interrupts(self.orchestrator, unresolved_only=True)
                 agui_interrupts = [
                     _map_strands_interrupt_to_agui(intr) for intr in pending.values()
                 ]
@@ -248,13 +284,15 @@ class StrandsMultiAgent:
                     type=AGUIEventType.RUN_FINISHED, thread_id=thread_id, run_id=run_id
                 )
             )
-        except Exception as exc:  # noqa: BLE001 - surface any run failure as RUN_ERROR
-            logger.error("multi-agent run failed: %s", exc, exc_info=True)
-            await merged.put(
-                RunErrorEvent(type=AGUIEventType.RUN_ERROR, message=str(exc), code="AGENT_ERROR")
-            )
         finally:
-            await merged.put(_DONE)
+            # Park this thread's interrupt state (if still paused) and leave a
+            # fresh, inert state on the orchestrator so no other thread's run
+            # can observe this conversation's gates.
+            parked = bridge.swap_interrupt_state(self.orchestrator)
+            if parked is not None and getattr(parked, "activated", False):
+                self._parked_interrupts[thread_id] = parked
+            else:
+                self._parked_interrupts.pop(thread_id, None)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -299,38 +337,6 @@ def _build_resume_responses(
             user_resp = {"status": "cancelled"}
         responses.append({"interruptResponse": {"interruptId": intr_id, "response": user_resp}})
     return responses
-
-
-def _map_strands_interrupt_to_agui(interrupt: Any) -> dict[str, Any]:
-    """Translate a strands ``Interrupt`` into an AG-UI interrupt descriptor.
-
-    Kept in sync with the same helper in ``agui.py`` (the Agent path); both
-    speak the identical AG-UI interrupt shape the frontend expects.
-    """
-    reason = getattr(interrupt, "reason", None)
-    agui_interrupt: dict[str, Any] = {"id": getattr(interrupt, "id", None)}
-
-    if isinstance(reason, dict):
-        rtype = reason.get("type", "")
-        if rtype == "approval":
-            agui_interrupt["reason"] = "tool_call"
-            agui_interrupt["message"] = reason.get("message", "Approval required")
-        elif rtype == "form":
-            questions = reason.get("questions", [])
-            first_q = questions[0]["question"] if questions else "Input required"
-            agui_interrupt["reason"] = "input_required"
-            agui_interrupt["message"] = first_q
-        else:
-            agui_interrupt["reason"] = "confirmation"
-            agui_interrupt["message"] = reason.get("message", str(reason))
-        agui_interrupt["metadata"] = reason
-    else:
-        message = str(reason) if reason else "Agent requires input"
-        agui_interrupt["reason"] = "confirmation"
-        agui_interrupt["message"] = message
-        agui_interrupt["metadata"] = {"type": "approval", "message": message}
-
-    return agui_interrupt
 
 
 def _history_snapshot(

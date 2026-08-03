@@ -91,6 +91,43 @@ async def test_ask_user_interrupt_then_resume(case: str) -> None:
     assert expected in r2.text(), f"{case}: expected {expected!r} in {r2.text()!r}"
 
 
+async def test_swarm_tool_gate_pauses_then_executes_the_edited_call() -> None:
+    # A gated PLATFORM-STYLE tool (interrupt.tools) inside a swarm node: the
+    # gate pauses the run before the tool runs, the descriptor carries the
+    # correlation/card fields (toolCallId, tool_name, tool_input), and an
+    # approve-with-edits resume executes exactly the edited call.
+    from tests.fakes.gated_tools import CALLS
+
+    CALLS.clear()
+    pipe = Pipeline(str(CONFIGS / "interrupt_swarm_gate.yaml"))
+
+    r1 = await pipe.turn("file the report", thread_id="g1", run_id="r1")
+    outcome = r1.run_outcome()
+    assert outcome is not None and getattr(outcome, "type", None) == "interrupt"
+    gate = list(outcome.interrupts)[0]
+    assert gate.tool_call_id, "gate descriptor must carry the originating toolCallId"
+    metadata = gate.metadata or {}
+    assert metadata.get("tool_name") == "submit_report"
+    assert metadata.get("tool_input") == {"title": "Q3 draft"}
+    assert CALLS == [], "gated tool must not execute before approval"
+
+    r2 = await pipe.turn(
+        "(approve)",
+        thread_id="g1",
+        run_id="r2",
+        resume=[
+            {
+                "interruptId": gate.id,
+                "status": "resolved",
+                "payload": {"status": "approved", "tool_input": {"title": "Q3 final"}},
+            }
+        ],
+    )
+    assert not r2.errored() and r2.finished()
+    assert CALLS == [{"title": "Q3 final"}]
+    assert "Final swarm report after the gated write." in r2.text()
+
+
 # --- multi-turn history round-trip ----------------------------------------
 
 

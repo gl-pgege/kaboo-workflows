@@ -47,7 +47,7 @@ Both the `type` field and the string shorthand accept:
 
 ## Built-in Hooks
 
-kaboo-workflows ships with three hooks:
+kaboo-workflows ships with four hooks:
 
 ### `MaxToolCallsGuard`
 
@@ -73,6 +73,24 @@ hooks:
 ```
 
 No params needed — just add it.
+
+### `MCPCallMetaHook`
+
+Attaches per-call metadata (MCP `params._meta`) to every MCP tool call the agent makes. The metadata is computed on `BeforeToolCallEvent` — in the **caller's request context**, where per-request contextvars (the inbound `Principal`, application-bound run state) are visible — and rides the JSON-RPC message itself.
+
+Use this when a long-lived shared MCP client must carry a *per-request* credential or correlation id: header-based auth strategies (see the `auth:` field in [Chapter 9](Chapter_09.md)) resolve on the transport's writer task, whose context was snapshotted once at client start, so they cannot see per-request state on a shared client. `_meta` can, because it is bound at call time.
+
+```yaml
+agents:
+  assistant:
+    mcp: [platform]
+    hooks:
+      - type: kaboo_workflows.hooks:MCPCallMetaHook
+        params:
+          provider: ./mcp/auth.py:provide_call_meta   # (tool_use) -> dict | None
+```
+
+The provider is a callable `(tool_use) -> dict | None` (or an import spec resolving to one). Its result is merged into `_meta`; unless the provider set one, `toolCallId` is stamped with the strands `toolUseId`, giving the server a stable idempotency/correlation key per tool invocation. Omit `provider` to stamp only `toolCallId`. Non-MCP tools are untouched.
 
 ### `StopGuard`
 

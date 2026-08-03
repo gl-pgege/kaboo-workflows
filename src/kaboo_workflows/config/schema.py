@@ -170,10 +170,16 @@ class InterruptDef(BaseModel):
     ``ask_user`` controls whether the built-in ``ask_user`` tool is injected,
     allowing the agent to proactively ask the user questions at any time.
     Defaults to ``True`` when interrupt is enabled.
+
+    ``ttl_seconds`` optionally stamps an ``expiresAt`` timestamp onto every
+    gate interrupt this agent raises (AG-UI ``Interrupt.expiresAt``), so
+    clients can render a countdown and servers can expire unanswered
+    approvals. ``None`` (default) emits no expiry.
     """
 
     tools: list[str] = Field(default_factory=list)
     ask_user: bool = True
+    ttl_seconds: int | None = Field(default=None, gt=0)
 
 
 class StreamDef(BaseModel):

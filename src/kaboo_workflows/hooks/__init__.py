@@ -6,6 +6,7 @@ from .event_publisher import EventPublisher
 from .history_hook import HistoryHook
 from .interrupt_hook import InterruptHook
 from .max_calls_guard import MaxToolCallsGuard
+from .mcp_meta_hook import MCPCallMetaHook
 from .reference_hook import ReferenceHook
 from .stop_guard import MultiAgentStopGuard, StopGuard, stop_guard_from_event
 from .tool_name_sanitizer import ToolNameSanitizer
@@ -14,6 +15,7 @@ __all__ = [
     "EventPublisher",
     "HistoryHook",
     "InterruptHook",
+    "MCPCallMetaHook",
     "MaxToolCallsGuard",
     "MultiAgentStopGuard",
     "ReferenceHook",

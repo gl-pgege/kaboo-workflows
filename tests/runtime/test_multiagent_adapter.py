@@ -15,6 +15,7 @@ from typing import cast
 
 from ag_ui.core import EventType, RunAgentInput
 from strands import Agent
+from strands.interrupt import Interrupt
 from strands.multiagent import GraphBuilder, Swarm
 from strands.multiagent.base import MultiAgentBase
 from strands.multiagent.graph import Graph
@@ -162,6 +163,122 @@ async def test_same_instance_runs_are_independent():
 
     assert _text(first) == "Edited copy."
     assert _text(second) == "Edited copy."
+
+
+# -- per-thread interrupt isolation ------------------------------------------
+
+
+GATE_ID = "v1:before_tool_call:tc-9:u1"
+GATE_REASON = {"type": "approval", "message": "ok?", "expiresAt": "2099-01-01T00:00:00Z"}
+
+
+def _pausing_stream(runner: StrandsMultiAgent, interrupt_id: str = GATE_ID):
+    """A stream that raises a tool gate on the orchestrator's live state."""
+
+    async def stream(_task):
+        istate = ma.bridge.get_interrupt_state(runner.orchestrator)
+        assert istate is not None
+        istate.interrupts[interrupt_id] = Interrupt(
+            id=interrupt_id, name="gate", reason=dict(GATE_REASON)
+        )
+        istate.activate()
+        yield {"type": "noop"}
+
+    return stream
+
+
+async def test_paused_gate_is_parked_per_thread(monkeypatch):
+    runner = StrandsMultiAgent(_swarm(["hi"]), name="team", chat_output="writer")
+    monkeypatch.setattr(runner.orchestrator, "stream_async", _pausing_stream(runner))
+
+    items = await _drive(runner, _input(thread_id="t1"))
+
+    finished = next(it for it in items if getattr(it, "type", None) == EventType.RUN_FINISHED)
+    descriptor = finished.outcome.interrupts[0]
+    assert descriptor.id == GATE_ID
+    assert descriptor.tool_call_id == "tc-9"
+    assert descriptor.expires_at == "2099-01-01T00:00:00Z"
+
+    assert runner.is_interrupt_active("t1")
+    assert GATE_ID in runner.pending_interrupts("t1")
+    assert not runner.is_interrupt_active("t2")
+    # Between runs the orchestrator's live state is inert: no other thread's
+    # run can observe (or clobber) t1's gate.
+    assert not ma.bridge.is_interrupt_active(runner.orchestrator)
+
+
+async def test_other_thread_run_leaves_parked_gate_untouched(monkeypatch):
+    runner = StrandsMultiAgent(_swarm(["hi"]), name="team", chat_output="writer")
+    monkeypatch.setattr(runner.orchestrator, "stream_async", _pausing_stream(runner))
+    await _drive(runner, _input(thread_id="t1"))
+
+    async def clean_stream(_task):
+        yield {"type": "multiagent_node_stream", "node_id": "writer", "event": {"data": "done"}}
+
+    monkeypatch.setattr(runner.orchestrator, "stream_async", clean_stream)
+    items = await _drive(runner, _input(thread_id="t2", run_id="r2"))
+
+    finished = next(it for it in items if getattr(it, "type", None) == EventType.RUN_FINISHED)
+    assert getattr(finished, "outcome", None) is None
+    assert runner.is_interrupt_active("t1")
+    assert not runner.is_interrupt_active("t2")
+
+
+async def test_resume_restores_the_threads_parked_state(monkeypatch):
+    runner = StrandsMultiAgent(_swarm(["hi"]), name="team", chat_output="writer")
+    monkeypatch.setattr(runner.orchestrator, "stream_async", _pausing_stream(runner))
+    await _drive(runner, _input(thread_id="t1"))
+
+    seen: dict = {}
+
+    async def resume_stream(task):
+        istate = ma.bridge.get_interrupt_state(runner.orchestrator)
+        assert istate is not None
+        seen["task"] = task
+        seen["was_active"] = istate.activated
+        istate.deactivate()
+        yield {"type": "multiagent_node_stream", "node_id": "writer", "event": {"data": "ok"}}
+
+    monkeypatch.setattr(runner.orchestrator, "stream_async", resume_stream)
+    await _drive(
+        runner,
+        _input(thread_id="t1", run_id="r2"),
+        resume_entries=[
+            {"interruptId": GATE_ID, "status": "resolved", "payload": {"status": "approved"}}
+        ],
+    )
+
+    # The parked gate was live again for the resume, addressed by the entry,
+    # and — once settled — no longer parked.
+    assert seen["was_active"] is True
+    assert seen["task"] == [
+        {"interruptResponse": {"interruptId": GATE_ID, "response": {"status": "approved"}}}
+    ]
+    assert not runner.is_interrupt_active("t1")
+
+
+async def test_deactivate_clears_only_the_target_thread(monkeypatch):
+    runner = StrandsMultiAgent(_swarm(["hi"]), name="team", chat_output="writer")
+    monkeypatch.setattr(
+        runner.orchestrator, "stream_async", _pausing_stream(runner, "v1:tool_call:tc-1:a")
+    )
+    await _drive(runner, _input(thread_id="t1"))
+    monkeypatch.setattr(
+        runner.orchestrator, "stream_async", _pausing_stream(runner, "v1:tool_call:tc-2:b")
+    )
+    await _drive(runner, _input(thread_id="t2", run_id="r2"))
+
+    runner.deactivate_interrupts("t1")
+
+    assert not runner.is_interrupt_active("t1")
+    assert runner.is_interrupt_active("t2")
+    assert "v1:tool_call:tc-2:b" in runner.pending_interrupts("t2")
+
+
+def test_multiagent_uses_the_shared_interrupt_mapper():
+    from kaboo_workflows.adapters._interrupts import map_strands_interrupt_to_agui
+
+    assert ma._map_strands_interrupt_to_agui is map_strands_interrupt_to_agui
 
 
 # -- pure helpers -------------------------------------------------------------
