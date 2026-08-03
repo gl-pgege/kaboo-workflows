@@ -224,10 +224,54 @@ class AttachmentsDef(BaseModel):
       excludes agents by default.
     - ``tool`` — expose the built-in ``list_references`` / ``fetch_attachment``
       tools so in-scope agents can resolve a reference to text/bytes/URL.
+    - ``base_url`` — origin for the host's own attachment content routes.
+      Relative reference URLs resolve against it, and ``authorization`` applies
+      only to URLs under it (credentials are never sent to other origins;
+      presigned/public URLs keep the default unauthenticated fetch).
+    - ``authorization`` — where to read the bearer token for own-origin
+      fetches: ``forwarded_props:<key>`` (run-scoped token from the AG-UI
+      forwardedProps side channel) or ``env:<VAR>`` (static token).
+    - ``content_url_template`` — URL template (``{id}`` placeholder, relative
+      to ``base_url`` or absolute) for attachment-kind object references that
+      arrive without a URL. Setting it upgrades those references to fetchable
+      attachment transport on every turn, not only the first.
     """
 
     default: Literal["reference", "none"] = "reference"
     tool: bool = True
+    base_url: str | None = None
+    authorization: str | None = None
+    content_url_template: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_fetch_config(self) -> AttachmentsDef:
+        if self.authorization is not None and not self.authorization.startswith(
+            ("forwarded_props:", "env:")
+        ):
+            raise ValueError(
+                "attachments.authorization must be 'forwarded_props:<key>' or 'env:<VAR>', "
+                f"got {self.authorization!r}"
+            )
+        if self.content_url_template is not None and "{id}" not in self.content_url_template:
+            raise ValueError(
+                "attachments.content_url_template must contain the '{id}' placeholder, "
+                f"got {self.content_url_template!r}"
+            )
+        return self
+
+
+class RuntimeDef(BaseModel):
+    """Runtime behavior toggles.
+
+    - ``allow_invocation_overrides`` — when ``True``, a run's
+      ``forwardedProps.agent_config`` (``system_prompt`` / ``model_id``) is
+      applied to the executing per-thread agent before each invocation. Off by
+      default: only enable when every caller that can reach the endpoint is
+      trusted to steer prompts and models (the AG-UI side channel is
+      host-controlled, but multi-tenant hosts may not want this).
+    """
+
+    allow_invocation_overrides: bool = False
 
 
 class AgentAttachmentsDef(BaseModel):
@@ -534,6 +578,8 @@ class AppConfig(BaseModel):
     """
     attachments: AttachmentsDef = Field(default_factory=AttachmentsDef)
     """Global reference/attachment policy (manifest + optional resolver tool)."""
+    runtime: RuntimeDef = Field(default_factory=RuntimeDef)
+    """Runtime behavior toggles (per-invocation agent overrides, …)."""
     log_level: str = "WARNING"
 
     @model_validator(mode="after")

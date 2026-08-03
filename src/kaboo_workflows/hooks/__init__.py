@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .event_publisher import EventPublisher
+from .forwarded_props_hook import ForwardedPropsHook
 from .history_hook import HistoryHook
 from .interrupt_hook import InterruptHook
 from .max_calls_guard import MaxToolCallsGuard
@@ -13,6 +14,7 @@ from .tool_name_sanitizer import ToolNameSanitizer
 
 __all__ = [
     "EventPublisher",
+    "ForwardedPropsHook",
     "HistoryHook",
     "InterruptHook",
     "MCPCallMetaHook",

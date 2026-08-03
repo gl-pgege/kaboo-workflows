@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from ._context import Principal, get_auth_context, set_auth_context
+from ._context import (
+    Principal,
+    get_auth_context,
+    get_forwarded_props,
+    set_auth_context,
+    set_forwarded_props,
+)
 from .auth import (
     M2MClientCredentialsAuth,
     OBOTokenAuth,
@@ -70,6 +76,7 @@ __all__ = [
     "create_mcp_client",
     "create_mcp_server",
     "get_auth_context",
+    "get_forwarded_props",
     "load",
     "load_config",
     "load_session",
@@ -79,4 +86,5 @@ __all__ = [
     "resolve_infra",
     "serialize_multiagent_result",
     "set_auth_context",
+    "set_forwarded_props",
 ]

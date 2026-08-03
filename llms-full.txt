@@ -575,6 +575,30 @@ on-demand **tool** (`fetch_attachment` / `list_references`), and opt-in
 resolved by the built-in tool; custom object kinds are resolved by your own MCP
 tool. See [Attachments & Multimodal](configuration/Chapter_19.md).
 
+Attachment URL fetches funnel through a pluggable fetcher: configure
+`attachments.base_url` / `authorization` for files behind your API's auth, or
+register a `ReferenceFetcher` in code for multi-store routing.
+
+## The host side channel: `forwardedProps`
+
+The AG-UI protocol carries a free-form `forwardedProps` object on every run —
+context the *host backend* sends the runtime that is not part of the
+conversation and never reaches the model as text: run-scoped credentials,
+tenant ids, per-run agent configuration. kaboo binds it per request; your
+tools and hooks read it back with `get_forwarded_props()`, and every agent
+also receives a copy in its state under `forwarded_props`.
+
+Two built-in features consume it:
+
+- **Authorized attachment fetching** — `attachments.authorization: forwarded_props:<key>`
+  reads a run-scoped bearer token for own-origin fetches.
+- **Per-invocation agent overrides** — with `runtime.allow_invocation_overrides: true`,
+  `forwardedProps.agent_config` (`system_prompt`, `model_id`) is applied to the
+  executing per-thread agent before each invocation. This is how one runtime
+  process serves many host-defined agent types: the host projects the selected
+  agent's prompt/model into each run, concurrent threads never interfere, and
+  editing an agent definition takes effect on the next turn without a restart.
+
 ## Where to go next
 
 - **[Getting started](getting-started.md)** if you haven't run it yet.
@@ -753,6 +777,27 @@ models:
       max_tokens: 4096
       temperature: 0.7
       top_p: 0.9
+```
+
+### OpenAI client defaults: `timeout` and `max_retries`
+
+For the `openai` provider, `params.client_args` is forwarded to the OpenAI SDK
+client. kaboo fills two keys when you don't set them: `timeout: 180` (seconds)
+and `max_retries: 2`. Without a timeout, a stalled connection to the provider
+(or a router like OpenRouter) hangs the run forever with no error; with these
+defaults it fails visibly and retries. Override either key to tune:
+
+```yaml
+models:
+  default:
+    provider: openai
+    model_id: anthropic/claude-sonnet-4-6
+    params:
+      client_args:
+        api_key: ${OPENROUTER_API_KEY}
+        base_url: https://openrouter.ai/api/v1
+        timeout: 300        # long-running document analysis
+        max_retries: 1
 ```
 
 > **Tips & Tricks**
@@ -2753,6 +2798,7 @@ mcp_servers: {}       # Named MCP server definitions
 mcp_clients: {}       # Named MCP client connections
 session_manager: {}   # Global session manager
 attachments: {}       # Global reference/attachment policy (AttachmentsDef)
+runtime: {}           # Runtime behavior toggles (RuntimeDef)
 entry: "name"         # Required: entry point agent or orchestration
 log_level: "WARNING"  # Optional: DEBUG, INFO, WARNING, ERROR
 ```
@@ -2792,6 +2838,10 @@ agents:
 attachments:
   default: reference | none        # Baseline for agents without their own attachments:
   tool: true                       # Expose list_references / fetch_attachment tools
+  base_url: null                   # Origin for the host's own attachment routes
+  authorization: null              # forwarded_props:<key> | env:<VAR> (own-origin only)
+  content_url_template: null       # e.g. /attachments/{id}/content — upgrades
+                                   # attachment-kind object refs to fetchable transport
 ```
 
 Per-agent override on `AgentDef.attachments` (shorthands normalize to `{enabled, inline}`):
@@ -2804,6 +2854,14 @@ agents:
     attachments: reference         # manifest only (inherits if omitted)
   writer:
     attachments: none              # excluded from references
+```
+
+## RuntimeDef
+
+```yaml
+runtime:
+  allow_invocation_overrides: false  # Apply forwardedProps.agent_config
+                                     # (system_prompt / model_id) per invocation
 ```
 
 ## HookDef
@@ -2954,6 +3012,9 @@ Global defaults live on the root `attachments:` block; per-agent overrides on `A
 attachments:
   default: reference     # reference | none — baseline for in-scope agents
   tool: true             # expose list_references / fetch_attachment
+  base_url: null         # origin of the host's own attachment routes (optional)
+  authorization: null    # forwarded_props:<key> | env:<VAR> (own-origin only)
+  content_url_template: null  # e.g. /attachments/{id}/content (optional)
 
 agents:
   vision_analyst:
@@ -2993,11 +3054,57 @@ When `attachments.tool: true` (the default), in-scope agents get two tools:
 
 Custom object kinds are **not** covered by `fetch_attachment` — you resolve those with your own MCP tool (e.g. `query_table(id)`). The manifest hands the agent the `kind`+`id`; wiring the resolver is the documented extension point.
 
+## Authorized fetching & attachments beyond the first turn
+
+By default, URL sources are fetched server-side **without credentials** — fine
+for presigned/public URLs, not for files behind your API's auth. Three knobs
+change that:
+
+```yaml
+attachments:
+  base_url: ${API_BASE_URL}                    # your API's origin
+  authorization: forwarded_props:runToken      # or env:<VAR>
+  content_url_template: /attachments/{id}/content
+```
+
+- **`base_url`** — relative reference URLs (`/attachments/…`) resolve against
+  it.
+- **`authorization`** — where the bearer token comes from:
+  `forwarded_props:<key>` reads it from the run's AG-UI `forwardedProps` (a
+  run-scoped credential your backend sends per invocation); `env:<VAR>` reads
+  a static token. The token is attached **only** to URLs under `base_url` —
+  presigned/public URLs on other origins keep the unauthenticated default, so
+  your credential never reaches third-party hosts.
+- **`content_url_template`** — entries in `state.kaboo_references` with
+  `kind: "attachment"` are files, not custom objects. When they carry a
+  `meta.url` — or this template can synthesize one from the id — they are
+  upgraded to fetchable attachment transport, so `fetch_attachment` works on
+  **every** turn, not only the first (where the file also rides the message as
+  a multimodal part).
+
+Hosts with several authenticated stores or non-HTTP retrieval can go further
+and register a custom strategy in code — it receives the full `Reference` for
+routing:
+
+```python
+from kaboo_workflows.tools import set_reference_fetcher
+
+def my_fetcher(url: str, *, reference=None) -> bytes | None:
+    ...  # route by reference.meta, sign requests, read from object storage
+
+set_reference_fetcher(my_fetcher)  # once at startup, before serving
+```
+
+The registered fetcher applies everywhere bytes are resolved: the
+`fetch_attachment` tool, `inline` media resolution, and the entry message's
+multimodal parts (kaboo routes ag-ui-strands' internal fetch through the same
+funnel).
+
 ## Inline media requirements
 
 For `inline` to work, the agent's `model:` must be vision/doc-capable, and a few limits apply (inherited from the AG-UI → strands conversion):
 
-- **Presigned/public URLs only.** URL sources are fetched server-side with no auth. Have your frontend `onUpload` store the file and return a fetchable URL.
+- **Fetchable URLs.** URL sources are fetched server-side — unauthenticated by default (presigned/public URLs), or authorized for your own origin via `attachments.base_url` / `authorization` (see above). Have your frontend `onUpload` store the file and return a fetchable URL.
 - **Format allowlist.** Images (`png/jpeg/gif/webp`) and documents (`pdf/csv/doc/docx/xls/xlsx/html/txt/md`) plus video. Unsupported or absent MIME types are skipped.
 - **Audio is unsupported** and dropped.
 - **Inline bloats history and event-log replay.** Prefer `reference` mode by default; keep base64 out of the transport by returning URLs from `onUpload`.

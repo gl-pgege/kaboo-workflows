@@ -16,6 +16,7 @@ mcp_servers: {}       # Named MCP server definitions
 mcp_clients: {}       # Named MCP client connections
 session_manager: {}   # Global session manager
 attachments: {}       # Global reference/attachment policy (AttachmentsDef)
+runtime: {}           # Runtime behavior toggles (RuntimeDef)
 entry: "name"         # Required: entry point agent or orchestration
 log_level: "WARNING"  # Optional: DEBUG, INFO, WARNING, ERROR
 ```
@@ -55,6 +56,10 @@ agents:
 attachments:
   default: reference | none        # Baseline for agents without their own attachments:
   tool: true                       # Expose list_references / fetch_attachment tools
+  base_url: null                   # Origin for the host's own attachment routes
+  authorization: null              # forwarded_props:<key> | env:<VAR> (own-origin only)
+  content_url_template: null       # e.g. /attachments/{id}/content — upgrades
+                                   # attachment-kind object refs to fetchable transport
 ```
 
 Per-agent override on `AgentDef.attachments` (shorthands normalize to `{enabled, inline}`):
@@ -67,6 +72,14 @@ agents:
     attachments: reference         # manifest only (inherits if omitted)
   writer:
     attachments: none              # excluded from references
+```
+
+## RuntimeDef
+
+```yaml
+runtime:
+  allow_invocation_overrides: false  # Apply forwardedProps.agent_config
+                                     # (system_prompt / model_id) per invocation
 ```
 
 ## HookDef

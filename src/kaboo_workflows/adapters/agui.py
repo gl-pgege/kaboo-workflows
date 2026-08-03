@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import mimetypes
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -55,6 +56,7 @@ from kaboo_workflows._context import (
     Reference,
     set_activity_context,
     set_auth_context,
+    set_forwarded_props,
     set_history_exchange,
     set_inline_requests,
     set_references,
@@ -62,6 +64,14 @@ from kaboo_workflows._context import (
 from kaboo_workflows.config.resolvers import resolve_session_manager
 from kaboo_workflows.config.resolvers.agents import get_agent_hook_providers
 from kaboo_workflows.config.resolvers.config import _resolve_chat_output, _resolve_chat_owner
+from kaboo_workflows.hooks import ForwardedPropsHook
+from kaboo_workflows.tools.fetching import (
+    ConfiguredReferenceFetcher,
+    get_attachment_url_template,
+    install_agui_strands_fetch,
+    set_attachment_url_template,
+    set_reference_fetcher,
+)
 from kaboo_workflows.types import StreamEvent
 from kaboo_workflows.wire import EventQueue
 
@@ -412,11 +422,17 @@ def _parse_attachment_parts(message: Any) -> list[Reference]:
 
 
 def _parse_object_references(input_data: RunAgentInput) -> list[Reference]:
-    """Extract object (pointer-only) references from ``state.kaboo_references``.
+    """Extract object references from ``state.kaboo_references``.
 
     Custom entities (tables, dashboards, …) are cited by the frontend and travel
     in AG-UI state rather than on the message. Each entry supplies ``kind``,
     ``id`` and ``name``; ``meta`` is passed through for the user's resolver tool.
+
+    Entries of kind ``"attachment"`` are *files*, not custom entities: when a
+    content URL is available (``meta.url``, or synthesized from the configured
+    ``attachments.content_url_template``), they are upgraded to attachment
+    transport so ``fetch_attachment`` works on every turn — not only the first,
+    where the host also sends multimodal message parts.
     """
     state = input_data.state
     if not isinstance(state, dict):
@@ -432,16 +448,40 @@ def _parse_object_references(input_data: RunAgentInput) -> list[Reference]:
         if not ref_id:
             continue
         meta = entry.get("meta")
-        refs.append(
-            Reference(
-                kind=str(entry.get("kind") or "object"),
-                id=str(ref_id),
-                name=str(entry.get("name") or ref_id),
-                transport="object",
-                meta=meta if isinstance(meta, dict) else {},
-            )
+        ref = Reference(
+            kind=str(entry.get("kind") or "object"),
+            id=str(ref_id),
+            name=str(entry.get("name") or ref_id),
+            transport="object",
+            meta=meta if isinstance(meta, dict) else {},
         )
+        if ref.kind == "attachment":
+            _upgrade_attachment_reference(ref)
+        refs.append(ref)
     return refs
+
+
+def _upgrade_attachment_reference(ref: Reference) -> None:
+    """Give an attachment-kind object reference a fetchable transport in place.
+
+    The URL comes from ``meta.url`` when the host supplied one, else from the
+    configured content URL template. Without either, the reference stays a
+    plain object (there is nothing to fetch).
+    """
+    url = ref.meta.get("url")
+    if not (isinstance(url, str) and url):
+        template = get_attachment_url_template()
+        if template is None:
+            return
+        url = template.format(id=ref.id)
+    ref.transport = "attachment"
+    ref.source = "url"
+    ref.value = url
+    mime = ref.meta.get("mimeType") or ref.meta.get("mime_type")
+    if not (isinstance(mime, str) and mime):
+        mime = mimetypes.guess_type(ref.name)[0]
+    if mime:
+        ref.mime_type = mime
 
 
 def _parse_references(input_data: RunAgentInput) -> list[Reference]:
@@ -759,6 +799,13 @@ def _add_kaboo_endpoint(
         # tools can inject the manifest / resolve pointers. Set before any task
         # is created so the run task inherits the same list.
         set_references(_parse_references(input_data))
+        # The host's per-run side channel (AG-UI forwardedProps): run-scoped
+        # credentials, per-run agent config, tenant context. Bound before any
+        # task is created so host tools/hooks and built-in features read the
+        # right run's props via get_forwarded_props().
+        set_forwarded_props(
+            input_data.forwarded_props if isinstance(input_data.forwarded_props, dict) else {}
+        )
         # On-demand media the model fetches via fetch_attachment is materialized
         # into a user message (not a tool result) so it works across providers.
         # Bind the shared set here so the run task and its tool threads share it.
@@ -950,6 +997,28 @@ def _add_kaboo_endpoint(
         )
 
 
+def _install_reference_fetching(app_config: Any) -> None:
+    """Wire the config-driven reference fetching for this process.
+
+    Builds a :class:`ConfiguredReferenceFetcher` when ``attachments.base_url``
+    or ``attachments.authorization`` is set (a host-registered fetcher via
+    ``set_reference_fetcher`` is respected and not overwritten), registers the
+    ``content_url_template`` for object-reference upgrades, and routes
+    ag-ui-strands' media fetching through the same funnel.
+    """
+    attachments = getattr(app_config, "attachments", None)
+    base_url = getattr(attachments, "base_url", None)
+    authorization = getattr(attachments, "authorization", None)
+    from kaboo_workflows.tools.fetching import get_reference_fetcher
+
+    if (base_url or authorization) and get_reference_fetcher() is None:
+        set_reference_fetcher(
+            ConfiguredReferenceFetcher(base_url=base_url, authorization=authorization)
+        )
+    set_attachment_url_template(getattr(attachments, "content_url_template", None))
+    install_agui_strands_fetch()
+
+
 def create_agui_app(
     config_path: str | Path,
     *,
@@ -987,6 +1056,8 @@ def create_agui_app(
     config_path = Path(config_path).resolve()
     resolved = load(str(config_path))
 
+    _install_reference_fetching(getattr(resolved, "app_config", None))
+
     entry = resolved.entry
     mcp_lifecycle = resolved.mcp_lifecycle
 
@@ -1007,6 +1078,17 @@ def create_agui_app(
         # fire on the per-thread clone ag-ui-strands actually executes (the
         # clone does not inherit the blueprint's HookRegistry).
         forwarded_hooks = get_agent_hook_providers(entry)
+
+        # Every per-thread clone gets the request's forwarded props in its
+        # state; per-invocation prompt/model overrides are opt-in via the root
+        # runtime.allow_invocation_overrides config flag.
+        runtime_def = getattr(getattr(resolved, "app_config", None), "runtime", None)
+        forwarded_hooks = [
+            ForwardedPropsHook(
+                apply_agent_config=bool(getattr(runtime_def, "allow_invocation_overrides", False))
+            ),
+            *forwarded_hooks,
+        ]
 
         # A plain-agent entry (not a delegate) also forwards its EventPublisher so
         # its own tool calls land in the activity stream and enrich the inline tool

@@ -95,6 +95,27 @@ models:
       top_p: 0.9
 ```
 
+### OpenAI client defaults: `timeout` and `max_retries`
+
+For the `openai` provider, `params.client_args` is forwarded to the OpenAI SDK
+client. kaboo fills two keys when you don't set them: `timeout: 180` (seconds)
+and `max_retries: 2`. Without a timeout, a stalled connection to the provider
+(or a router like OpenRouter) hangs the run forever with no error; with these
+defaults it fails visibly and retries. Override either key to tune:
+
+```yaml
+models:
+  default:
+    provider: openai
+    model_id: anthropic/claude-sonnet-4-6
+    params:
+      client_args:
+        api_key: ${OPENROUTER_API_KEY}
+        base_url: https://openrouter.ai/api/v1
+        timeout: 300        # long-running document analysis
+        max_retries: 1
+```
+
 > **Tips & Tricks**
 >
 > - When combined with `vars`, you can swap models at runtime: `MODEL=gpt-4o python main.py`. See [Chapter 3](Chapter_03.md).

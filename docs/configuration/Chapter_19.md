@@ -35,6 +35,9 @@ Global defaults live on the root `attachments:` block; per-agent overrides on `A
 attachments:
   default: reference     # reference | none — baseline for in-scope agents
   tool: true             # expose list_references / fetch_attachment
+  base_url: null         # origin of the host's own attachment routes (optional)
+  authorization: null    # forwarded_props:<key> | env:<VAR> (own-origin only)
+  content_url_template: null  # e.g. /attachments/{id}/content (optional)
 
 agents:
   vision_analyst:
@@ -74,11 +77,57 @@ When `attachments.tool: true` (the default), in-scope agents get two tools:
 
 Custom object kinds are **not** covered by `fetch_attachment` — you resolve those with your own MCP tool (e.g. `query_table(id)`). The manifest hands the agent the `kind`+`id`; wiring the resolver is the documented extension point.
 
+## Authorized fetching & attachments beyond the first turn
+
+By default, URL sources are fetched server-side **without credentials** — fine
+for presigned/public URLs, not for files behind your API's auth. Three knobs
+change that:
+
+```yaml
+attachments:
+  base_url: ${API_BASE_URL}                    # your API's origin
+  authorization: forwarded_props:runToken      # or env:<VAR>
+  content_url_template: /attachments/{id}/content
+```
+
+- **`base_url`** — relative reference URLs (`/attachments/…`) resolve against
+  it.
+- **`authorization`** — where the bearer token comes from:
+  `forwarded_props:<key>` reads it from the run's AG-UI `forwardedProps` (a
+  run-scoped credential your backend sends per invocation); `env:<VAR>` reads
+  a static token. The token is attached **only** to URLs under `base_url` —
+  presigned/public URLs on other origins keep the unauthenticated default, so
+  your credential never reaches third-party hosts.
+- **`content_url_template`** — entries in `state.kaboo_references` with
+  `kind: "attachment"` are files, not custom objects. When they carry a
+  `meta.url` — or this template can synthesize one from the id — they are
+  upgraded to fetchable attachment transport, so `fetch_attachment` works on
+  **every** turn, not only the first (where the file also rides the message as
+  a multimodal part).
+
+Hosts with several authenticated stores or non-HTTP retrieval can go further
+and register a custom strategy in code — it receives the full `Reference` for
+routing:
+
+```python
+from kaboo_workflows.tools import set_reference_fetcher
+
+def my_fetcher(url: str, *, reference=None) -> bytes | None:
+    ...  # route by reference.meta, sign requests, read from object storage
+
+set_reference_fetcher(my_fetcher)  # once at startup, before serving
+```
+
+The registered fetcher applies everywhere bytes are resolved: the
+`fetch_attachment` tool, `inline` media resolution, and the entry message's
+multimodal parts (kaboo routes ag-ui-strands' internal fetch through the same
+funnel).
+
 ## Inline media requirements
 
 For `inline` to work, the agent's `model:` must be vision/doc-capable, and a few limits apply (inherited from the AG-UI → strands conversion):
 
-- **Presigned/public URLs only.** URL sources are fetched server-side with no auth. Have your frontend `onUpload` store the file and return a fetchable URL.
+- **Fetchable URLs.** URL sources are fetched server-side — unauthenticated by default (presigned/public URLs), or authorized for your own origin via `attachments.base_url` / `authorization` (see above). Have your frontend `onUpload` store the file and return a fetchable URL.
 - **Format allowlist.** Images (`png/jpeg/gif/webp`) and documents (`pdf/csv/doc/docx/xls/xlsx/html/txt/md`) plus video. Unsupported or absent MIME types are skipped.
 - **Audio is unsupported** and dropped.
 - **Inline bloats history and event-log replay.** Prefer `reference` mode by default; keep base64 out of the transport by returning URLs from `onUpload`.

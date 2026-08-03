@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import base64
 import logging
-import urllib.parse
-import urllib.request
 from typing import Any
 
 from strands import tool
 
 from .._context import Reference, get_references, request_inline
+from .fetching import _MAX_FETCH_BYTES, fetch_reference_bytes
+
+__all__ = ["_MAX_FETCH_BYTES", "fetch_attachment", "list_references", "resolve_inline_blocks"]
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +38,6 @@ _IMAGE_FORMATS = {"png", "jpeg", "gif", "webp"}
 _DOCUMENT_FORMATS = {"pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"}
 _VIDEO_FORMATS = {"flv", "mkv", "mov", "mpeg", "mpg", "mp4", "three_gp", "webm", "wmv"}
 _TEXT_FORMATS = {"txt", "md", "csv", "html", "json", "xml"}
-
-# Guard: server-side URL fetches inline bytes with no auth (presigned/public
-# URLs only). Cap the size so a hostile/huge attachment can't exhaust memory.
-_MAX_FETCH_BYTES = 25 * 1024 * 1024
-
 
 _TEXT_MIME_TYPES = {"application/json", "application/xml", "application/x-yaml", "application/yaml"}
 
@@ -64,26 +60,13 @@ def _is_text_mime(mime_type: str | None) -> bool:
     return mime in _TEXT_MIME_TYPES or _mime_to_format(mime, _TEXT_FORMATS) is not None
 
 
-def _fetch_url_bytes(url: str) -> bytes | None:
-    """Fetch bytes from a presigned/public URL (no auth), size-capped."""
-    # Only http(s): reject file:/ and custom schemes (local-file read / SSRF).
-    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
-        logger.warning("refusing to fetch reference url with non-http(s) scheme")
-        return None
-    try:
-        with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310  # nosec B310
-            data = resp.read(_MAX_FETCH_BYTES + 1)
-    except Exception as exc:
-        logger.warning("failed to fetch reference url: %s", exc)
-        return None
-    if len(data) > _MAX_FETCH_BYTES:
-        logger.warning("reference exceeds %d-byte fetch cap; skipping", _MAX_FETCH_BYTES)
-        return None
-    return data
-
-
 def _resolve_bytes(ref: Reference) -> bytes | None:
-    """Resolve an attachment reference to raw bytes (base64 data or URL fetch)."""
+    """Resolve an attachment reference to raw bytes (base64 data or URL fetch).
+
+    URL fetches go through :func:`~kaboo_workflows.tools.fetching.fetch_reference_bytes`,
+    so a registered :class:`~kaboo_workflows.tools.fetching.ReferenceFetcher`
+    (e.g. the config-built authorized fetcher) applies here.
+    """
     if ref.source == "data" and ref.value is not None:
         try:
             return base64.b64decode(ref.value)
@@ -91,7 +74,7 @@ def _resolve_bytes(ref: Reference) -> bytes | None:
             logger.warning("failed to decode base64 reference %s: %s", ref.id, exc)
             return None
     if ref.source == "url" and ref.value is not None:
-        return _fetch_url_bytes(ref.value)
+        return fetch_reference_bytes(ref.value, reference=ref)
     return None
 
 

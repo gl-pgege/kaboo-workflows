@@ -110,6 +110,15 @@ _current_inline_requests: contextvars.ContextVar[set[str] | None] = contextvars.
     "kaboo_inline_requests", default=None
 )
 
+# The AG-UI request's forwardedProps: the host-to-runtime side channel for
+# per-run context (run-scoped credentials, per-run agent config, …). Bound once
+# per request like references; read by host tools/hooks via
+# ``get_forwarded_props`` and by built-in features (authorized attachment
+# fetching, per-invocation agent overrides).
+_current_forwarded_props: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "kaboo_forwarded_props", default=None
+)
+
 
 def set_activity_context(
     thread_id: str | None,
@@ -203,6 +212,24 @@ def set_references(references: list[Reference] | None) -> None:
 def get_references() -> list[Reference]:
     """Return the current request's references (empty list when none)."""
     return _current_references.get() or []
+
+
+def set_forwarded_props(props: dict[str, Any] | None) -> None:
+    """Bind the current request's ``RunAgentInput.forwarded_props``.
+
+    ``forwardedProps`` is the AG-UI protocol's free-form side channel: hosts
+    attach per-run context (scoped credentials, per-run agent configuration,
+    tenant ids, …) that is not part of the conversation and must not reach the
+    model. Call at the start of each request handler, before creating the run
+    task, so tasks created afterwards inherit a copy of this context. Host
+    tools and hooks read it back with :func:`get_forwarded_props`.
+    """
+    _current_forwarded_props.set(props if isinstance(props, dict) else {})
+
+
+def get_forwarded_props() -> dict[str, Any]:
+    """Return the current request's forwarded props (empty dict when none)."""
+    return _current_forwarded_props.get() or {}
 
 
 def set_inline_requests(requests: set[str] | None) -> None:

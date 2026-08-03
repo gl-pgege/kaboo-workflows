@@ -8,6 +8,25 @@ from strands.models import Model
 
 PROVIDERS = ("bedrock", "ollama", "openai", "gemini")
 
+# Defaults injected into the OpenAI-compatible client unless the config sets
+# its own values. The SDK's default is effectively unbounded for streaming
+# responses: a stalled connection (proxy, upstream router) would otherwise hang
+# a run forever with no error. A finite timeout with retries turns that
+# failure mode into a visible, recoverable one.
+DEFAULT_OPENAI_TIMEOUT_SECONDS = 180.0
+DEFAULT_OPENAI_MAX_RETRIES = 2
+
+
+def _with_openai_client_defaults(params: dict[str, Any]) -> dict[str, Any]:
+    """Return ``params`` with default ``client_args`` timeout/retries applied.
+
+    User-supplied values always win; only absent keys are filled.
+    """
+    client_args = dict(params.get("client_args") or {})
+    client_args.setdefault("timeout", DEFAULT_OPENAI_TIMEOUT_SECONDS)
+    client_args.setdefault("max_retries", DEFAULT_OPENAI_MAX_RETRIES)
+    return {**params, "client_args": client_args}
+
 
 def create_model(provider: str, model_id: str, **params: Any) -> Model:
     """Dispatch to the appropriate model factory by provider name.
@@ -50,7 +69,7 @@ def create_model(provider: str, model_id: str, **params: Any) -> Model:
                     "  pip install kaboo-workflows[openai]\n"
                     "Or install directly: pip install strands-agents[openai]"
                 ) from None
-            return OpenAIModel(model_id=model_id, **params)
+            return OpenAIModel(model_id=model_id, **_with_openai_client_defaults(params))
 
         case "gemini":
             try:

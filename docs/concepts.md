@@ -77,6 +77,30 @@ on-demand **tool** (`fetch_attachment` / `list_references`), and opt-in
 resolved by the built-in tool; custom object kinds are resolved by your own MCP
 tool. See [Attachments & Multimodal](configuration/Chapter_19.md).
 
+Attachment URL fetches funnel through a pluggable fetcher: configure
+`attachments.base_url` / `authorization` for files behind your API's auth, or
+register a `ReferenceFetcher` in code for multi-store routing.
+
+## The host side channel: `forwardedProps`
+
+The AG-UI protocol carries a free-form `forwardedProps` object on every run —
+context the *host backend* sends the runtime that is not part of the
+conversation and never reaches the model as text: run-scoped credentials,
+tenant ids, per-run agent configuration. kaboo binds it per request; your
+tools and hooks read it back with `get_forwarded_props()`, and every agent
+also receives a copy in its state under `forwarded_props`.
+
+Two built-in features consume it:
+
+- **Authorized attachment fetching** — `attachments.authorization: forwarded_props:<key>`
+  reads a run-scoped bearer token for own-origin fetches.
+- **Per-invocation agent overrides** — with `runtime.allow_invocation_overrides: true`,
+  `forwardedProps.agent_config` (`system_prompt`, `model_id`) is applied to the
+  executing per-thread agent before each invocation. This is how one runtime
+  process serves many host-defined agent types: the host projects the selected
+  agent's prompt/model into each run, concurrent threads never interfere, and
+  editing an agent definition takes effect on the next turn without a restart.
+
 ## Where to go next
 
 - **[Getting started](getting-started.md)** if you haven't run it yet.

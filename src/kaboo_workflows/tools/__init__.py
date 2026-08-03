@@ -11,6 +11,13 @@ from __future__ import annotations
 
 from .ask_user import ask_user
 from .extractors import serialize_multiagent_result
+from .fetching import (
+    ConfiguredReferenceFetcher,
+    ReferenceFetcher,
+    fetch_reference_bytes,
+    get_reference_fetcher,
+    set_reference_fetcher,
+)
 from .loaders import (
     load_tool_function,
     load_tools_from_directory,
@@ -26,9 +33,14 @@ from .wrappers import (
 )
 
 __all__ = [
+    "ConfiguredReferenceFetcher",
+    "ReferenceFetcher",
     "ask_user",
     "fetch_attachment",
+    "fetch_reference_bytes",
+    "get_reference_fetcher",
     "list_references",
+    "set_reference_fetcher",
     "load_tool_function",
     "load_tools_from_directory",
     "load_tools_from_file",
