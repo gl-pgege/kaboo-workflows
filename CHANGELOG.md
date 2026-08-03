@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## v0.12.0 (2026-07-23)
+
+### Feat
+
+- **hooks**: MCPCallMetaHook — per-call MCP `_meta` stamping (per-request credentials and `toolCallId` correlation on shared MCP clients)
+- **hooks**: `interrupt.ttl_seconds` — tool-gate interrupts carry an `expiresAt` ISO-8601 timestamp (AG-UI `Interrupt.expiresAt`) for client countdowns and server-side expiry
+- **hooks**: tool-gate approvals accept an edited `tool_input` in the resume payload (AG-UI `approveWithEdits`) — the gated call executes with the user's arguments
+- **multiagent**: per-thread interrupt-state isolation on shared Swarm/Graph orchestrators — a gate paused on one conversation is parked per thread and can no longer be observed or clobbered by runs on another; orchestrator runs are serialized (single-flight)
+
+### Fix
+
+- **multiagent**: swarm/graph interrupt descriptors now carry `toolCallId` and `expiresAt` — the mapper is shared with the single-agent path instead of a drifting copy
+
 ## v0.11.0 (2026-07-14)
 
 ### Feat
