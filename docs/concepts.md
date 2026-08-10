@@ -107,6 +107,11 @@ Two built-in features consume it:
   flag is **deprecated**: an overlay expresses both, plus the structure they could
   not.
 
+Everything on this channel is only as trustworthy as whoever set it, so a host
+should stamp these server-side rather than accept them from a browser — see
+[server-side props](https://gl-pgege.github.io/kaboo-runtime/server-side-props/)
+in kaboo-runtime for where that goes on a Node host.
+
 ## Statelessness: what a run keeps and what it carries
 
 A run keeps nothing. Everything a conversation accumulates arrives with the turn
