@@ -8,7 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Feat
 
-- runtime-submitted workflow configs and durable interrupts
+- **adapters**: runtime-submitted workflow configs — `create_agui_app(session_config_key="workflow_config")` reads each run's own YAML from `forwardedProps` and builds that run's agents, orchestration, entry and MCP client sessions, releasing them when the stream ends. One process now serves many workflows, and editing one takes effect on the next turn with no restart and no file on disk. `allowed_mcp_hosts=` bounds what a submitted config may connect to
+- **config**: session overlay merge — `load_session_config(base_raw, overlay)` layers a submitted config over the service's base: `agents` / `orchestrations` / `entry` are replaced, `models` / `mcp_clients` are unioned with the overlay winning a clash, singletons are last-wins, `mcp_servers` and `command:` clients are rejected. The two halves of `load_config` are now separately available as `parse_config_sources` (parse once at boot, keep raw) and `validate_raw_config`
+- **runtime**: pending human-in-the-loop interrupts survive a restart with no store to configure — the open gate travels on the AG-UI state channel under `kaboo_session` beside `kaboo_history`, and is restored onto whichever agent serves the resume, including a cold one. On by default; disable with `runtime.persist_session_state: false` when the AG-UI endpoint is exposed straight to a browser
+- **mcp**: `MCPLifecycle.start(pin_clients=False)` and `resolve_run_clients(config, infra)` for client sessions owned by a run rather than the process. `MCPClientError: the client session is not running` stops being possible rather than being retried, and `relay` / `obo` auth becomes reachable because the client starts inside the request
+
+### Fix
+
+- **config**: a raw YAML string is no longer probed as a filesystem path. A submitted config over the OS filename limit raised `ENAMETOOLONG`, and one containing a URL was reported as a missing file
+
+### Deprecated
+
+- **runtime**: `runtime.allow_invocation_overrides` and `forwardedProps.agent_config` (`system_prompt` / `model_id`), removed in 0.15.0. A submitted config expresses both, plus the structure they could not reach. Migrating:
+
+  ```python
+  # Before — the host projects two fields onto a fixed workflow.
+  app = create_agui_app("config.yaml")             # runtime.allow_invocation_overrides: true
+  forwarded_props = {"agent_config": {"system_prompt": prompt, "model_id": model}}
+
+  # After — the host submits the workflow.
+  app = create_agui_app("config.yaml", session_config_key="workflow_config")
+  forwarded_props = {"workflow_config": f"agents:\n  assistant:\n    model: {model}\n    system_prompt: |\n      {prompt}\nentry: assistant"}
+  ```
+
+  Keep shared `models:` and `mcp_clients:` in `config.yaml`; the overlay references them by name.
 
 ## v0.13.0 (2026-08-02)
 
