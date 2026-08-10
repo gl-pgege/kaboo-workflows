@@ -1,0 +1,25 @@
+# 21_runtime_configs — One service, a different workflow every run
+#
+# This file is the SHARED layer. It holds what every workflow draws on — the
+# models, and (in a real deployment) the mcp_clients and attachment policy —
+# plus a fallback agent for a run that submits nothing.
+#
+# A run submits its own workflow on `forwardedProps.workflow_config`. That
+# submitted config REPLACES `agents:`, `orchestrations:` and `entry:` below,
+# and references `models:` here by name without redeclaring them.
+#
+# Run:
+#   uv run python examples/21_runtime_configs/main.py
+
+models:
+  default:
+    provider: bedrock
+    model_id: openai.gpt-oss-20b-1:0
+
+agents:
+  assistant:
+    model: default
+    system_prompt: |
+      You are a general assistant. Answer briefly.
+
+entry: assistant

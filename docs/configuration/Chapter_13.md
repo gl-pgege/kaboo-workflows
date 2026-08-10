@@ -131,7 +131,7 @@ Two things an overlay may not do, because a submitted config is data from somewh
 
 Superset enforcement comes free from validation you already have: an overlay agent naming a client nobody defined fails with `Agent 'x' references MCP client 'y' which is not defined. Available: [...]`.
 
-See [Chapter 17](Chapter_17.md) for how this fits the loading pipeline, and `create_agui_app(session_config_key=...)` for the serving side.
+See [Chapter 17](Chapter_17.md) for how this fits the loading pipeline, `create_agui_app(session_config_key=...)` for the serving side, and [`examples/21_runtime_configs`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/21_runtime_configs) for a base and two submitted workflows you can run.
 
 > **Tips & Tricks**
 >

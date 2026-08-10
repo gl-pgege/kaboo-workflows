@@ -221,7 +221,7 @@ clients = resolve_run_clients(config, infra)
 resolved = load_session(config, replace(infra, clients=clients.clients), session_id=thread_id)
 ```
 
-`create_agui_app(config_path, session_config_key="workflow_config")` does exactly this for you, reading the overlay from `forwardedProps` and closing the run's clients when its stream ends. See [Chapter 13](Chapter_13.md) for the merge rules.
+`create_agui_app(config_path, session_config_key="workflow_config")` does exactly this for you, reading the overlay from `forwardedProps` and closing the run's clients when its stream ends. See [Chapter 13](Chapter_13.md) for the merge rules, and [`examples/21_runtime_configs`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/21_runtime_configs) for three runs resolving three different workflows against one base.
 
 What is left at process level shrinks to what is genuinely process-level: the parsed base, the model objects, and any MCP server processes. Everything a conversation touches — agents, orchestrations, entry, client sessions — is built for the run and released with it.
 

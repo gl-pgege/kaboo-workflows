@@ -18,6 +18,7 @@ Each example is a self-contained folder with a `README.md`, `config.yaml`, and `
 | 12 | [12_streaming](./12_streaming/) | `wire_event_queue()` — stream every token, tool call, and completion live |
 | 13 | [13_graph_conditions](./13_graph_conditions/) | Conditional graph edges — `condition:`, `reset_on_revisit`, `max_node_executions` |
 | 14 | [14_agent_factory](./14_agent_factory/) | `type:` + `agent_kwargs:` — custom agent factory instead of default `Agent()` |
+| 21 | [21_runtime_configs](./21_runtime_configs/) | `session_config_key` — every run submits its own workflow over a shared base |
 
 ### Complex workflows (multi-depth, multi-step)
 
