@@ -80,9 +80,33 @@ the agent's — approving a subset of a bulk operation is one resume, not a
 round-trip through the model. A payload of `{"status": "cancelled"}` rejects
 the call just like a cancelled entry.
 
+## A gate outlives the process that opened it
+
+An approval is the one pause that can last hours, which makes it the pause most
+likely to be interrupted by a deploy. The gate itself lives in the agent object's
+interrupt state, so a restart between the question and the answer used to strand
+it: the user clicked approve and got `No agent session found for resume`.
+
+Served through `create_agui_app`, the pending gate now travels on the AG-UI state
+channel under `kaboo_session` and is restored onto whichever agent runs the
+resume — including one that has never seen the conversation. A resume therefore
+works after a restart, on a second replica, and when the session is rebuilt per
+run. Nothing to configure; see
+[Chapter 7](../configuration/Chapter_07.md#pending-interrupts-survive-a-restart-without-a-store)
+for the switch that turns it off and why you would.
+
+The exception is a Swarm or Graph *entry*: strands does not yet persist state for
+orchestration node agents, so a multi-agent entry still needs the process to stay
+up between question and answer. A plain agent, with or without delegates, is
+covered.
+
 ## Proven by
 
 - `tests/e2e/test_cross_cutting.py::test_ask_user_interrupt_then_resume`
   (plain / delegate / swarm / graph positions).
 - `tests/e2e/test_complex.py::test_parallel_interrupts_surface_together_and_resume`
   (two gates in one step, distinct ids, both resumed).
+- `tests/e2e/test_cross_cutting.py::test_approval_survives_a_restart_of_the_service`
+  (the resuming turn runs on a fresh process that never saw the question).
+- `tests/e2e/test_runtime_configs.py::test_approval_survives_the_session_being_rebuilt`
+  (the same, within one process, when every run builds its own session).

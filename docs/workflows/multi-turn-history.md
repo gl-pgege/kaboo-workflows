@@ -37,6 +37,18 @@ client feeds it back in `state.kaboo_history` on the next turn. For turnkey
 persistence (in-memory or Postgres `ThreadStore`s behind a CopilotKit runtime),
 use [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime).
 
+## The state channel carries more than history
+
+`kaboo_history` has a sibling. A pending human-in-the-loop gate travels the same
+way, under `kaboo_session`, for the same reason: the run is stateless, so anything
+the conversation accumulates has to arrive with the turn. That is what lets an
+approval survive a restart — see
+[human-in-the-loop](human-in-the-loop.md#a-gate-outlives-the-process-that-opened-it).
+
+Together, the two keys are the reason a server can rebuild its agents per run and
+still be indistinguishable from one that kept them: a session holds behaviour,
+the state channel holds memory.
+
 ## Run
 
 ```bash

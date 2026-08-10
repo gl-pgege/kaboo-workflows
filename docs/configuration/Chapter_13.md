@@ -99,6 +99,40 @@ main.yaml         — coordinator agent, top-level orchestration, entry
 
 Individual files don't need to be valid on their own. `base.yaml` can define models without agents or entry. `agents.yaml` can reference models it doesn't define. The merged result must be valid — individual files don't.
 
+## The Second Merge Mode: Session Overlays
+
+Everything above describes **composition**: several files that together are one config, which is why a duplicate name is an error rather than an override.
+
+A server whose runs bring their own workflow needs the opposite — **substitution**. That is `load_session_config(base_raw, overlay)`, and it merges by different rules:
+
+| Section | Multi-file merge | Session overlay |
+|---------|------------------|-----------------|
+| `agents`, `orchestrations`, `entry` | merged; duplicate name is an error | **replaced** wholesale by the overlay |
+| `models`, `mcp_clients` | merged; duplicate name is an error | **unioned**, and the overlay wins a name clash |
+| `runtime`, `attachments`, `log_level`, `session_manager` | last-wins | last-wins from the overlay |
+| `mcp_servers` | merged | **rejected** in an overlay |
+
+Replace rather than merge is what makes a submitted config a whole workflow instead of an addition to someone else's. Union on `models` and `mcp_clients` is what makes the base useful: it holds the shared infrastructure every workflow draws on by name, and an overlay may still add its own.
+
+```{.python notest}
+from kaboo_workflows import load_session_config, parse_config_sources
+
+base_raw = parse_config_sources("config.yaml")   # once, at boot
+
+config = load_session_config(base_raw, submitted_yaml)  # per run
+```
+
+`base_raw` is never mutated, so one parse safely serves concurrent runs. The overlay is interpolated as its own source, so a `${OPENROUTER_KEY}` in a config authored in your database resolves from the serving process's environment — the secret stays where it belongs.
+
+Two things an overlay may not do, because a submitted config is data from somewhere else even when its author is trusted:
+
+- `mcp_servers:` is rejected outright. Starting a server means running a command.
+- `mcp_clients:` with `command:` is rejected, and a `url:` is checked against `allowed_mcp_hosts` when you pass one. Unlike a Python import path, a URL needs no code on your machine to send your agent's context somewhere else.
+
+Superset enforcement comes free from validation you already have: an overlay agent naming a client nobody defined fails with `Agent 'x' references MCP client 'y' which is not defined. Available: [...]`.
+
+See [Chapter 17](Chapter_17.md) for how this fits the loading pipeline, and `create_agui_app(session_config_key=...)` for the serving side.
+
 > **Tips & Tricks**
 >
 > - Use multi-file configs when your single file exceeds ~200 lines. It makes diffs cleaner and team collaboration easier.

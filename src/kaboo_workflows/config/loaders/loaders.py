@@ -40,7 +40,12 @@ from ..resolvers import (
     resolve_orchestrations,
 )
 from ..schema import AppConfig, GraphOrchestrationDef, SwarmOrchestrationDef
-from .helpers import merge_raw_configs, parse_single_source, sanitize_collection_keys
+from .helpers import (
+    merge_raw_configs,
+    merge_session_overlay,
+    parse_single_source,
+    sanitize_collection_keys,
+)
 from .validators import validate_references
 
 logger = logging.getLogger(__name__)
@@ -171,15 +176,45 @@ def load_config(config: ConfigInput | list[ConfigInput]) -> AppConfig:
         FileNotFoundError: A ``Path`` source doesn't exist.
         ConfigurationError: Invalid YAML, schema validation failure, or invalid references.
     """
+    return validate_raw_config(parse_config_sources(config))
+
+
+def parse_config_sources(config: ConfigInput | list[ConfigInput]) -> dict:
+    """Parse and merge config source(s) into a processed raw dict.
+
+    The first half of :func:`load_config`, split out so a server can parse its
+    base config once at boot and reuse the result for every run — see
+    :func:`load_session_config`. Interpolation has already happened, so the
+    returned dict may contain resolved secrets; it is not for logging.
+
+    Args:
+        config: File path, raw YAML string, or list of either.
+
+    Returns:
+        The merged raw config dict.
+    """
     sources = config if isinstance(config, list) else [config]
     raw_configs = [parse_single_source(s) for s in sources]
 
     for raw in raw_configs:
         sanitize_collection_keys(raw)
 
-    merged = merge_raw_configs(raw_configs) if len(raw_configs) > 1 else raw_configs[0]
+    return merge_raw_configs(raw_configs) if len(raw_configs) > 1 else raw_configs[0]
 
-    normalized = normalize(merged)
+
+def validate_raw_config(raw: dict) -> AppConfig:
+    """Normalize, schema-validate and reference-check a raw config dict.
+
+    Args:
+        raw: A processed raw config dict from :func:`parse_config_sources`.
+
+    Returns:
+        Validated AppConfig instance.
+
+    Raises:
+        ConfigurationError: Schema validation failure, or invalid references.
+    """
+    normalized = normalize(raw)
     try:
         app_config = AppConfig.model_validate(normalized)
     except ValidationError as exc:
@@ -192,6 +227,48 @@ def load_config(config: ConfigInput | list[ConfigInput]) -> AppConfig:
     validate_references(app_config)
 
     return app_config
+
+
+def load_session_config(
+    base_raw: dict,
+    overlay: ConfigInput | None = None,
+    *,
+    allowed_mcp_hosts: list[str] | None = None,
+) -> AppConfig:
+    """Validate a per-run config layered over the service's base config.
+
+    This is how a run brings its own workflow — its own agents, delegates, graph
+    or swarm — without the service restarting or reading a file. The overlay
+    replaces the base's ``agents`` / ``orchestrations`` / ``entry`` and adds to its
+    ``models`` / ``mcp_clients``; see
+    :func:`~kaboo_workflows.config.loaders.helpers.merge_session_overlay`.
+
+    Interpolation runs on the overlay as its own source, so a ``${API_KEY}`` in a
+    database-authored config resolves from this process's environment. The secret
+    never has to live wherever the config was written.
+
+    Args:
+        base_raw: The service's config, parsed once by :func:`parse_config_sources`.
+            Not mutated, so it is safe to share across concurrent runs.
+        overlay: The submitted config — normally a raw YAML string. ``None``
+            validates the base alone, so callers need only one code path.
+        allowed_mcp_hosts: Hosts an overlay-declared MCP client URL may point at.
+            ``None`` disables the check.
+
+    Returns:
+        Validated AppConfig for this run.
+
+    Raises:
+        ConfigurationError: Invalid YAML, schema failure, bad references, or an
+            MCP client the overlay is not permitted to declare.
+    """
+    if overlay is None:
+        return validate_raw_config(base_raw)
+
+    overlay_raw = parse_single_source(overlay)
+    sanitize_collection_keys(overlay_raw)
+    merged = merge_session_overlay(base_raw, overlay_raw, allowed_mcp_hosts=allowed_mcp_hosts)
+    return validate_raw_config(merged)
 
 
 def load_session(

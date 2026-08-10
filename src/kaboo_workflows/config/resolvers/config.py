@@ -464,3 +464,36 @@ def resolve_infra(config: AppConfig) -> ResolvedInfra:
         clients=clients,
         mcp_lifecycle=lifecycle,
     )
+
+
+def resolve_run_clients(config: AppConfig, infra: ResolvedInfra) -> MCPLifecycle:
+    """Resolve this run's MCP clients as fresh objects it exclusively owns.
+
+    Client *objects* are cheap and hold no connection until an agent registers
+    them as a tool provider, so a run can afford its own. Owning them is what
+    makes the session's lifetime the connection's lifetime: the returned
+    lifecycle is stopped when the run ends, and a session that cannot outlive
+    its run cannot go stale between runs.
+
+    Servers are not re-resolved — those are processes, owned by the boot-time
+    lifecycle in ``infra`` — so a ``stdio`` client in ``config`` binds to the
+    already-running server of the same name.
+
+    Args:
+        config: The config for this run, which may declare clients the base
+            config does not.
+        infra: The process-wide infra, consulted for running servers.
+
+    Returns:
+        A lifecycle holding only this run's clients, not yet started.
+
+    Raises:
+        ValueError: If a ``stdio`` client references a server that boot did not
+            start.
+    """
+    servers = infra.mcp_lifecycle.servers
+    lifecycle = MCPLifecycle()
+    for name, client_def in config.mcp_clients.items():
+        lifecycle.add_client(name, resolve_mcp_client(client_def, servers, name=name))
+        logger.debug("client=<%s> | resolved MCP client for this run", name)
+    return lifecycle

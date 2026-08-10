@@ -343,6 +343,10 @@ The curated top-level exports, for the common case:
 
 - **Config pipeline**: `load`, `load_config`, `load_session`, `resolve_infra`,
   `AppConfig`, `ConfigInput`, `ResolvedConfig`, `ResolvedInfra`
+- **Per-run configs**: `parse_config_sources`, `validate_raw_config`,
+  `load_session_config`, `resolve_run_clients` — the two-stage pipeline for a
+  service whose runs submit their own workflow
+  ([Chapter 17](configuration/Chapter_17.md#when-the-config-itself-is-per-request))
 - **Orchestration**: `OrchestrationBuilder`
 - **Streaming**: `make_event_queue`, `EventQueue`, `StreamEvent`, `EventType`
 - **Tools**: `node_as_tool`, `node_as_async_tool`, `serialize_multiagent_result`
@@ -357,6 +361,8 @@ The curated top-level exports, for the common case:
 
 - `create_agui_app` — turn a config into a FastAPI AG-UI / CopilotKit app. This is
   the primary serving entrypoint and lives here (not re-exported top level).
+  `session_config_key=` makes each run bring its own config;
+  `allowed_mcp_hosts=` bounds what a submitted config may connect to.
 
 ## Configuration — [`kaboo_workflows.config`](api/config.md)
 
@@ -368,7 +374,8 @@ Loaders, interpolation, infra resolution, and the full YAML schema models
 ## Hooks — [`kaboo_workflows.hooks`](api/hooks.md)
 
 `EventPublisher`, `HistoryHook`, `InterruptHook`, `MaxToolCallsGuard`,
-`MultiAgentStopGuard`, `StopGuard`, `ToolNameSanitizer`, `stop_guard_from_event`.
+`MultiAgentStopGuard`, `SessionStateHook`, `StopGuard`, `ToolNameSanitizer`,
+`restore_session_state`, `session_state_snapshot`, `stop_guard_from_event`.
 
 ## MCP — [`kaboo_workflows.mcp`](api/mcp.md)
 
@@ -592,12 +599,29 @@ Two built-in features consume it:
 
 - **Authorized attachment fetching** — `attachments.authorization: forwarded_props:<key>`
   reads a run-scoped bearer token for own-origin fetches.
-- **Per-invocation agent overrides** — with `runtime.allow_invocation_overrides: true`,
-  `forwardedProps.agent_config` (`system_prompt`, `model_id`) is applied to the
-  executing per-thread agent before each invocation. This is how one runtime
-  process serves many host-defined agent types: the host projects the selected
-  agent's prompt/model into each run, concurrent threads never interfere, and
-  editing an agent definition takes effect on the next turn without a restart.
+- **Runtime-submitted workflow configs** — with
+  `create_agui_app(session_config_key="workflow_config")`, the run's own YAML
+  arrives under that key and is merged over the service's base config. This is how
+  one process serves many host-defined agent types: each run gets its own agents,
+  orchestration, entry and MCP client sessions, and editing an agent type takes
+  effect on the next turn without a restart. See
+  [Chapter 13](configuration/Chapter_13.md#the-second-merge-mode-session-overlays).
+
+  A submitted config supersedes `forwardedProps.agent_config`, which applied only
+  `system_prompt` and `model_id` behind `runtime.allow_invocation_overrides`. That
+  flag is **deprecated**: an overlay expresses both, plus the structure they could
+  not.
+
+## Statelessness: what a run keeps and what it carries
+
+A run keeps nothing. Everything a conversation accumulates arrives with the turn
+on the AG-UI **state channel** — `kaboo_history` for sub-agent transcripts,
+`kaboo_session` for a pending human-in-the-loop gate — and leaves in the outgoing
+`STATE_SNAPSHOT` the host persists.
+
+That is what makes the rest safe: a service can rebuild its agents every run,
+scale to a second replica, or restart mid-approval, and behave identically,
+because the objects being rebuilt hold behaviour rather than memory.
 
 ## Where to go next
 
@@ -748,6 +772,8 @@ agents:
 ```
 
 This is handy when only one agent uses a specific model — no need to pollute the `models` section. But if two agents share the same model config, **use a named model** to avoid duplication.
+
+An inline model is also the simplest choice in a config submitted per run ([Chapter 13](Chapter_13.md)): the agents in an overlay replace the base's, but a named model has to exist somewhere, either in the base's `models` or in the overlay's own. Inline needs neither.
 
 ## Custom Model Providers
 
@@ -1369,6 +1395,8 @@ orchestrations:
 
 By default, agents are stateless — each `load()` call starts fresh. The `session_manager` section enables persistent conversation history.
 
+Pending human-in-the-loop interrupts are a separate concern and are handled for you — see [Pending interrupts survive a restart without a store](#pending-interrupts-survive-a-restart-without-a-store) at the end of this chapter.
+
 ## Global Session Manager
 
 Define a session manager at the root level and **every agent** inherits it:
@@ -1522,6 +1550,31 @@ def handle_request(user_session_id: str, message: str):
 ```
 
 MCP servers are shared across sessions (started once), but agents and their conversation state are created fresh per session.
+
+## Pending Interrupts Survive a Restart Without a Store
+
+A session manager persists the *conversation*. An interrupt is different: when an agent pauses on `ask_user` or a gated tool, what has to survive is the open gate, and it lives in the agent object's own interrupt state. That object is per-process, so before this existed a restart between the question and the answer stranded the approval — the user clicked approve and got "No agent session found for resume".
+
+There is nothing to configure. Serving through `create_agui_app`, the pending interrupt travels on the AG-UI **state channel** under `kaboo_session`, the same channel that carries `kaboo_history`:
+
+- On the way out, it is written into the `STATE_SNAPSHOT` your host already persists.
+- On the way in, it is read from `RunAgentInput.state` and restored onto the agent that runs the turn — including one that has never seen the conversation, which is how a resume works after a restart, on a second replica, or when the session is rebuilt per run.
+
+Hosts on [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) get this end to end for free, because the runtime persists state snapshots per thread and replays them into the next run.
+
+Turn it off in the one case where it would be wrong:
+
+```yaml
+runtime:
+  persist_session_state: false
+```
+
+The gate arrives from the client, so trusting it means trusting the client. That is correct when the AG-UI endpoint is called by your own server (the supported topology — a browser talks to your API, your API talks to kaboo), and wrong if you expose `/invocations` straight to a browser, where a user could hand you back a gate you never issued.
+
+Two details worth knowing:
+
+- A warm agent's own state wins over the incoming copy, so a stale snapshot cannot resurrect a gate that was already answered.
+- Swarm and Graph entries are not covered: strands does not yet support session persistence for orchestration node agents, so a multi-agent entry still relies on the process staying up. A plain-agent entry — including one with delegates — is fully covered.
 
 ---
 
@@ -1764,6 +1817,17 @@ Or for async contexts:
 async with resolved.mcp_lifecycle:
     result = await resolved.entry.invoke_async("Hello!")
 ```
+
+### How Long a Client Session Lives
+
+A **server** is a process, so it belongs to the process that started it. A **client** is a session, and its lifetime is a choice:
+
+- Serving one fixed config (`create_agui_app("config.yaml")`), clients are opened once and held for the process, so every run reuses them.
+- Serving runs that submit their own config (`session_config_key=`, see [Chapter 17](Chapter_17.md)), each run resolves its own clients and they are closed when its stream ends.
+
+Per-run clients cost a handshake per client per turn, which is small beside a model call, and they buy two things worth more than that. `MCPClientError: the client session is not running` stops being possible rather than being retried, because a session that cannot outlive its run cannot be found dead at the start of the next one. And `relay` / `obo` auth becomes reachable, because strands captures the ambient identity when a client *starts* — a client started at boot has no caller to relay.
+
+Servers are still shared either way, so a `server:` client declared by a run binds to the process's already-running server.
 
 ## MCPClientDef Validation
 
@@ -2266,6 +2330,40 @@ main.yaml         — coordinator agent, top-level orchestration, entry
 
 Individual files don't need to be valid on their own. `base.yaml` can define models without agents or entry. `agents.yaml` can reference models it doesn't define. The merged result must be valid — individual files don't.
 
+## The Second Merge Mode: Session Overlays
+
+Everything above describes **composition**: several files that together are one config, which is why a duplicate name is an error rather than an override.
+
+A server whose runs bring their own workflow needs the opposite — **substitution**. That is `load_session_config(base_raw, overlay)`, and it merges by different rules:
+
+| Section | Multi-file merge | Session overlay |
+|---------|------------------|-----------------|
+| `agents`, `orchestrations`, `entry` | merged; duplicate name is an error | **replaced** wholesale by the overlay |
+| `models`, `mcp_clients` | merged; duplicate name is an error | **unioned**, and the overlay wins a name clash |
+| `runtime`, `attachments`, `log_level`, `session_manager` | last-wins | last-wins from the overlay |
+| `mcp_servers` | merged | **rejected** in an overlay |
+
+Replace rather than merge is what makes a submitted config a whole workflow instead of an addition to someone else's. Union on `models` and `mcp_clients` is what makes the base useful: it holds the shared infrastructure every workflow draws on by name, and an overlay may still add its own.
+
+```{.python notest}
+from kaboo_workflows import load_session_config, parse_config_sources
+
+base_raw = parse_config_sources("config.yaml")   # once, at boot
+
+config = load_session_config(base_raw, submitted_yaml)  # per run
+```
+
+`base_raw` is never mutated, so one parse safely serves concurrent runs. The overlay is interpolated as its own source, so a `${OPENROUTER_KEY}` in a config authored in your database resolves from the serving process's environment — the secret stays where it belongs.
+
+Two things an overlay may not do, because a submitted config is data from somewhere else even when its author is trusted:
+
+- `mcp_servers:` is rejected outright. Starting a server means running a command.
+- `mcp_clients:` with `command:` is rejected, and a `url:` is checked against `allowed_mcp_hosts` when you pass one. Unlike a Python import path, a URL needs no code on your machine to send your agent's context somewhere else.
+
+Superset enforcement comes free from validation you already have: an overlay agent naming a client nobody defined fails with `Agent 'x' references MCP client 'y' which is not defined. Available: [...]`.
+
+See [Chapter 17](Chapter_17.md) for how this fits the loading pipeline, and `create_agui_app(session_config_key=...)` for the serving side.
+
 > **Tips & Tricks**
 >
 > - Use multi-file configs when your single file exceeds ~200 lines. It makes diffs cleaner and team collaboration easier.
@@ -2761,6 +2859,41 @@ computes a single `effective_session_id` and threads it down to every agent and 
 This design guarantees exactly one folder is created per `load_session()` call, never an orphan
 folder from `resolve_infra()`.
 
+### When the config itself is per-request
+
+The split above assumes one config, many sessions. Push it one step further and the config becomes per-request too: the run submits it, and the process only holds the base it layers over.
+
+That needs one more seam, because `load_config()` both parses *and* validates, and a base config that expects an overlay is not valid on its own — it may have no `entry`. So the two halves are separately available:
+
+```{.python notest}
+from dataclasses import replace
+
+from kaboo_workflows import (
+    load_session,
+    load_session_config,
+    parse_config_sources,
+    resolve_infra,
+    resolve_run_clients,
+    validate_raw_config,
+)
+
+# Once at boot: parse the base, keep it raw.
+base_raw = parse_config_sources("config.yaml")
+infra = resolve_infra(validate_raw_config(base_raw))
+infra.mcp_lifecycle.start(pin_clients=False)   # servers only; clients are per-run
+
+# Per run: merge, validate, resolve.
+config = load_session_config(base_raw, submitted_yaml, allowed_mcp_hosts=["gateway.internal"])
+clients = resolve_run_clients(config, infra)
+resolved = load_session(config, replace(infra, clients=clients.clients), session_id=thread_id)
+```
+
+`create_agui_app(config_path, session_config_key="workflow_config")` does exactly this for you, reading the overlay from `forwardedProps` and closing the run's clients when its stream ends. See [Chapter 13](Chapter_13.md) for the merge rules.
+
+What is left at process level shrinks to what is genuinely process-level: the parsed base, the model objects, and any MCP server processes. Everything a conversation touches — agents, orchestrations, entry, client sessions — is built for the run and released with it.
+
+This is only safe because conversation state does not live in those objects. History arrives each turn in `state.kaboo_history`, and a pending interrupt arrives in `state.kaboo_session` ([Chapter 7](Chapter_07.md)). Rebuilding is therefore indistinguishable from retaining, which is what lets you run a second replica, restart mid-approval, or serve a workflow edited thirty seconds ago.
+
 ### Mental model
 
 Use this rule of thumb:
@@ -2769,10 +2902,13 @@ Use this rule of thumb:
 - **`load_config()`** = validate and freeze the declarative config
 - **`resolve_infra()`** = build shared runtime dependencies, but do not start them yet
 - **`load_session()`** = build one session's live agents/orchestrations from shared infra
+- **`parse_config_sources()` + `load_session_config()`** = the config itself varies per run
 
 If you're building a CLI, a notebook, or a one-shot script, use `load()`.
 
 If you're building a long-running web server with many user sessions, use `load_config()` + `resolve_infra()` once, then `load_session()` for each session.
+
+If those sessions are different *workflows*, keep the base raw and merge an overlay per run.
 
 ---
 
@@ -2860,8 +2996,13 @@ agents:
 
 ```yaml
 runtime:
-  allow_invocation_overrides: false  # Apply forwardedProps.agent_config
-                                     # (system_prompt / model_id) per invocation
+  persist_session_state: true        # Carry pending interrupts on the AG-UI state
+                                     # channel, so an approval survives a restart
+                                     # (Chapter 7). Disable only when the AG-UI
+                                     # endpoint is exposed straight to a browser.
+  allow_invocation_overrides: false  # DEPRECATED — apply forwardedProps.agent_config
+                                     # (system_prompt / model_id) per invocation.
+                                     # Submit a config instead (Chapter 13).
 ```
 
 ## HookDef
@@ -2966,6 +3107,25 @@ orchestrations:
     session_manager: null          # Graph-level session manager
     hooks: []                      # Graph-level hooks
 ```
+
+## create_agui_app
+
+```{.python notest}
+create_agui_app(
+    config_path,                    # Base config. With session_config_key set, the
+                                    # layer every submitted config merges over.
+    endpoint="/invocations",
+    ping_path="/ping",
+    cors_origins=None,              # Defaults to ["*"]
+    cors_allow_credentials=True,
+    auth=None,                      # Inbound verifier -> Principal (raise to reject)
+    session_config_key=None,        # forwardedProps key carrying this run's config.
+                                    # None serves config_path alone.
+    allowed_mcp_hosts=None,         # Hosts a submitted mcp_client URL may point at
+)
+```
+
+`session_config_key` changes the shape of the service, not just a setting: each run gets its own agents, orchestration, entry and MCP client sessions, released when its stream ends. See [Chapter 13](Chapter_13.md) for the merge rules and [Chapter 17](Chapter_17.md) for the pipeline.
 
 ---
 
@@ -3746,12 +3906,36 @@ the agent's — approving a subset of a bulk operation is one resume, not a
 round-trip through the model. A payload of `{"status": "cancelled"}` rejects
 the call just like a cancelled entry.
 
+## A gate outlives the process that opened it
+
+An approval is the one pause that can last hours, which makes it the pause most
+likely to be interrupted by a deploy. The gate itself lives in the agent object's
+interrupt state, so a restart between the question and the answer used to strand
+it: the user clicked approve and got `No agent session found for resume`.
+
+Served through `create_agui_app`, the pending gate now travels on the AG-UI state
+channel under `kaboo_session` and is restored onto whichever agent runs the
+resume — including one that has never seen the conversation. A resume therefore
+works after a restart, on a second replica, and when the session is rebuilt per
+run. Nothing to configure; see
+[Chapter 7](../configuration/Chapter_07.md#pending-interrupts-survive-a-restart-without-a-store)
+for the switch that turns it off and why you would.
+
+The exception is a Swarm or Graph *entry*: strands does not yet persist state for
+orchestration node agents, so a multi-agent entry still needs the process to stay
+up between question and answer. A plain agent, with or without delegates, is
+covered.
+
 ## Proven by
 
 - `tests/e2e/test_cross_cutting.py::test_ask_user_interrupt_then_resume`
   (plain / delegate / swarm / graph positions).
 - `tests/e2e/test_complex.py::test_parallel_interrupts_surface_together_and_resume`
   (two gates in one step, distinct ids, both resumed).
+- `tests/e2e/test_cross_cutting.py::test_approval_survives_a_restart_of_the_service`
+  (the resuming turn runs on a fresh process that never saw the question).
+- `tests/e2e/test_runtime_configs.py::test_approval_survives_the_session_being_rebuilt`
+  (the same, within one process, when every run builds its own session).
 
 # docs/workflows/multi-turn-history.md
 
@@ -3793,6 +3977,18 @@ captured transcript comes back in the run's outgoing history snapshot, and the
 client feeds it back in `state.kaboo_history` on the next turn. For turnkey
 persistence (in-memory or Postgres `ThreadStore`s behind a CopilotKit runtime),
 use [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime).
+
+## The state channel carries more than history
+
+`kaboo_history` has a sibling. A pending human-in-the-loop gate travels the same
+way, under `kaboo_session`, for the same reason: the run is stateless, so anything
+the conversation accumulates has to arrive with the turn. That is what lets an
+approval survive a restart — see
+[human-in-the-loop](human-in-the-loop.md#a-gate-outlives-the-process-that-opened-it).
+
+Together, the two keys are the reason a server can rebuild its agents per run and
+still be indistinguishable from one that kept them: a session holds behaviour,
+the state channel holds memory.
 
 ## Run
 

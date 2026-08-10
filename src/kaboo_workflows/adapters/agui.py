@@ -26,6 +26,7 @@ import logging
 import mimetypes
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
@@ -49,22 +50,40 @@ from fastapi.responses import StreamingResponse
 from strands import Agent
 from strands.multiagent.base import MultiAgentBase
 
-from kaboo_workflows import load
 from kaboo_workflows._context import (
     HistoryExchange,
     Principal,
     Reference,
+    SessionExchange,
     set_activity_context,
     set_auth_context,
     set_forwarded_props,
     set_history_exchange,
     set_inline_requests,
     set_references,
+    set_session_exchange,
+)
+from kaboo_workflows.config import (
+    AppConfig,
+    ResolvedConfig,
+    ResolvedInfra,
+    load_session,
+    load_session_config,
+    parse_config_sources,
+    resolve_infra,
+    resolve_run_clients,
+    validate_raw_config,
 )
 from kaboo_workflows.config.resolvers import resolve_session_manager
 from kaboo_workflows.config.resolvers.agents import get_agent_hook_providers
 from kaboo_workflows.config.resolvers.config import _resolve_chat_output, _resolve_chat_owner
-from kaboo_workflows.hooks import ForwardedPropsHook
+from kaboo_workflows.hooks import (
+    ForwardedPropsHook,
+    SessionStateHook,
+    restore_session_state,
+    session_state_snapshot,
+)
+from kaboo_workflows.mcp import MCPLifecycle
 from kaboo_workflows.tools.fetching import (
     ConfiguredReferenceFetcher,
     get_attachment_url_template,
@@ -525,6 +544,34 @@ def _enrich_history_snapshot(agui_event: Any, exchange: HistoryExchange) -> None
         )
 
 
+def _enrich_session_snapshot(agui_event: Any) -> None:
+    """Write the executing agent's session state into a STATE_SNAPSHOT in place.
+
+    The counterpart to :func:`_enrich_history_snapshot`, for the state that used
+    to be lost on restart: a paused approval. The host persists the snapshot and
+    replays it, so the next turn can resume a gate this process never saw.
+
+    Read at snapshot time rather than from a hook because an interrupt pauses the
+    run — the state we want is what the agent holds after it has stopped.
+    """
+    snapshot = getattr(agui_event, "snapshot", None)
+    if not isinstance(snapshot, dict):
+        return
+    state = session_state_snapshot()
+    if state is None:
+        return
+    snapshot["kaboo_session"] = state
+    logger.debug("kaboo_session write-back | %s", state.get("interrupt_state", {}).get("activated"))
+
+
+def _parse_session_state(input_data: RunAgentInput) -> dict[str, Any]:
+    """Read the client's ``kaboo_session`` state for this run."""
+    if not isinstance(input_data.state, dict):
+        return {}
+    raw = input_data.state.get("kaboo_session")
+    return raw if isinstance(raw, dict) else {}
+
+
 def _restore_snapshot_user_content(agui_event: Any, originals: dict[str, Any]) -> None:
     """Put structured multimodal user content back on a MESSAGES_SNAPSHOT.
 
@@ -594,6 +641,7 @@ async def _consume_run(
                     unresolved_tool_calls.pop(tc_id, None)
             elif etype == AGUIEventType.STATE_SNAPSHOT:
                 _enrich_history_snapshot(agui_event, exchange)
+                _enrich_session_snapshot(agui_event)
             elif etype == AGUIEventType.MESSAGES_SNAPSHOT and original_user_content:
                 _restore_snapshot_user_content(agui_event, original_user_content)
 
@@ -686,8 +734,14 @@ async def _sse_response(
     activity_pump: Any,
     encoder: EventEncoder,
     merged: asyncio.Queue[Any],
+    cleanup: Callable[[], Awaitable[None]] | None = None,
 ) -> AsyncIterator[str]:
-    """Stream encoded AG-UI events; run the run + activity pumps concurrently."""
+    """Stream encoded AG-UI events; run the run + activity pumps concurrently.
+
+    ``cleanup`` runs once the stream is finished, cancelled or errored — the last
+    moment the run owns anything. A per-run session's MCP clients are released
+    here, which is why they cannot go stale between runs.
+    """
     run_task = asyncio.create_task(consume())
     activity_task = asyncio.create_task(activity_pump())
     try:
@@ -714,6 +768,11 @@ async def _sse_response(
                 await run_task
             except asyncio.CancelledError:
                 pass
+        if cleanup is not None:
+            try:
+                await cleanup()
+            except Exception:
+                logger.warning("failed to release run resources", exc_info=True)
 
 
 # Per-thread current turn id. A "turn" is one user message and everything it
@@ -754,15 +813,19 @@ async def _verify_inbound(auth: AuthVerifier | None, request: Request) -> Princi
 
 def _add_kaboo_endpoint(
     app: FastAPI,
-    agui_agent: StrandsAgent | StrandsMultiAgent,
-    event_queue: EventQueue,
+    resolve_session: Callable[[RunAgentInput], AguiSession],
     registry: ActivityRegistry,
-    entry_name: str,
     path: str,
     *,
-    entry_inline: bool = False,
     auth: AuthVerifier | None = None,
 ) -> None:
+    """Register the AG-UI endpoint, resolving the session serving each request.
+
+    ``resolve_session`` returns the :class:`AguiSession` for a request — one built
+    at boot when the process serves a single fixed config, or one built for this
+    run from the config it submitted. Only the activity registry spans requests.
+    """
+
     @app.post(path)
     async def kaboo_endpoint(input_data: RunAgentInput, request: Request) -> StreamingResponse:
         # ag_ui's EventEncoder(accept: str = None) is mis-stubbed (default None
@@ -793,6 +856,12 @@ def _add_kaboo_endpoint(
         exchange = HistoryExchange(inbound=inbound_history)
         set_history_exchange(exchange)
 
+        # Client-driven session state, on the same channel and for the same
+        # reason: it lets a paused approval outlive this process. SessionStateHook
+        # restores it onto the executing agent; _enrich_session_snapshot writes
+        # back what the run leaves behind.
+        set_session_exchange(SessionExchange(inbound=_parse_session_state(input_data)))
+
         # Client-supplied references (file attachments on the message + custom
         # entities in state.kaboo_references). Parsed once per request and bound
         # to the context so the per-agent ReferenceHook and built-in reference
@@ -811,9 +880,44 @@ def _add_kaboo_endpoint(
         # Bind the shared set here so the run task and its tool threads share it.
         set_inline_requests(set())
 
+        # Build the session last, so anything it starts — notably MCP clients,
+        # whose relay/OBO strategies snapshot contextvars at start — sees the
+        # caller's identity and this run's props.
+        try:
+            session = resolve_session(input_data)
+        except Exception as exc:
+            logger.error("could not build a session for thread_id=%s", thread_id, exc_info=True)
+            reason = str(exc)
+
+            async def config_error_gen() -> AsyncIterator[str]:
+                yield encoder.encode(
+                    RunStartedEvent(
+                        type=AGUIEventType.RUN_STARTED,
+                        thread_id=thread_id,
+                        run_id=input_data.run_id,
+                    )
+                )
+                yield encoder.encode(
+                    RunErrorEvent(
+                        type=AGUIEventType.RUN_ERROR,
+                        message=f"Invalid workflow config: {reason}",
+                        code="INVALID_CONFIG",
+                    )
+                )
+
+            return StreamingResponse(config_error_gen(), media_type=encoder.get_content_type())
+
+        agui_agent = session.agui_agent
+        entry_name = session.entry_name
+
+        async def release() -> None:
+            """Release the session if this run owns it (see :class:`AguiSession`)."""
+            if session.transient:
+                await session.aclose()
+
         merged: asyncio.Queue[Any] = asyncio.Queue()
         activity_pump = _make_activity_pump(
-            event_queue, registry, entry_name, merged, entry_inline=entry_inline
+            session.event_queue, registry, entry_name, merged, entry_inline=session.entry_inline
         )
 
         # First-class Swarm/Graph entry: kaboo owns the run loop (ag-ui-strands
@@ -853,6 +957,7 @@ def _add_kaboo_endpoint(
                                 )
                             )
 
+                        await release()
                         return StreamingResponse(
                             replay_multiagent_interrupt(),
                             media_type=encoder.get_content_type(),
@@ -864,14 +969,33 @@ def _add_kaboo_endpoint(
                 )
 
             return StreamingResponse(
-                _sse_response(consume_multiagent, activity_pump, encoder, merged),
+                _sse_response(consume_multiagent, activity_pump, encoder, merged, release),
                 media_type=encoder.get_content_type(),
             )
 
         if resume_entries:
             strands_agent = bridge.get_thread_agent(agui_agent, thread_id)
-            if strands_agent is None:
-                logger.error("no strands agent for thread_id=%s during resume", thread_id)
+            cold = strands_agent is None
+            if cold:
+                # This process has never run the thread — it restarted, or another
+                # replica served the turn that paused. The client still holds the
+                # gate on the state channel, so seed an agent and restore it rather
+                # than failing an approval over a lost in-memory clone.
+                try:
+                    strands_agent = await bridge.ensure_thread_agent(agui_agent, input_data)
+                except Exception as exc:
+                    logger.error(
+                        "could not build an agent for thread_id=%s during resume: %s",
+                        thread_id,
+                        exc,
+                        exc_info=True,
+                    )
+                    strands_agent = None
+            # Needed before the responses are built, because they are derived from
+            # the agent's pending interrupts. Idempotent: the hook calls it too.
+            restored = strands_agent is not None and restore_session_state(strands_agent)
+            if strands_agent is None or (cold and not restored):
+                logger.error("no resumable agent state for thread_id=%s", thread_id)
 
                 async def error_gen() -> AsyncIterator[str]:
                     yield encoder.encode(
@@ -889,6 +1013,7 @@ def _add_kaboo_endpoint(
                         )
                     )
 
+                await release()
                 return StreamingResponse(error_gen(), media_type=encoder.get_content_type())
 
             responses = _build_resume_responses(strands_agent, resume_entries)
@@ -899,7 +1024,7 @@ def _add_kaboo_endpoint(
                     await _consume_run(agui_agent, input_data, merged, exchange)
 
             return StreamingResponse(
-                _sse_response(consume_resume, activity_pump, encoder, merged),
+                _sse_response(consume_resume, activity_pump, encoder, merged, release),
                 media_type=encoder.get_content_type(),
             )
 
@@ -948,6 +1073,7 @@ def _add_kaboo_endpoint(
                             )
                         )
 
+                    await release()
                     return StreamingResponse(
                         replay_interrupt(), media_type=encoder.get_content_type()
                     )
@@ -980,6 +1106,7 @@ def _add_kaboo_endpoint(
                     )
                 )
 
+            await release()
             return StreamingResponse(malformed_gen(), media_type=encoder.get_content_type())
 
         async def consume_fresh() -> None:
@@ -992,7 +1119,7 @@ def _add_kaboo_endpoint(
             )
 
         return StreamingResponse(
-            _sse_response(consume_fresh, activity_pump, encoder, merged),
+            _sse_response(consume_fresh, activity_pump, encoder, merged, release),
             media_type=encoder.get_content_type(),
         )
 
@@ -1019,6 +1146,179 @@ def _install_reference_fetching(app_config: Any) -> None:
     install_agui_strands_fetch()
 
 
+@dataclass
+class AguiSession:
+    """Everything one conversation needs in order to run.
+
+    Built by :func:`_build_session`. A session is cheap — resolving a config
+    creates objects but opens no connections and starts no processes — which is
+    what makes it reasonable to build one per run rather than once per process.
+
+    Nothing here is shared between sessions except the models and MCP servers on
+    the infra it was built from, so two runs of two different workflows cannot see
+    each other's agents, hooks or activity stream.
+    """
+
+    agui_agent: StrandsAgent | StrandsMultiAgent
+    entry_name: str
+    event_queue: EventQueue
+    resolved: ResolvedConfig
+    entry_inline: bool = False
+    #: The MCP client sessions opened for this session, owned so they can be
+    #: closed with it. ``None`` when the clients belong to the process instead.
+    mcp_clients: MCPLifecycle | None = None
+    #: Whether this session belongs to a single run and is closed when it ends.
+    #: ``False`` for the boot-built session a fixed-config process reuses.
+    transient: bool = False
+
+    async def aclose(self) -> None:
+        """Release the session's resources: its event queue, then its MCP clients."""
+        await self.event_queue.close()
+        if self.mcp_clients is not None:
+            self.mcp_clients.stop()
+
+
+def _build_session(
+    app_config: AppConfig,
+    infra: ResolvedInfra,
+    *,
+    session_id: str | None = None,
+    mcp_clients: MCPLifecycle | None = None,
+    transient: bool = False,
+) -> AguiSession:
+    """Resolve a config into a runnable AG-UI session.
+
+    Creates this session's own agents, orchestrations and entry from the shared
+    infra, wires their activity event queue, and wraps the entry in the right
+    AG-UI adapter — :class:`StrandsMultiAgent` for a swarm/graph entry, which
+    kaboo drives itself, or :class:`StrandsAgent` for a plain agent, which
+    ag-ui-strands drives.
+
+    Args:
+        app_config: The validated config for this session. May differ per run.
+        infra: Shared models and MCP servers.
+        session_id: Conversation id, threaded into per-agent session managers.
+        mcp_clients: Client sessions this session owns and should close with it.
+        transient: Whether the session is closed when its run ends.
+
+    Returns:
+        The session, ready to serve runs.
+
+    Raises:
+        TypeError: If the entry node is an unsupported orchestration type.
+    """
+    resolved = load_session(app_config, infra, session_id=session_id)
+    entry = resolved.entry
+    entry_name = _resolve_entry_name(entry, resolved)
+    event_queue = resolved.wire_event_queue()
+
+    entry_inline = False
+    agui_agent: StrandsAgent | StrandsMultiAgent
+    if isinstance(entry, MultiAgentBase):
+        # First-class Swarm/Graph entry — kaboo owns the run loop.
+        agui_agent = StrandsMultiAgent(
+            entry, name=entry_name, chat_output=_resolve_chat_output(app_config)
+        )
+    elif isinstance(entry, Agent):
+        # Plain agent or delegate (a forked Agent) — ag-ui-strands drives it.
+        # Forward the entry node's kaboo hook providers so interrupt/HITL hooks
+        # fire on the per-thread clone ag-ui-strands actually executes (the
+        # clone does not inherit the blueprint's HookRegistry).
+        forwarded_hooks = get_agent_hook_providers(entry)
+
+        # Every per-thread clone gets the request's forwarded props in its
+        # state; per-invocation prompt/model overrides are opt-in via the root
+        # runtime.allow_invocation_overrides config flag.
+        runtime_def = getattr(app_config, "runtime", None)
+        forwarded_hooks = [
+            ForwardedPropsHook(
+                apply_agent_config=bool(getattr(runtime_def, "allow_invocation_overrides", False))
+            ),
+            *forwarded_hooks,
+        ]
+
+        # Durable interrupts without a store, on by default. Goes on the clone
+        # because that is the agent whose _interrupt_state holds the pending gate.
+        if bool(getattr(runtime_def, "persist_session_state", True)):
+            forwarded_hooks = [SessionStateHook(), *forwarded_hooks]
+
+        # A plain-agent entry (not a delegate) also forwards its EventPublisher so
+        # its own tool calls land in the activity stream and enrich the inline tool
+        # rows (labels, formatted results, error status) — otherwise those rows
+        # render bare from the raw AG-UI message. The publisher goes FIRST so
+        # TOOL_START is emitted before any HITL gate interrupts, registering the
+        # tool in run 1 so its result updates on resume. Its group is flagged
+        # inline_chat_owner so the UI enriches the rows but never draws a card.
+        entry_pub = getattr(entry, "_kaboo_event_publisher", None)
+        if entry_pub is not None and _resolve_chat_owner(app_config) is None:
+            entry_pub.mark_inline_chat_owner()
+            forwarded_hooks = [entry_pub, *forwarded_hooks]
+            entry_inline = True
+
+        agui_agent = StrandsAgent(
+            agent=entry,
+            name=entry_name,
+            config=_build_agui_config(resolved),
+            hooks=forwarded_hooks,
+        )
+    else:
+        raise TypeError(f"Unsupported entry node type: {type(entry)}")
+
+    return AguiSession(
+        agui_agent=agui_agent,
+        entry_name=entry_name,
+        event_queue=event_queue,
+        resolved=resolved,
+        entry_inline=entry_inline,
+        mcp_clients=mcp_clients,
+        transient=transient,
+    )
+
+
+def _make_session_resolver(
+    base_raw: dict,
+    infra: ResolvedInfra,
+    *,
+    session_config_key: str,
+    allowed_mcp_hosts: list[str] | None = None,
+) -> Callable[[RunAgentInput], AguiSession]:
+    """Build a resolver that gives each run the workflow it submitted.
+
+    The submitted config is read from ``forwardedProps[session_config_key]`` and
+    layered over ``base_raw``. The run's MCP clients are its own, so the returned
+    session is transient and must be closed when the run ends.
+
+    The config is re-read every turn, which is what lets an edited workflow take
+    effect on the next message. Nothing is cached between runs: a session holds
+    no conversation state — history and pending interrupts arrive with the turn —
+    so rebuilding is indistinguishable from retaining, and a second replica or a
+    restarted process behaves the same as this one.
+    """
+
+    def resolve_session(input_data: RunAgentInput) -> AguiSession:
+        overlay = None
+        props = input_data.forwarded_props
+        if isinstance(props, dict):
+            submitted = props.get(session_config_key)
+            if isinstance(submitted, str) and submitted.strip():
+                overlay = submitted
+        run_config = load_session_config(base_raw, overlay, allowed_mcp_hosts=allowed_mcp_hosts)
+
+        clients = resolve_run_clients(run_config, infra)
+        # Started so the run owns the sessions and stop() actually closes them;
+        # unpinned so they end with the run rather than the process.
+        clients.start(pin_clients=False)
+        return _build_session(
+            run_config,
+            replace(infra, clients=clients.clients, mcp_lifecycle=clients),
+            session_id=input_data.thread_id or bridge.DEFAULT_THREAD,
+            mcp_clients=clients,
+            transient=True,
+        )
+
+    return resolve_session
+
+
 def create_agui_app(
     config_path: str | Path,
     *,
@@ -1027,11 +1327,31 @@ def create_agui_app(
     cors_origins: list[str] | None = None,
     cors_allow_credentials: bool = True,
     auth: AuthVerifier | None = None,
+    session_config_key: str | None = None,
+    allowed_mcp_hosts: list[str] | None = None,
 ) -> FastAPI:
     """Create a FastAPI app serving AG-UI SSE from a YAML config.
 
+    By default the process serves one config: it is loaded here, its agents are
+    built once, and every run uses them.
+
+    Setting ``session_config_key`` makes the service behave like a function
+    instead. Each run submits its own config in ``forwardedProps`` under that key,
+    layered over ``config_path`` as an overlay (see
+    :func:`~kaboo_workflows.config.load_session_config`), and gets its own agents,
+    orchestration, entry and MCP client sessions, all released when the run ends.
+    Different runs can then be different workflows, and a restart or a second
+    replica behaves like a cold instance because nothing is kept between runs.
+
+    That is only safe because conversation state does not live in the objects
+    being rebuilt: history and pending interrupts arrive with each turn on the
+    AG-UI state channel (see
+    :class:`~kaboo_workflows.hooks.SessionStateHook`).
+
     Args:
-        config_path: Path to the kaboo-workflows YAML config.
+        config_path: Path to the kaboo-workflows YAML config. With
+            ``session_config_key`` set this is the base every submitted config
+            layers over — typically shared models, MCP clients and defaults.
         endpoint: Path for the AG-UI agent endpoint.
         ping_path: Path for the health check endpoint. ``None`` to disable.
         cors_origins: Allowed CORS origins. Defaults to ``["*"]``. Pass an
@@ -1046,6 +1366,11 @@ def create_agui_app(
             relay/exchange from it. When ``None`` (default) the endpoint trusts
             its caller — only safe behind an authenticating proxy or the
             AgentCore Runtime authorizer.
+        session_config_key: ``forwardedProps`` key carrying this run's config.
+            ``None`` (default) serves ``config_path`` alone, unchanged.
+        allowed_mcp_hosts: Hosts a submitted config's MCP client URL may point
+            at. Set this whenever configs are authored anywhere but this
+            repository: an arbitrary URL needs no code to exfiltrate.
 
     Returns:
         A FastAPI application with AG-UI SSE streaming.
@@ -1054,64 +1379,40 @@ def create_agui_app(
         TypeError: If the entry node is an unsupported orchestration type.
     """
     config_path = Path(config_path).resolve()
-    resolved = load(str(config_path))
+    per_run_configs = session_config_key is not None
 
-    _install_reference_fetching(getattr(resolved, "app_config", None))
+    # Parse the base once. With per-run configs it stays raw, because each run
+    # validates its own merge of it; a run's overlay may legitimately replace
+    # sections the base leaves incomplete.
+    base_raw = parse_config_sources(str(config_path))
+    app_config = validate_raw_config(base_raw)
+    _install_reference_fetching(app_config)
 
-    entry = resolved.entry
-    mcp_lifecycle = resolved.mcp_lifecycle
+    infra = resolve_infra(app_config)
+    # Servers are processes and stay process-wide either way. Clients are only
+    # pinned for the process when the process owns them; per-run clients are
+    # deliberately allowed to end with their run.
+    infra.mcp_lifecycle.start(pin_clients=not per_run_configs)
 
-    entry_name = _resolve_entry_name(entry, resolved)
-    event_queue = resolved.wire_event_queue()
     registry = ActivityRegistry()
 
-    entry_inline = False
-    if isinstance(entry, MultiAgentBase):
-        # First-class Swarm/Graph entry — kaboo owns the run loop.
-        chat_output = _resolve_chat_output(getattr(resolved, "app_config", None))
-        agui_agent: StrandsAgent | StrandsMultiAgent = StrandsMultiAgent(
-            entry, name=entry_name, chat_output=chat_output
-        )
-    elif isinstance(entry, Agent):
-        # Plain agent or delegate (a forked Agent) — ag-ui-strands drives it.
-        # Forward the entry node's kaboo hook providers so interrupt/HITL hooks
-        # fire on the per-thread clone ag-ui-strands actually executes (the
-        # clone does not inherit the blueprint's HookRegistry).
-        forwarded_hooks = get_agent_hook_providers(entry)
+    resolve_session: Callable[[RunAgentInput], AguiSession]
+    static_session: AguiSession | None = None
+    if session_config_key is None:
+        # One config for the process: build it here so a broken config fails at
+        # startup rather than on the first request.
+        static_session = _build_session(app_config, infra)
+        fixed = static_session
 
-        # Every per-thread clone gets the request's forwarded props in its
-        # state; per-invocation prompt/model overrides are opt-in via the root
-        # runtime.allow_invocation_overrides config flag.
-        runtime_def = getattr(getattr(resolved, "app_config", None), "runtime", None)
-        forwarded_hooks = [
-            ForwardedPropsHook(
-                apply_agent_config=bool(getattr(runtime_def, "allow_invocation_overrides", False))
-            ),
-            *forwarded_hooks,
-        ]
-
-        # A plain-agent entry (not a delegate) also forwards its EventPublisher so
-        # its own tool calls land in the activity stream and enrich the inline tool
-        # rows (labels, formatted results, error status) — otherwise those rows
-        # render bare from the raw AG-UI message. The publisher goes FIRST so
-        # TOOL_START is emitted before any HITL gate interrupts, registering the
-        # tool in run 1 so its result updates on resume. Its group is flagged
-        # inline_chat_owner so the UI enriches the rows but never draws a card.
-        entry_pub = getattr(entry, "_kaboo_event_publisher", None)
-        is_delegate_entry = _resolve_chat_owner(getattr(resolved, "app_config", None)) is not None
-        if entry_pub is not None and not is_delegate_entry:
-            entry_pub.mark_inline_chat_owner()
-            forwarded_hooks = [entry_pub, *forwarded_hooks]
-            entry_inline = True
-
-        agui_agent = StrandsAgent(
-            agent=entry,
-            name=entry_name,
-            config=_build_agui_config(resolved),
-            hooks=forwarded_hooks,
-        )
+        def resolve_session(_input: RunAgentInput) -> AguiSession:
+            return fixed
     else:
-        raise TypeError(f"Unsupported entry node type: {type(entry)}")
+        resolve_session = _make_session_resolver(
+            base_raw,
+            infra,
+            session_config_key=session_config_key,
+            allowed_mcp_hosts=allowed_mcp_hosts,
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -1120,8 +1421,9 @@ def create_agui_app(
             yield
         finally:
             logger.info("AG-UI server shutting down — stopping MCP lifecycle")
-            await event_queue.close()
-            mcp_lifecycle.stop()
+            if static_session is not None:
+                await static_session.event_queue.close()
+            infra.mcp_lifecycle.stop()
 
     app = FastAPI(title="kaboo-workflows", lifespan=lifespan)
 
@@ -1133,22 +1435,13 @@ def create_agui_app(
         allow_headers=["*"],
     )
 
-    _add_kaboo_endpoint(
-        app,
-        agui_agent,
-        event_queue,
-        registry,
-        entry_name,
-        endpoint,
-        entry_inline=entry_inline,
-        auth=auth,
-    )
+    _add_kaboo_endpoint(app, resolve_session, registry, endpoint, auth=auth)
     if ping_path is not None:
         add_ping(app, ping_path)
 
     @app.get("/manifest")
     async def manifest() -> dict:
-        return {"entry": entry_name}
+        return {"entry": static_session.entry_name if static_session else app_config.entry}
 
     return app
 

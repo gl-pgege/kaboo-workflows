@@ -78,8 +78,13 @@ agents:
 
 ```yaml
 runtime:
-  allow_invocation_overrides: false  # Apply forwardedProps.agent_config
-                                     # (system_prompt / model_id) per invocation
+  persist_session_state: true        # Carry pending interrupts on the AG-UI state
+                                     # channel, so an approval survives a restart
+                                     # (Chapter 7). Disable only when the AG-UI
+                                     # endpoint is exposed straight to a browser.
+  allow_invocation_overrides: false  # DEPRECATED — apply forwardedProps.agent_config
+                                     # (system_prompt / model_id) per invocation.
+                                     # Submit a config instead (Chapter 13).
 ```
 
 ## HookDef
@@ -184,6 +189,25 @@ orchestrations:
     session_manager: null          # Graph-level session manager
     hooks: []                      # Graph-level hooks
 ```
+
+## create_agui_app
+
+```{.python notest}
+create_agui_app(
+    config_path,                    # Base config. With session_config_key set, the
+                                    # layer every submitted config merges over.
+    endpoint="/invocations",
+    ping_path="/ping",
+    cors_origins=None,              # Defaults to ["*"]
+    cors_allow_credentials=True,
+    auth=None,                      # Inbound verifier -> Principal (raise to reject)
+    session_config_key=None,        # forwardedProps key carrying this run's config.
+                                    # None serves config_path alone.
+    allowed_mcp_hosts=None,         # Hosts a submitted mcp_client URL may point at
+)
+```
+
+`session_config_key` changes the shape of the service, not just a setting: each run gets its own agents, orchestration, entry and MCP client sessions, released when its stream ends. See [Chapter 13](Chapter_13.md) for the merge rules and [Chapter 17](Chapter_17.md) for the pipeline.
 
 ---
 

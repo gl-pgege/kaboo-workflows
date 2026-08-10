@@ -24,7 +24,11 @@ from .config import (
     load,
     load_config,
     load_session,
+    load_session_config,
+    parse_config_sources,
     resolve_infra,
+    resolve_run_clients,
+    validate_raw_config,
 )
 from .config.resolvers.orchestrations import OrchestrationBuilder
 from .exceptions import (
@@ -80,10 +84,14 @@ __all__ = [
     "load",
     "load_config",
     "load_session",
+    "load_session_config",
+    "parse_config_sources",
+    "validate_raw_config",
     "make_event_queue",
     "node_as_async_tool",
     "node_as_tool",
     "resolve_infra",
+    "resolve_run_clients",
     "serialize_multiagent_result",
     "set_auth_context",
     "set_forwarded_props",

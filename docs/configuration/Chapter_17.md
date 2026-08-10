@@ -192,6 +192,41 @@ computes a single `effective_session_id` and threads it down to every agent and 
 This design guarantees exactly one folder is created per `load_session()` call, never an orphan
 folder from `resolve_infra()`.
 
+### When the config itself is per-request
+
+The split above assumes one config, many sessions. Push it one step further and the config becomes per-request too: the run submits it, and the process only holds the base it layers over.
+
+That needs one more seam, because `load_config()` both parses *and* validates, and a base config that expects an overlay is not valid on its own — it may have no `entry`. So the two halves are separately available:
+
+```{.python notest}
+from dataclasses import replace
+
+from kaboo_workflows import (
+    load_session,
+    load_session_config,
+    parse_config_sources,
+    resolve_infra,
+    resolve_run_clients,
+    validate_raw_config,
+)
+
+# Once at boot: parse the base, keep it raw.
+base_raw = parse_config_sources("config.yaml")
+infra = resolve_infra(validate_raw_config(base_raw))
+infra.mcp_lifecycle.start(pin_clients=False)   # servers only; clients are per-run
+
+# Per run: merge, validate, resolve.
+config = load_session_config(base_raw, submitted_yaml, allowed_mcp_hosts=["gateway.internal"])
+clients = resolve_run_clients(config, infra)
+resolved = load_session(config, replace(infra, clients=clients.clients), session_id=thread_id)
+```
+
+`create_agui_app(config_path, session_config_key="workflow_config")` does exactly this for you, reading the overlay from `forwardedProps` and closing the run's clients when its stream ends. See [Chapter 13](Chapter_13.md) for the merge rules.
+
+What is left at process level shrinks to what is genuinely process-level: the parsed base, the model objects, and any MCP server processes. Everything a conversation touches — agents, orchestrations, entry, client sessions — is built for the run and released with it.
+
+This is only safe because conversation state does not live in those objects. History arrives each turn in `state.kaboo_history`, and a pending interrupt arrives in `state.kaboo_session` ([Chapter 7](Chapter_07.md)). Rebuilding is therefore indistinguishable from retaining, which is what lets you run a second replica, restart mid-approval, or serve a workflow edited thirty seconds ago.
+
 ### Mental model
 
 Use this rule of thumb:
@@ -200,10 +235,13 @@ Use this rule of thumb:
 - **`load_config()`** = validate and freeze the declarative config
 - **`resolve_infra()`** = build shared runtime dependencies, but do not start them yet
 - **`load_session()`** = build one session's live agents/orchestrations from shared infra
+- **`parse_config_sources()` + `load_session_config()`** = the config itself varies per run
 
 If you're building a CLI, a notebook, or a one-shot script, use `load()`.
 
 If you're building a long-running web server with many user sessions, use `load_config()` + `resolve_infra()` once, then `load_session()` for each session.
+
+If those sessions are different *workflows*, keep the base raw and merge an overlay per run.
 
 ---
 

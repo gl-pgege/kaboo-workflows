@@ -58,6 +58,30 @@ _current_history: contextvars.ContextVar[HistoryExchange | None] = contextvars.C
 
 
 @dataclass
+class SessionExchange:
+    """Request-scoped carrier for client-driven session state.
+
+    ``inbound`` is the state the client sent this run (parsed from
+    ``RunAgentInput.state['kaboo_session']``); a hook restores it onto the
+    executing agent so a paused approval survives a process restart.
+
+    ``agent`` is that executing agent, recorded on invocation so the snapshot
+    enricher can serialize its state on the way out. We keep the agent rather
+    than a copy of the state because an interrupt *pauses* a run: the state we
+    need is whatever it holds once the run has stopped, which is later than any
+    hook fires.
+    """
+
+    inbound: dict[str, Any] = field(default_factory=dict)
+    agent: Any = None
+
+
+_current_session: contextvars.ContextVar[SessionExchange | None] = contextvars.ContextVar(
+    "kaboo_session_exchange", default=None
+)
+
+
+@dataclass
 class Reference:
     """A single client-supplied reference for the current run.
 
@@ -196,6 +220,21 @@ def set_history_exchange(exchange: HistoryExchange | None) -> None:
 def get_history_exchange() -> HistoryExchange | None:
     """Return the current request's :class:`HistoryExchange` (or ``None``)."""
     return _current_history.get()
+
+
+def set_session_exchange(exchange: SessionExchange | None) -> None:
+    """Bind the current request's :class:`SessionExchange`.
+
+    Call at the start of each request handler, before creating the run task, so
+    the hook that restores state and the enricher that writes it back share one
+    object.
+    """
+    _current_session.set(exchange)
+
+
+def get_session_exchange() -> SessionExchange | None:
+    """Return the current request's :class:`SessionExchange` (or ``None``)."""
+    return _current_session.get()
 
 
 def set_references(references: list[Reference] | None) -> None:

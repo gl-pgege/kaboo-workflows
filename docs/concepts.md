@@ -94,12 +94,29 @@ Two built-in features consume it:
 
 - **Authorized attachment fetching** — `attachments.authorization: forwarded_props:<key>`
   reads a run-scoped bearer token for own-origin fetches.
-- **Per-invocation agent overrides** — with `runtime.allow_invocation_overrides: true`,
-  `forwardedProps.agent_config` (`system_prompt`, `model_id`) is applied to the
-  executing per-thread agent before each invocation. This is how one runtime
-  process serves many host-defined agent types: the host projects the selected
-  agent's prompt/model into each run, concurrent threads never interfere, and
-  editing an agent definition takes effect on the next turn without a restart.
+- **Runtime-submitted workflow configs** — with
+  `create_agui_app(session_config_key="workflow_config")`, the run's own YAML
+  arrives under that key and is merged over the service's base config. This is how
+  one process serves many host-defined agent types: each run gets its own agents,
+  orchestration, entry and MCP client sessions, and editing an agent type takes
+  effect on the next turn without a restart. See
+  [Chapter 13](configuration/Chapter_13.md#the-second-merge-mode-session-overlays).
+
+  A submitted config supersedes `forwardedProps.agent_config`, which applied only
+  `system_prompt` and `model_id` behind `runtime.allow_invocation_overrides`. That
+  flag is **deprecated**: an overlay expresses both, plus the structure they could
+  not.
+
+## Statelessness: what a run keeps and what it carries
+
+A run keeps nothing. Everything a conversation accumulates arrives with the turn
+on the AG-UI **state channel** — `kaboo_history` for sub-agent transcripts,
+`kaboo_session` for a pending human-in-the-loop gate — and leaves in the outgoing
+`STATE_SNAPSHOT` the host persists.
+
+That is what makes the rest safe: a service can rebuild its agents every run,
+scale to a second replica, or restart mid-approval, and behave identically,
+because the objects being rebuilt hold behaviour rather than memory.
 
 ## Where to go next
 

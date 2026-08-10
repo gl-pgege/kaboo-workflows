@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from ag_ui.core import EventType as AGUIEventType
 
 from .harness import Pipeline, run_pipeline
 
@@ -89,6 +90,77 @@ async def test_ask_user_interrupt_then_resume(case: str) -> None:
     assert not r2.errored(), f"{case}: resumed run errored"
     assert r2.finished()
     assert expected in r2.text(), f"{case}: expected {expected!r} in {r2.text()!r}"
+
+
+async def test_approval_survives_a_restart_of_the_service() -> None:
+    """A gate paused in one process is resumable in the next.
+
+    The interrupt lives in the per-thread agent's memory, so without state on the
+    wire a restart between the question and the answer stranded the approval: the
+    analyst clicked approve and got "No agent session found for resume". Here the
+    second turn runs on a *fresh* Pipeline — a new process, no shared agents — and
+    carries nothing but the state snapshot the host persisted, as kaboo-runtime
+    replays it.
+    """
+    first = Pipeline(str(CONFIGS / "interrupt_plain.yaml"))
+    r1 = await first.turn("start the task", thread_id="c1", run_id="r1")
+
+    outcome = r1.run_outcome()
+    assert getattr(outcome, "type", None) == "interrupt"
+    interrupt_id = getattr((getattr(outcome, "interrupts", []) or [])[0], "id", None)
+    assert interrupt_id
+
+    persisted = r1.state()
+    assert persisted["kaboo_session"]["interrupt_state"]["activated"] is True
+    paused_call_id = r1.of_type(AGUIEventType.TOOL_CALL_START)[0].tool_call_id
+
+    restarted = Pipeline(str(CONFIGS / "interrupt_plain.yaml"))
+    r2 = await restarted.turn(
+        thread_id="c1",
+        run_id="r2",
+        state=persisted,
+        # The transcript the host replays, carrying the tool call that paused.
+        messages=r1.messages(),
+        resume=[{"interruptId": interrupt_id, "status": "resolved", "payload": {"answer": "yes"}}],
+    )
+
+    assert not r2.errored()
+    assert r2.finished()
+
+    # The proof of resumption: the paused tool produced its result from the
+    # user's answer, on a process that never saw the question asked.
+    results = r2.of_type(AGUIEventType.TOOL_CALL_RESULT)
+    assert [r.tool_call_id for r in results] == [paused_call_id]
+    assert "yes" in results[0].content
+
+    # And the answered gate is spent, not replayed into the next turn.
+    resumed_state = r2.state()["kaboo_session"]["interrupt_state"]
+    assert interrupt_id not in resumed_state["interrupts"]
+
+    # Note: the final assistant text is not asserted here. Each Pipeline builds
+    # its own ScriptedModel, and the fake picks its action by call index, so the
+    # "restarted" one replays its first scripted step rather than answering. That
+    # is the fake restarting with the process, not the resume failing.
+
+
+async def test_resume_without_carried_state_still_reports_a_lost_session() -> None:
+    """A cold resume with nothing to restore must fail loudly, not silently pass.
+
+    Guards the seeding path from turning a genuinely lost session into a run that
+    quietly approves nothing.
+    """
+    first = Pipeline(str(CONFIGS / "interrupt_plain.yaml"))
+    r1 = await first.turn("start the task", thread_id="c2", run_id="r1")
+    interrupt_id = getattr((getattr(r1.run_outcome(), "interrupts", []) or [])[0], "id", None)
+
+    restarted = Pipeline(str(CONFIGS / "interrupt_plain.yaml"))
+    with pytest.raises(LookupError):
+        await restarted.turn(
+            "(resume)",
+            thread_id="c2",
+            run_id="r2",
+            resume=[{"interruptId": interrupt_id, "status": "resolved", "payload": {}}],
+        )
 
 
 async def test_swarm_tool_gate_pauses_then_executes_the_edited_call() -> None:

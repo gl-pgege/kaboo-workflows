@@ -160,6 +160,17 @@ async with resolved.mcp_lifecycle:
     result = await resolved.entry.invoke_async("Hello!")
 ```
 
+### How Long a Client Session Lives
+
+A **server** is a process, so it belongs to the process that started it. A **client** is a session, and its lifetime is a choice:
+
+- Serving one fixed config (`create_agui_app("config.yaml")`), clients are opened once and held for the process, so every run reuses them.
+- Serving runs that submit their own config (`session_config_key=`, see [Chapter 17](Chapter_17.md)), each run resolves its own clients and they are closed when its stream ends.
+
+Per-run clients cost a handshake per client per turn, which is small beside a model call, and they buy two things worth more than that. `MCPClientError: the client session is not running` stops being possible rather than being retried, because a session that cannot outlive its run cannot be found dead at the start of the next one. And `relay` / `obo` auth becomes reachable, because strands captures the ambient identity when a client *starts* — a client started at boot has no caller to relay.
+
+Servers are still shared either way, so a `server:` client declared by a run binds to the process's already-running server.
+
 ## MCPClientDef Validation
 
 Exactly **one** of `server`, `url`, or `command` must be set on each client. Setting zero or more than one raises a validation error:

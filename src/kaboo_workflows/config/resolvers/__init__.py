@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .agents import resolve_agents
-from .config import ResolvedConfig, ResolvedInfra, resolve_infra
+from .config import ResolvedConfig, ResolvedInfra, resolve_infra, resolve_run_clients
 from .conversation_manager import resolve_conversation_manager
 from .hooks import resolve_hook, resolve_hook_entry
 from .mcp import resolve_mcp_client, resolve_mcp_server, resolve_tools
@@ -23,6 +23,7 @@ __all__ = [
     "resolve_mcp_server",
     "resolve_model",
     "resolve_orchestrations",
+    "resolve_run_clients",
     "resolve_session_manager",
     "resolve_tools",
 ]

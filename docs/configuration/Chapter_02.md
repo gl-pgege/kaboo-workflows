@@ -65,6 +65,8 @@ agents:
 
 This is handy when only one agent uses a specific model — no need to pollute the `models` section. But if two agents share the same model config, **use a named model** to avoid duplication.
 
+An inline model is also the simplest choice in a config submitted per run ([Chapter 13](Chapter_13.md)): the agents in an overlay replace the base's, but a named model has to exist somewhere, either in the base's `models` or in the overlay's own. Inline needs neither.
+
 ## Custom Model Providers
 
 If the built-in four providers aren't enough, you can point `provider` to a custom `Model` subclass:

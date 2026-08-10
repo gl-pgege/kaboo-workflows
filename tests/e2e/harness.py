@@ -24,26 +24,27 @@ from typing import Any
 
 from ag_ui.core import EventType as AGUIEventType
 from ag_ui.core import RunAgentInput, UserMessage
-from strands.multiagent.base import MultiAgentBase
 
-from kaboo_workflows import load
 from kaboo_workflows._context import (
     HistoryExchange,
+    SessionExchange,
     set_activity_context,
+    set_forwarded_props,
     set_history_exchange,
+    set_session_exchange,
 )
 from kaboo_workflows.adapters import _strands_bridge as bridge
 from kaboo_workflows.adapters._activity import ActivityRegistry
 from kaboo_workflows.adapters._multiagent import StrandsMultiAgent
 from kaboo_workflows.adapters.agui import (
-    StrandsAgent,
-    _build_agui_config,
     _build_resume_responses,
+    _build_session,
     _consume_run,
-    _resolve_entry_name,
+    _make_session_resolver,
+    _parse_session_state,
 )
-from kaboo_workflows.config.resolvers.agents import get_agent_hook_providers
-from kaboo_workflows.config.resolvers.config import _resolve_chat_output
+from kaboo_workflows.config import parse_config_sources, resolve_infra, validate_raw_config
+from kaboo_workflows.hooks import restore_session_state
 from kaboo_workflows.types import StreamEvent
 
 _DONE = bridge.STREAM_DONE
@@ -84,6 +85,22 @@ class TurnResult:
             return getattr(e, "outcome", None)
         return None
 
+    def messages(self) -> list[Any]:
+        """The last MESSAGES_SNAPSHOT, as the host would persist and replay it."""
+        for event in reversed(self.events):
+            if event.type == AGUIEventType.MESSAGES_SNAPSHOT:
+                return list(getattr(event, "messages", None) or [])
+        return []
+
+    def state(self) -> dict[str, Any]:
+        """The last STATE_SNAPSHOT, as the host would persist and replay it."""
+        for event in reversed(self.events):
+            if event.type == AGUIEventType.STATE_SNAPSHOT:
+                snapshot = getattr(event, "snapshot", None)
+                if isinstance(snapshot, dict):
+                    return snapshot
+        return {}
+
     # -- activity-group helpers --------------------------------------------
 
     def group_ids(self) -> list[str]:
@@ -100,35 +117,45 @@ class TurnResult:
 
 
 class Pipeline:
-    """A resolved pipeline that can be driven turn-by-turn in one event loop."""
+    """A resolved pipeline that can be driven turn-by-turn in one event loop.
 
-    def __init__(self, config_path: str, *, entry_name: str | None = None) -> None:
-        self.resolved = load(str(config_path))
-        self.entry = self.resolved.entry
-        self.entry_name = entry_name or _resolve_entry_name(self.entry, self.resolved)
+    Mirrors both serving modes. By default one session serves every turn, as a
+    process with a fixed config does. Pass ``session_config_key`` and each turn
+    builds its own session from the config it submits in ``forwarded_props``,
+    exactly as the endpoint does — which is also how a test simulates a restart,
+    since a rebuilt session shares nothing with the last one.
+    """
+
+    def __init__(
+        self,
+        config_path: str,
+        *,
+        entry_name: str | None = None,
+        session_config_key: str | None = None,
+    ) -> None:
+        self.base_raw = parse_config_sources(str(config_path))
+        self.app_config = validate_raw_config(self.base_raw)
+        self.infra = resolve_infra(self.app_config)
+        self.infra.mcp_lifecycle.start(pin_clients=session_config_key is None)
         self.registry = ActivityRegistry()
-        self._event_queue: Any = None
-        self._agui: Any = None
+        self._entry_name_override = entry_name
+        self._resolver = (
+            None
+            if session_config_key is None
+            else _make_session_resolver(
+                self.base_raw, self.infra, session_config_key=session_config_key
+            )
+        )
+        self._session: Any = None
 
-    def _ensure_wired(self) -> None:
+    def _resolve_session(self, input_data: RunAgentInput) -> Any:
         # Lazy so the wrapped asyncio.Queue binds to the running loop, and hooks
-        # are attached exactly once for the whole conversation.
-        if self._event_queue is not None:
-            return
-        self._event_queue = self.resolved.wire_event_queue()
-        if isinstance(self.entry, MultiAgentBase):
-            self._agui = StrandsMultiAgent(
-                self.entry,
-                name=self.entry_name,
-                chat_output=_resolve_chat_output(getattr(self.resolved, "app_config", None)),
-            )
-        else:
-            self._agui = StrandsAgent(
-                agent=self.entry,
-                name=self.entry_name,
-                config=_build_agui_config(self.resolved),
-                hooks=get_agent_hook_providers(self.entry),
-            )
+        # are attached exactly once per session.
+        if self._resolver is not None:
+            return self._resolver(input_data)
+        if self._session is None:
+            self._session = _build_session(self.app_config, self.infra)
+        return self._session
 
     async def turn(
         self,
@@ -139,11 +166,8 @@ class Pipeline:
         state: dict[str, Any] | None = None,
         messages: list[Any] | None = None,
         resume: list[dict[str, Any]] | None = None,
+        forwarded_props: dict[str, Any] | None = None,
     ) -> TurnResult:
-        self._ensure_wired()
-        event_queue = self._event_queue
-        agui = self._agui
-
         set_activity_context(thread_id, run_id)
         inbound: dict[str, Any] = {}
         if isinstance(state, dict) and isinstance(state.get("kaboo_history"), dict):
@@ -160,8 +184,15 @@ class Pipeline:
             messages=messages,
             tools=[],
             context=[],
-            forwarded_props={},
+            forwarded_props=forwarded_props or {},
         )
+        set_session_exchange(SessionExchange(inbound=_parse_session_state(input_data)))
+        set_forwarded_props(forwarded_props or {})
+
+        session = self._resolve_session(input_data)
+        event_queue = session.event_queue
+        agui = session.agui_agent
+        entry_name = self._entry_name_override or session.entry_name
 
         merged: asyncio.Queue[Any] = asyncio.Queue()
 
@@ -170,7 +201,7 @@ class Pipeline:
                 ev = await event_queue.get()
                 if ev is None:
                     break
-                if isinstance(ev, StreamEvent) and ev.agent_name != self.entry_name:
+                if isinstance(ev, StreamEvent) and ev.agent_name != entry_name:
                     tid = ev.data.get("thread_id") or bridge.DEFAULT_THREAD
                     self.registry.apply(tid, ev)
 
@@ -181,7 +212,14 @@ class Pipeline:
         elif resume:
             # Mirror kaboo_endpoint's resume branch: feed the interrupt responses
             # into the paused per-thread agent through ag-ui-strands' run loop.
-            strands_agent = bridge.get_thread_agent(agui, thread_id)
+            # ensure_thread_agent + restore cover the cold case, where the paused
+            # clone is gone and the gate arrives on the state channel instead.
+            cold = bridge.get_thread_agent(agui, thread_id) is None
+            strands_agent = await bridge.ensure_thread_agent(agui, input_data)
+            if not restore_session_state(strands_agent) and cold:
+                # The endpoint answers RUN_ERROR / RESUME_NO_SESSION here; in-process
+                # the equivalent is refusing to drive a run with nothing to resume.
+                raise LookupError("no resumable agent state for thread")
             responses = _build_resume_responses(strands_agent, resume)
             with bridge.resume_prompt_override(strands_agent, responses):
                 await _consume_run(agui, input_data, merged, exchange)
@@ -189,7 +227,12 @@ class Pipeline:
             await _consume_run(agui, input_data, merged, exchange)
 
         # Flush the activity queue fully, then stop the pump deterministically.
-        await event_queue.close()
+        # A transient session is released here for the same reason the endpoint
+        # releases it when the stream ends.
+        if session.transient:
+            await session.aclose()
+        else:
+            await event_queue.close()
         await pump_task
 
         events: list[Any] = []

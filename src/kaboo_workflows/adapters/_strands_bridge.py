@@ -13,7 +13,8 @@ If ag-ui-strands ever grows a first-class resume entry point,
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING, Any
+import inspect
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -35,6 +36,53 @@ def get_thread_agent(agui_agent: StrandsAgent, thread_id: str | None) -> Any | N
     DEPENDS ON ag-ui-strands internal: ``StrandsAgent._agents_by_thread``.
     """
     return agui_agent._agents_by_thread.get(thread_id or DEFAULT_THREAD)
+
+
+async def ensure_thread_agent(agui_agent: StrandsAgent, input_data: Any) -> Any:
+    """Return the thread's agent, creating it when this process has never run it.
+
+    ag-ui-strands creates per-thread agents lazily *inside* ``run()``. That is too
+    late for resume, which has to install the interrupt responses on the agent
+    before the run starts. On a warm process the agent is already there; on a cold
+    one it is not, and a resume would fail even though the client still holds the
+    pending gate — losing an approval to nothing more than a restart.
+
+    Mirrors the construction in ``StrandsAgent.run()`` so a seeded agent is
+    indistinguishable from one ag-ui-strands would have built itself, including
+    the per-thread session manager.
+
+    DEPENDS ON ag-ui-strands internals: ``_agents_by_thread``, ``_model``,
+    ``_system_prompt``, ``_tools``, ``_agent_kwargs``, ``_hooks`` and
+    ``config.session_manager_provider``.
+    """
+    thread_id = getattr(input_data, "thread_id", None) or DEFAULT_THREAD
+    existing = agui_agent._agents_by_thread.get(thread_id)
+    if existing is not None:
+        return existing
+
+    from strands import Agent as StrandsAgentCore
+
+    session_manager = None
+    provider = getattr(agui_agent.config, "session_manager_provider", None)
+    if provider is not None:
+        session_manager = provider(input_data)
+        if inspect.isawaitable(session_manager):
+            session_manager = await session_manager
+
+    kwargs = dict(agui_agent._agent_kwargs)
+    # Omitted rather than passed empty, as ag-ui-strands does: a future strands
+    # release could read `hooks=[]` as "no default hooks".
+    if agui_agent._hooks:
+        kwargs["hooks"] = list(agui_agent._hooks)
+    agent = StrandsAgentCore(
+        model=agui_agent._model,
+        system_prompt=agui_agent._system_prompt,
+        tools=cast("list[Any]", agui_agent._tools),
+        session_manager=session_manager,
+        **kwargs,
+    )
+    agui_agent._agents_by_thread[thread_id] = agent
+    return agent
 
 
 def get_interrupt_state(strands_agent: Any) -> Any | None:
@@ -120,13 +168,19 @@ def resume_prompt_override(strands_agent: Any, responses: list[dict[str, Any]]) 
     history is captured up-front and re-applied inside the override so the
     replay path in ``run()`` cannot overwrite it before the resume.
 
+    Unless there is nothing to re-apply. An agent seeded after a restart has no
+    messages of its own, and the history ``run()`` replayed from the client is
+    then the only record of the turn that paused — overwriting it with an empty
+    list leaves the model no tool call to resume, so it starts the turn over.
+
     DEPENDS ON strands internal: ``Agent.stream_async`` / ``Agent.messages``.
     """
     original_stream = strands_agent.stream_async
     saved_messages = list(strands_agent.messages) if strands_agent.messages else []
 
     async def _resume_stream(prompt: Any = None, **kwargs: Any) -> Any:
-        strands_agent.messages = saved_messages
+        if saved_messages:
+            strands_agent.messages = saved_messages
         async for evt in original_stream(responses, **kwargs):
             yield evt
 

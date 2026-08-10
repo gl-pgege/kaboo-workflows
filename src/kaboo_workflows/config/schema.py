@@ -263,15 +263,22 @@ class AttachmentsDef(BaseModel):
 class RuntimeDef(BaseModel):
     """Runtime behavior toggles.
 
-    - ``allow_invocation_overrides`` — when ``True``, a run's
-      ``forwardedProps.agent_config`` (``system_prompt`` / ``model_id``) is
-      applied to the executing per-thread agent before each invocation. Off by
-      default: only enable when every caller that can reach the endpoint is
-      trusted to steer prompts and models (the AG-UI side channel is
-      host-controlled, but multi-tenant hosts may not want this).
+    - ``allow_invocation_overrides`` — **deprecated, removed in 0.15.0.** When
+      ``True``, a run's ``forwardedProps.agent_config`` (``system_prompt`` /
+      ``model_id``) is applied to the executing per-thread agent before each
+      invocation. Submit the run's whole config instead
+      (``create_agui_app(session_config_key=...)``): it expresses the prompt and
+      model along with the structure this flag could not reach.
+    - ``persist_session_state`` — carry agent session state (pending interrupts)
+      on the AG-UI state channel, so a paused approval survives a restart
+      without configuring a session store. On by default, because the AG-UI
+      client is normally a host server and the channel is server-to-server. Set
+      ``False`` when the endpoint is exposed directly to browsers: a client that
+      can edit gate state could approve its own interrupts.
     """
 
     allow_invocation_overrides: bool = False
+    persist_session_state: bool = True
 
 
 class AgentAttachmentsDef(BaseModel):

@@ -6,6 +6,8 @@
 
 By default, agents are stateless — each `load()` call starts fresh. The `session_manager` section enables persistent conversation history.
 
+Pending human-in-the-loop interrupts are a separate concern and are handled for you — see [Pending interrupts survive a restart without a store](#pending-interrupts-survive-a-restart-without-a-store) at the end of this chapter.
+
 ## Global Session Manager
 
 Define a session manager at the root level and **every agent** inherits it:
@@ -159,6 +161,31 @@ def handle_request(user_session_id: str, message: str):
 ```
 
 MCP servers are shared across sessions (started once), but agents and their conversation state are created fresh per session.
+
+## Pending Interrupts Survive a Restart Without a Store
+
+A session manager persists the *conversation*. An interrupt is different: when an agent pauses on `ask_user` or a gated tool, what has to survive is the open gate, and it lives in the agent object's own interrupt state. That object is per-process, so before this existed a restart between the question and the answer stranded the approval — the user clicked approve and got "No agent session found for resume".
+
+There is nothing to configure. Serving through `create_agui_app`, the pending interrupt travels on the AG-UI **state channel** under `kaboo_session`, the same channel that carries `kaboo_history`:
+
+- On the way out, it is written into the `STATE_SNAPSHOT` your host already persists.
+- On the way in, it is read from `RunAgentInput.state` and restored onto the agent that runs the turn — including one that has never seen the conversation, which is how a resume works after a restart, on a second replica, or when the session is rebuilt per run.
+
+Hosts on [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) get this end to end for free, because the runtime persists state snapshots per thread and replays them into the next run.
+
+Turn it off in the one case where it would be wrong:
+
+```yaml
+runtime:
+  persist_session_state: false
+```
+
+The gate arrives from the client, so trusting it means trusting the client. That is correct when the AG-UI endpoint is called by your own server (the supported topology — a browser talks to your API, your API talks to kaboo), and wrong if you expose `/invocations` straight to a browser, where a user could hand you back a gate you never issued.
+
+Two details worth knowing:
+
+- A warm agent's own state wins over the incoming copy, so a stale snapshot cannot resurrect a gate that was already answered.
+- Swarm and Graph entries are not covered: strands does not yet support session persistence for orchestration node agents, so a multi-agent entry still relies on the process staying up. A plain-agent entry — including one with delegates — is fully covered.
 
 ---
 

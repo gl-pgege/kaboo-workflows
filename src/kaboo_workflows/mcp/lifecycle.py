@@ -124,7 +124,7 @@ class MCPLifecycle:
             raise KeyError(f"MCP client '{name}' not registered.\nAvailable: {list(self._clients)}")
         return self._clients[name]
 
-    def start(self) -> None:
+    def start(self, *, pin_clients: bool = True) -> None:
         """Start all servers and wait for readiness.
 
         **Idempotent**: if already started, returns immediately.
@@ -139,6 +139,12 @@ class MCPLifecycle:
         running" error when the Agent tries to start them again. Instead we
         pin each client with a permanent lifecycle consumer so its session
         is not torn down when consuming Agents are garbage-collected.
+
+        Args:
+            pin_clients: Whether to pin client sessions for the lifetime of this
+                lifecycle. Pass ``False`` when clients are owned per run instead
+                of per process: a pinned session outlives the agents that used
+                it, which is exactly what a per-run client must not do.
 
         Raises:
             RuntimeError: If any server fails to start or become ready.
@@ -163,11 +169,12 @@ class MCPLifecycle:
         # survives agent garbage collection (esp. across an interrupt/resume
         # boundary). Strands reference-counts clients per consuming Agent and
         # tears the session down when the count hits zero; stop() clears it.
-        for name, client in self._clients.items():
-            add_consumer = getattr(client, "add_consumer", None)
-            if callable(add_consumer):
-                add_consumer(self._consumer_token)
-                logger.debug("client=<%s> | pinned lifecycle consumer", name)
+        if pin_clients:
+            for name, client in self._clients.items():
+                add_consumer = getattr(client, "add_consumer", None)
+                if callable(add_consumer):
+                    add_consumer(self._consumer_token)
+                    logger.debug("client=<%s> | pinned lifecycle consumer", name)
 
         self._started = True
 

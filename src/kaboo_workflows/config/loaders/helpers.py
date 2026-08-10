@@ -6,8 +6,11 @@ import logging
 import os
 import re
 from collections.abc import Callable
+from contextlib import suppress
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
 import yaml
 
@@ -311,6 +314,14 @@ def rewrite_relative_paths(raw: dict, config_dir: Path) -> None:
                         edge["condition"] = make_absolute(edge["condition"], config_dir)
 
 
+def _parse_inline(source: str) -> Any:
+    """Parse a raw YAML document string."""
+    try:
+        return yaml.safe_load(source)
+    except yaml.YAMLError as exc:
+        raise ConfigurationError(f"Invalid YAML in inline content: {exc}") from None
+
+
 def parse_single_source(source: str | Path) -> dict:
     """Parse one config source into a processed raw dict.
 
@@ -339,9 +350,18 @@ def parse_single_source(source: str | Path) -> dict:
         except yaml.YAMLError as exc:
             raise ConfigurationError(f"Invalid YAML in {source}: {exc}") from None
         config_dir = source.resolve().parent
+    elif "\n" in source:
+        # A multi-line string is a document, and is never probed as a path. A
+        # path has no newlines, while a submitted config both exceeds the OS
+        # filename limit and routinely contains a '/' (any URL), so probing it
+        # would raise rather than fall through to parsing.
+        raw = _parse_inline(source)
     else:
         path = Path(source)
-        if path.is_file():
+        is_file = False
+        with suppress(OSError):
+            is_file = path.is_file()
+        if is_file:
             try:
                 raw = yaml.safe_load(path.read_text(encoding="utf-8"))
             except yaml.YAMLError as exc:
@@ -350,10 +370,7 @@ def parse_single_source(source: str | Path) -> dict:
         elif path.suffix in (".yaml", ".yml") or os.sep in source or "/" in source:
             raise FileNotFoundError(f"Config file not found: {source}")
         else:
-            try:
-                raw = yaml.safe_load(source)
-            except yaml.YAMLError as exc:
-                raise ConfigurationError(f"Invalid YAML in inline content: {exc}") from None
+            raw = _parse_inline(source)
 
     if not isinstance(raw, dict):
         raise ValueError(f"Config must contain a YAML mapping, got {type(raw).__name__}")
@@ -366,6 +383,119 @@ def parse_single_source(source: str | Path) -> dict:
         rewrite_relative_paths(raw, config_dir)
 
     return raw
+
+
+# Sections a session overlay replaces outright. These describe the *shape* of the
+# workflow, and a run that submits its own agents means those agents — not those
+# plus whatever the service happened to declare.
+OVERLAY_REPLACE_KEYS: tuple[str, ...] = ("agents", "orchestrations")
+
+# Sections a session overlay adds to. The base holds the defaults every workflow
+# draws on, so unioning means an overlay can be as small as one agent naming a
+# shared model. The overlay wins a name clash, being the more specific of the two.
+OVERLAY_UNION_KEYS: tuple[str, ...] = ("models", "mcp_clients")
+
+
+def _check_overlay_client(name: str, client: Any, allowed_hosts: set[str] | None) -> None:
+    """Reject an overlay-declared MCP client the host has not sanctioned.
+
+    Two different risks, so two rules:
+
+    - ``command:`` spawns a process. That is arbitrary code execution, and a
+      per-run client has nowhere to own a subprocess's lifetime, so an overlay
+      may never declare one — it belongs in the service's own config.
+    - ``url:`` needs no code to exfiltrate a conversation, which makes it the
+      cheap thing to get wrong. When the host supplies an allowlist, the host
+      must appear on it. No allowlist means no check, for hosts that authenticate
+      their config authors some other way.
+
+    ``server:`` is left alone: it can only name a server the base config already
+    declares, which is the host's own.
+    """
+    if not isinstance(client, dict):
+        return
+    if client.get("command") is not None:
+        raise ConfigurationError(
+            f"Submitted config declares mcp_client '{name}' with 'command:', which would "
+            "run a process. Declare stdio clients in the service's own config and "
+            "reference them by name."
+        )
+    url = client.get("url")
+    if allowed_hosts is None or url is None:
+        return
+    host = urlparse(str(url)).hostname or ""
+    if host.lower() not in allowed_hosts:
+        raise ConfigurationError(
+            f"Submitted config declares mcp_client '{name}' at host '{host}', which is not "
+            f"allowed. Permitted hosts: {sorted(allowed_hosts) or '(none)'}."
+        )
+
+
+def merge_session_overlay(
+    base: dict,
+    overlay: dict,
+    *,
+    allowed_mcp_hosts: list[str] | None = None,
+) -> dict:
+    """Layer a per-run config over the service's base config.
+
+    Distinct from :func:`merge_raw_configs`, which unions every section and errors
+    on a duplicate name — deliberately, so two files describing one application
+    cannot silently shadow each other. An overlay is the opposite situation: the
+    run is *choosing* a workflow, so it has to be able to replace what the base
+    declared, not just add to it.
+
+    Semantics, per section:
+
+    - :data:`OVERLAY_REPLACE_KEYS` — replaced when the overlay mentions them.
+    - :data:`OVERLAY_UNION_KEYS` — unioned, overlay winning a name clash.
+    - everything else (``entry``, ``runtime``, ``attachments``, ``log_level``,
+      ``session_manager``, …) — last-wins from the overlay.
+
+    ``mcp_servers`` is rejected rather than merged: starting a server is the one
+    thing a per-run config cannot own, since nothing outlives the run to stop it.
+
+    Args:
+        base: Processed raw config from the service's own source(s).
+        overlay: Processed raw config submitted with the run.
+        allowed_mcp_hosts: Hosts an overlay-declared ``url:`` client may point at.
+            ``None`` disables the check.
+
+    Returns:
+        A new merged raw dict. Neither argument is mutated, so one base can be
+        reused across concurrent runs.
+
+    Raises:
+        ConfigurationError: The overlay declares ``mcp_servers``, an mcp_client
+            with ``command:``, or a URL outside ``allowed_mcp_hosts``.
+    """
+    if overlay.get("mcp_servers"):
+        raise ConfigurationError(
+            "Submitted config declares 'mcp_servers:', which cannot be started per run. "
+            "Declare servers in the service's own config; a submitted config may "
+            "reference them from an mcp_client."
+        )
+
+    allowed = (
+        {host.strip().lower() for host in allowed_mcp_hosts if host.strip()}
+        if allowed_mcp_hosts is not None
+        else None
+    )
+    for name, client in (overlay.get("mcp_clients") or {}).items():
+        _check_overlay_client(str(name), client, allowed)
+
+    merged = deepcopy(base)
+    for key, value in overlay.items():
+        if key in OVERLAY_UNION_KEYS:
+            section = merged.get(key)
+            base_section = section if isinstance(section, dict) else {}
+            merged[key] = {**base_section, **(value if isinstance(value, dict) else {})}
+        else:
+            # Replace and last-wins are the same operation on a top-level key;
+            # what differs is only whether the section is a collection.
+            merged[key] = deepcopy(value)
+
+    return merged
 
 
 def merge_raw_configs(configs: list[dict]) -> dict:

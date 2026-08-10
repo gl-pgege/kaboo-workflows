@@ -14,6 +14,10 @@ The curated top-level exports, for the common case:
 
 - **Config pipeline**: `load`, `load_config`, `load_session`, `resolve_infra`,
   `AppConfig`, `ConfigInput`, `ResolvedConfig`, `ResolvedInfra`
+- **Per-run configs**: `parse_config_sources`, `validate_raw_config`,
+  `load_session_config`, `resolve_run_clients` — the two-stage pipeline for a
+  service whose runs submit their own workflow
+  ([Chapter 17](configuration/Chapter_17.md#when-the-config-itself-is-per-request))
 - **Orchestration**: `OrchestrationBuilder`
 - **Streaming**: `make_event_queue`, `EventQueue`, `StreamEvent`, `EventType`
 - **Tools**: `node_as_tool`, `node_as_async_tool`, `serialize_multiagent_result`
@@ -28,6 +32,8 @@ The curated top-level exports, for the common case:
 
 - `create_agui_app` — turn a config into a FastAPI AG-UI / CopilotKit app. This is
   the primary serving entrypoint and lives here (not re-exported top level).
+  `session_config_key=` makes each run bring its own config;
+  `allowed_mcp_hosts=` bounds what a submitted config may connect to.
 
 ## Configuration — [`kaboo_workflows.config`](api/config.md)
 
@@ -39,7 +45,8 @@ Loaders, interpolation, infra resolution, and the full YAML schema models
 ## Hooks — [`kaboo_workflows.hooks`](api/hooks.md)
 
 `EventPublisher`, `HistoryHook`, `InterruptHook`, `MaxToolCallsGuard`,
-`MultiAgentStopGuard`, `StopGuard`, `ToolNameSanitizer`, `stop_guard_from_event`.
+`MultiAgentStopGuard`, `SessionStateHook`, `StopGuard`, `ToolNameSanitizer`,
+`restore_session_state`, `session_state_snapshot`, `stop_guard_from_event`.
 
 ## MCP — [`kaboo_workflows.mcp`](api/mcp.md)
 

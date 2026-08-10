@@ -1,4 +1,8 @@
-"""ForwardedPropsHook: state copy + opt-in per-invocation agent overrides."""
+"""ForwardedPropsHook: state copy + the deprecated per-invocation agent overrides.
+
+The override path is on its way out — a run submits its whole config instead — so
+these tests silence its deprecation warning and one test asserts it is raised.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,8 @@ import pytest
 
 from kaboo_workflows._context import set_forwarded_props
 from kaboo_workflows.hooks import ForwardedPropsHook
+
+pytestmark = pytest.mark.filterwarnings("ignore:runtime.allow_invocation_overrides")
 
 
 @pytest.fixture(autouse=True)
@@ -62,6 +68,12 @@ def test_overrides_off_by_default():
     ForwardedPropsHook()._on_before_invocation(_event(agent))
     assert agent.system_prompt == "original prompt"
     assert agent.model.get_config()["model_id"] == "model-a"
+
+
+@pytest.mark.filterwarnings("default:runtime.allow_invocation_overrides")
+def test_enabling_overrides_warns_that_they_are_going_away():
+    with pytest.warns(DeprecationWarning, match="session_config_key"):
+        ForwardedPropsHook(apply_agent_config=True)
 
 
 def test_applies_system_prompt_and_model_when_enabled():

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import warnings
 from typing import Any
 
 from strands.hooks import HookProvider, HookRegistry
@@ -54,9 +55,9 @@ class ForwardedPropsHook(HookProvider):
     Args:
         apply_agent_config: When ``True``, ``forwarded_props.agent_config``
             (``system_prompt``/``model_id``) is applied to the executing agent
-            before each invocation. Off by default — enable via the root
-            ``runtime.allow_invocation_overrides`` config flag so hosts opt in
-            to letting callers steer prompts/models per run.
+            before each invocation. **Deprecated** — a run can now submit its
+            whole config, which expresses the prompt and model along with the
+            structure they could not. See ``create_agui_app(session_config_key=)``.
         state_key: Agent-state key the props are stored under.
     """
 
@@ -66,6 +67,14 @@ class ForwardedPropsHook(HookProvider):
         apply_agent_config: bool = False,
         state_key: str = "forwarded_props",
     ) -> None:
+        if apply_agent_config:
+            warnings.warn(
+                "runtime.allow_invocation_overrides / forwardedProps.agent_config is "
+                "deprecated and will be removed in 0.15.0. Submit the run's config "
+                "instead: create_agui_app(config, session_config_key='workflow_config').",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self._apply_agent_config = apply_agent_config
         self._state_key = state_key
 
