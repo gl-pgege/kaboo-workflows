@@ -312,6 +312,11 @@ def make_event_queue(
         orch.hooks.add_hook(orch_pub)
         if isinstance(orch, Agent):
             orch.callback_handler = orch_pub.as_callback_handler()
+            # Stash for the AG-UI adapter, same as declared agents above: the
+            # per-thread clone it executes for a delegate entry does not inherit
+            # this HookRegistry, so the publisher must be forwarded explicitly
+            # (its AGENT_COMPLETE carries the manager's token usage).
+            setattr(orch, "_kaboo_event_publisher", orch_pub)
         logger.debug("orchestrator=<%s>, stream_group=<%s> | wired EventPublisher", orch_name, sg)
 
     return event_queue

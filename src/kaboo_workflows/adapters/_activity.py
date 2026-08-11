@@ -37,6 +37,24 @@ def _accumulate_usage(target: dict[str, Any], key: str, usage: dict[str, Any]) -
         bucket[camel] += int(usage.get(snake, 0) or 0)
 
 
+def _fold_run_usage(state: dict[str, Any], event: StreamEvent) -> bool:
+    """Fold an ``AGENT_COMPLETE`` event's usage into the per-run rollup.
+
+    Kept independent of groups so run totals never miss an invocation —
+    including the entry/manager agent, whose events are otherwise dropped from
+    group rendering. The rollup lives on the state (keyed by run id) and rides
+    every subsequent snapshot.
+    """
+    if event.type != EventType.AGENT_COMPLETE:
+        return False
+    usage = event.data.get("usage")
+    run_id = event.data.get("run_id")
+    if not isinstance(usage, dict) or not run_id:
+        return False
+    _accumulate_usage(state.setdefault("usageByRun", {}), str(run_id), usage)
+    return True
+
+
 def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
     """Mutate *state* based on an incoming kaboo StreamEvent.
 
@@ -50,17 +68,10 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
     """
     group = event.data.get("stream_group", "")
 
-    # Token usage is folded into the per-run rollup even when the event has no
-    # stream group, so run totals never miss an invocation. The rollup lives on
-    # the state (keyed by run id) and rides every subsequent snapshot.
-    if event.type == EventType.AGENT_COMPLETE:
-        usage = event.data.get("usage")
-        run_id = event.data.get("run_id")
-        if isinstance(usage, dict) and run_id:
-            _accumulate_usage(state.setdefault("usageByRun", {}), str(run_id), usage)
+    usage_changed = _fold_run_usage(state, event)
 
     if not group:
-        return event.type == EventType.AGENT_COMPLETE and isinstance(event.data.get("usage"), dict)
+        return usage_changed
 
     groups = state["groups"]
 
@@ -190,6 +201,17 @@ class ActivityRegistry:
         with self._lock:
             state = self._state_for(thread_id)
             return _update_activity_state(state, event)
+
+    def apply_usage(self, thread_id: str, event: StreamEvent) -> bool:
+        """Fold only an ``AGENT_COMPLETE`` event's token usage into the per-run rollup.
+
+        Used for events excluded from group rendering (the entry/manager
+        agent's own stream), whose usage must still count toward the run total.
+        Returns ``True`` when usage was recorded.
+        """
+        with self._lock:
+            state = self._state_for(thread_id)
+            return _fold_run_usage(state, event)
 
     def snapshot(self, thread_id: str) -> dict[str, Any]:
         """Return a deep copy of the activity state for *thread_id* (``{groups: {...}}``).

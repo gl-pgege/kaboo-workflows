@@ -696,8 +696,10 @@ def _make_activity_pump(
     state, a fresh ``ACTIVITY_SNAPSHOT`` is put onto *merged* so it interleaves
     live on the run's ``/invocations`` stream.
 
-    The entry node's events are dropped by default because its text is the chat
-    reply (rendered by the host) and re-surfacing it would duplicate the answer.
+    The entry node's events are excluded from group rendering by default
+    because its text is the chat reply (rendered by the host) and re-surfacing
+    it would duplicate the answer — only its ``AGENT_COMPLETE`` token usage is
+    folded into the per-run rollup so run totals include the entry agent.
     A plain-agent entry (``entry_inline``) is the exception: its events ARE
     routed so its own tool calls enrich the inline tool rows — its group carries
     ``inline_chat_owner`` so the UI never draws a duplicate card for it.
@@ -713,10 +715,14 @@ def _make_activity_pump(
                 break
             if not isinstance(event, StreamEvent):
                 continue
-            if event.agent_name == entry_name and not entry_inline:
-                continue
             thread_id = event.data.get("thread_id") or bridge.DEFAULT_THREAD
-            if registry.apply(thread_id, event):
+            if event.agent_name == entry_name and not entry_inline:
+                # The entry/manager agent's stream is not rendered as a group,
+                # but its completions still count toward the run's token total.
+                changed = registry.apply_usage(thread_id, event)
+            else:
+                changed = registry.apply(thread_id, event)
+            if changed:
                 await merged.put(
                     ActivitySnapshotEvent(
                         message_id=f"kaboo.activity.{thread_id}",
@@ -1250,10 +1256,15 @@ def _build_session(
         # tool in run 1 so its result updates on resume. Its group is flagged
         # inline_chat_owner so the UI enriches the rows but never draws a card.
         entry_pub = getattr(entry, "_kaboo_event_publisher", None)
-        if entry_pub is not None and _resolve_chat_owner(app_config) is None:
-            entry_pub.mark_inline_chat_owner()
+        if entry_pub is not None:
+            if _resolve_chat_owner(app_config) is None:
+                entry_pub.mark_inline_chat_owner()
+                entry_inline = True
+            # Forwarded even for a delegate entry (entry_inline False): its
+            # events stay excluded from group rendering, but AGENT_COMPLETE
+            # carries the manager's token usage, which the activity pump folds
+            # into the per-run rollup so run totals include the entry agent.
             forwarded_hooks = [entry_pub, *forwarded_hooks]
-            entry_inline = True
 
         agui_agent = StrandsAgent(
             agent=entry,

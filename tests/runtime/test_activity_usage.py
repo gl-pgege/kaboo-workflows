@@ -133,6 +133,27 @@ def test_completion_without_usage_changes_nothing_extra() -> None:
     assert snap["groups"]["g1"]["structuredOutput"] == {"a": 1}
 
 
+def test_apply_usage_records_rollup_without_touching_groups() -> None:
+    """The entry/manager agent's stream is excluded from group rendering, but
+    its completions must still count toward the run total via apply_usage."""
+    reg = ActivityRegistry()
+    changed = reg.apply_usage(
+        "t1",
+        _complete("main", usage={"input_tokens": 500, "output_tokens": 40, "total_tokens": 540}),
+    )
+    assert changed is True
+    snap = reg.snapshot("t1")
+    assert "main" not in snap["groups"]
+    assert snap["usageByRun"]["r1"]["totalTokens"] == 540
+
+
+def test_apply_usage_ignores_non_complete_and_usage_free_events() -> None:
+    reg = ActivityRegistry()
+    assert reg.apply_usage("t1", _start("main")) is False
+    assert reg.apply_usage("t1", _complete("main")) is False
+    assert "usageByRun" not in reg.snapshot("t1")
+
+
 def test_missing_usage_fields_default_to_zero() -> None:
     reg = ActivityRegistry()
     reg.apply("t1", _start("g1"))
