@@ -18,6 +18,25 @@ from kaboo_workflows.types import EventType, StreamEvent
 logger = logging.getLogger(__name__)
 
 
+_USAGE_KEYS = (
+    ("inputTokens", "input_tokens"),
+    ("outputTokens", "output_tokens"),
+    ("totalTokens", "total_tokens"),
+)
+
+
+def _accumulate_usage(target: dict[str, Any], key: str, usage: dict[str, Any]) -> None:
+    """Add *usage* (snake_case wire fields) into ``target[key]`` (camelCase).
+
+    Accumulates rather than overwrites: an agent can complete multiple times
+    within one turn (interrupt resumes, delegate re-entry), and each completion
+    reports the tokens of that invocation only.
+    """
+    bucket = target.setdefault(key, {camel: 0 for camel, _ in _USAGE_KEYS})
+    for camel, snake in _USAGE_KEYS:
+        bucket[camel] += int(usage.get(snake, 0) or 0)
+
+
 def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
     """Mutate *state* based on an incoming kaboo StreamEvent.
 
@@ -30,8 +49,18 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
         ``False`` for events that carry no stream group (nothing to render).
     """
     group = event.data.get("stream_group", "")
+
+    # Token usage is folded into the per-run rollup even when the event has no
+    # stream group, so run totals never miss an invocation. The rollup lives on
+    # the state (keyed by run id) and rides every subsequent snapshot.
+    if event.type == EventType.AGENT_COMPLETE:
+        usage = event.data.get("usage")
+        run_id = event.data.get("run_id")
+        if isinstance(usage, dict) and run_id:
+            _accumulate_usage(state.setdefault("usageByRun", {}), str(run_id), usage)
+
     if not group:
-        return False
+        return event.type == EventType.AGENT_COMPLETE and isinstance(event.data.get("usage"), dict)
 
     groups = state["groups"]
 
@@ -114,9 +143,13 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
             else:
                 timeline.append({"type": "text", "text": text})
     elif event.type == EventType.AGENT_COMPLETE:
-        if group in groups and "structured_output" in event.data:
-            groups[group]["structuredOutput"] = event.data["structured_output"]
-            groups[group]["outputSchemaName"] = event.data.get("output_schema_name")
+        if group in groups:
+            usage = event.data.get("usage")
+            if isinstance(usage, dict):
+                _accumulate_usage(groups[group], "usage", usage)
+            if "structured_output" in event.data:
+                groups[group]["structuredOutput"] = event.data["structured_output"]
+                groups[group]["outputSchemaName"] = event.data.get("output_schema_name")
     elif event.type == EventType.INTERRUPT:
         if group in groups:
             groups[group]["status"] = "interrupted"
