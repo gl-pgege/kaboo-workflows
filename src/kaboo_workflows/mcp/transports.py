@@ -133,24 +133,45 @@ def sse_transport(
     return factory
 
 
+def _httpx_timeout(timeout: float | int | dict[str, float] | None) -> Any:
+    """Build an ``httpx.Timeout`` from a scalar or per-phase dict.
+
+    A scalar applies to every phase (connect/read/write/pool). A dict names
+    phases explicitly (e.g. ``{"connect": 5, "read": 840}``); unnamed phases
+    keep httpx's 5s default.
+    """
+    import httpx
+
+    if isinstance(timeout, dict):
+        return httpx.Timeout(5.0, **timeout)
+    return httpx.Timeout(timeout)
+
+
 def streamable_http_transport(
     url: str,
     headers: dict[str, str] | None = None,
     *,
     http_client: Any | None = None,
     terminate_on_close: bool = True,
+    timeout: float | int | dict[str, float] | None = None,
 ) -> Callable[[], Any]:
     """Create a streamable HTTP transport callable.
 
-    For full control (auth, timeouts, custom TLS, etc.), pass a pre-configured
-    ``httpx.AsyncClient`` via ``http_client``. When ``http_client`` is provided,
-    ``headers`` is ignored (configure headers on the client directly).
+    For full control (auth, custom TLS, etc.), pass a pre-configured
+    ``httpx.AsyncClient`` via ``http_client``. When ``http_client`` is
+    provided, ``headers`` and ``timeout`` are ignored (configure both on the
+    client directly).
 
     Args:
         url: HTTP endpoint URL (e.g., "http://localhost:8000/mcp").
         headers: Optional HTTP headers. Ignored when ``http_client`` is provided.
         http_client: Optional pre-configured ``httpx.AsyncClient``.
         terminate_on_close: Send DELETE to close session (default: True).
+        timeout: Optional httpx timeout for the dedicated client this factory
+            builds: a number of seconds applied to every phase, or a dict of
+            httpx phases (``connect`` / ``read`` / ``write`` / ``pool``).
+            Long-running tools need ``read`` raised above httpx's 5s default.
+            Ignored when ``http_client`` is provided.
 
     Returns:
         Transport callable for strands MCPClient.
@@ -164,6 +185,7 @@ def streamable_http_transport(
     captured_headers = dict(headers) if headers else None
     captured_http_client = http_client
     captured_terminate_on_close = terminate_on_close
+    captured_timeout = timeout
 
     def factory() -> Any:
         from mcp.client.streamable_http import streamable_http_client
@@ -174,10 +196,13 @@ def streamable_http_transport(
                 http_client=captured_http_client,
                 terminate_on_close=captured_terminate_on_close,
             )
-        if captured_headers:
+        if captured_headers or captured_timeout is not None:
             import httpx
 
-            client = httpx.AsyncClient(headers=captured_headers)
+            kwargs: dict[str, Any] = {"headers": captured_headers}
+            if captured_timeout is not None:
+                kwargs["timeout"] = _httpx_timeout(captured_timeout)
+            client = httpx.AsyncClient(**kwargs)
             return streamable_http_client(
                 url=url,
                 http_client=client,

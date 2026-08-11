@@ -321,14 +321,21 @@ def apply_auth_to_transport_options(
 
     SSE accepts an ``auth`` kwarg directly. Streamable-http has no ``auth``
     kwarg, so the auth rides a dedicated ``httpx.AsyncClient`` (folding in any
-    ``headers`` the caller set). A user-provided ``http_client`` / ``auth`` is
-    left untouched.
+    ``headers`` and ``timeout`` the caller set, with the same semantics as
+    :func:`~kaboo_workflows.mcp.transports.streamable_http_transport`). A
+    user-provided ``http_client`` / ``auth`` is left untouched.
     """
     opts = dict(options or {})
     if transport == "sse":
         opts.setdefault("auth", auth)
         return opts
     if "http_client" not in opts:
+        from ..mcp.transports import _httpx_timeout
+
         headers = opts.pop("headers", None)
-        opts["http_client"] = httpx.AsyncClient(auth=auth, headers=headers or None)
+        timeout = opts.pop("timeout", None)
+        kwargs: dict[str, Any] = {"auth": auth, "headers": headers or None}
+        if timeout is not None:
+            kwargs["timeout"] = _httpx_timeout(timeout)
+        opts["http_client"] = httpx.AsyncClient(**kwargs)
     return opts
