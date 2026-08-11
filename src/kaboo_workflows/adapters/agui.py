@@ -736,23 +736,33 @@ def _make_activity_pump(
             if snapshot is not None:
                 await merged.put(snapshot)
 
-    def flush() -> list[ActivitySnapshotEvent]:
-        """Fold every already-queued event synchronously, returning the snapshots.
+    def flush(thread_id: str) -> list[ActivitySnapshotEvent]:
+        """Drain the queue and return one final snapshot for *thread_id*.
 
-        Called when the run stream ends: the entry agent's final AGENT_COMPLETE
+        Called when the run stream ends. The entry agent's final AGENT_COMPLETE
         (carrying the run's token usage) lands on the queue just before
-        RUN_FINISHED, so without a drain the pump task can lose it to the
-        stream-shutdown race and the last snapshot would never reach the client.
+        RUN_FINISHED — and even when the pump task dequeues it in time, the
+        snapshot it puts on *merged* can land after the stream loop has already
+        broken. Folding what is left and re-snapshotting the registry is
+        deterministic either way: the final snapshot reflects everything folded,
+        no matter which side got to the event first.
         """
-        snapshots: list[ActivitySnapshotEvent] = []
         while True:
             event = event_queue.get_nowait()
             if event is None:
                 break
-            snapshot = fold(event)
-            if snapshot is not None:
-                snapshots.append(snapshot)
-        return snapshots
+            fold(event)
+        content = registry.snapshot(thread_id)
+        if not content.get("groups") and not content.get("usageByRun"):
+            return []
+        return [
+            ActivitySnapshotEvent(
+                message_id=f"kaboo.activity.{thread_id}",
+                activity_type="kaboo.activity",
+                content=content,
+                replace=True,
+            )
+        ]
 
     return pump_activity, flush
 
@@ -963,9 +973,12 @@ def _add_kaboo_endpoint(
                 await session.aclose()
 
         merged: asyncio.Queue[Any] = asyncio.Queue()
-        activity_pump, activity_flush = _make_activity_pump(
+        activity_pump, _activity_flush = _make_activity_pump(
             session.event_queue, registry, entry_name, merged, entry_inline=session.entry_inline
         )
+
+        def activity_flush() -> list[Any]:
+            return _activity_flush(thread_id)
 
         # First-class Swarm/Graph entry: kaboo owns the run loop (ag-ui-strands
         # cannot drive a MultiAgentBase). No chat-side tool blocks are produced,
