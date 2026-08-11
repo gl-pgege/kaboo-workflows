@@ -705,6 +705,25 @@ def _make_activity_pump(
     ``inline_chat_owner`` so the UI never draws a duplicate card for it.
     """
 
+    def fold(event: Any) -> ActivitySnapshotEvent | None:
+        if not isinstance(event, StreamEvent):
+            return None
+        thread_id = event.data.get("thread_id") or bridge.DEFAULT_THREAD
+        if event.agent_name == entry_name and not entry_inline:
+            # The entry/manager agent's stream is not rendered as a group,
+            # but its completions still count toward the run's token total.
+            changed = registry.apply_usage(thread_id, event)
+        else:
+            changed = registry.apply(thread_id, event)
+        if not changed:
+            return None
+        return ActivitySnapshotEvent(
+            message_id=f"kaboo.activity.{thread_id}",
+            activity_type="kaboo.activity",
+            content=registry.snapshot(thread_id),
+            replace=True,
+        )
+
     async def pump_activity() -> None:
         while True:
             try:
@@ -713,26 +732,29 @@ def _make_activity_pump(
                 continue
             if event is None:
                 break
-            if not isinstance(event, StreamEvent):
-                continue
-            thread_id = event.data.get("thread_id") or bridge.DEFAULT_THREAD
-            if event.agent_name == entry_name and not entry_inline:
-                # The entry/manager agent's stream is not rendered as a group,
-                # but its completions still count toward the run's token total.
-                changed = registry.apply_usage(thread_id, event)
-            else:
-                changed = registry.apply(thread_id, event)
-            if changed:
-                await merged.put(
-                    ActivitySnapshotEvent(
-                        message_id=f"kaboo.activity.{thread_id}",
-                        activity_type="kaboo.activity",
-                        content=registry.snapshot(thread_id),
-                        replace=True,
-                    )
-                )
+            snapshot = fold(event)
+            if snapshot is not None:
+                await merged.put(snapshot)
 
-    return pump_activity
+    def flush() -> list[ActivitySnapshotEvent]:
+        """Fold every already-queued event synchronously, returning the snapshots.
+
+        Called when the run stream ends: the entry agent's final AGENT_COMPLETE
+        (carrying the run's token usage) lands on the queue just before
+        RUN_FINISHED, so without a drain the pump task can lose it to the
+        stream-shutdown race and the last snapshot would never reach the client.
+        """
+        snapshots: list[ActivitySnapshotEvent] = []
+        while True:
+            event = event_queue.get_nowait()
+            if event is None:
+                break
+            snapshot = fold(event)
+            if snapshot is not None:
+                snapshots.append(snapshot)
+        return snapshots
+
+    return pump_activity, flush
 
 
 async def _sse_response(
@@ -741,8 +763,14 @@ async def _sse_response(
     encoder: EventEncoder,
     merged: asyncio.Queue[Any],
     cleanup: Callable[[], Awaitable[None]] | None = None,
+    activity_flush: Callable[[], list[Any]] | None = None,
 ) -> AsyncIterator[str]:
     """Stream encoded AG-UI events; run the run + activity pumps concurrently.
+
+    ``activity_flush`` drains the not-yet-pumped activity events when the run
+    stream ends, so the final snapshot (e.g. the entry agent's token usage,
+    emitted just before RUN_FINISHED) is delivered instead of being lost to
+    the pump-cancellation race.
 
     ``cleanup`` runs once the stream is finished, cancelled or errored — the last
     moment the run owns anything. A per-run session's MCP clients are released
@@ -755,6 +783,19 @@ async def _sse_response(
             item = await merged.get()
             if item is _DONE:
                 break
+            terminal = getattr(item, "type", None) in (
+                AGUIEventType.RUN_FINISHED,
+                AGUIEventType.RUN_ERROR,
+            )
+            if terminal and activity_flush is not None:
+                # The terminal event closes the run for AG-UI clients, so any
+                # still-queued activity (the entry agent's final completion
+                # with the run's token usage) must be delivered first.
+                for snapshot in activity_flush():
+                    try:
+                        yield encoder.encode(snapshot)
+                    except Exception:
+                        logger.debug("failed to encode flushed snapshot", exc_info=True)
             try:
                 if isinstance(item, _RawSSE):
                     yield item.payload
@@ -922,7 +963,7 @@ def _add_kaboo_endpoint(
                 await session.aclose()
 
         merged: asyncio.Queue[Any] = asyncio.Queue()
-        activity_pump = _make_activity_pump(
+        activity_pump, activity_flush = _make_activity_pump(
             session.event_queue, registry, entry_name, merged, entry_inline=session.entry_inline
         )
 
@@ -975,7 +1016,14 @@ def _add_kaboo_endpoint(
                 )
 
             return StreamingResponse(
-                _sse_response(consume_multiagent, activity_pump, encoder, merged, release),
+                _sse_response(
+                    consume_multiagent,
+                    activity_pump,
+                    encoder,
+                    merged,
+                    release,
+                    activity_flush=activity_flush,
+                ),
                 media_type=encoder.get_content_type(),
             )
 
@@ -1030,7 +1078,14 @@ def _add_kaboo_endpoint(
                     await _consume_run(agui_agent, input_data, merged, exchange)
 
             return StreamingResponse(
-                _sse_response(consume_resume, activity_pump, encoder, merged, release),
+                _sse_response(
+                    consume_resume,
+                    activity_pump,
+                    encoder,
+                    merged,
+                    release,
+                    activity_flush=activity_flush,
+                ),
                 media_type=encoder.get_content_type(),
             )
 
@@ -1125,7 +1180,14 @@ def _add_kaboo_endpoint(
             )
 
         return StreamingResponse(
-            _sse_response(consume_fresh, activity_pump, encoder, merged, release),
+            _sse_response(
+                consume_fresh,
+                activity_pump,
+                encoder,
+                merged,
+                release,
+                activity_flush=activity_flush,
+            ),
             media_type=encoder.get_content_type(),
         )
 

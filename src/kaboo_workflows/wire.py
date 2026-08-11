@@ -144,6 +144,19 @@ class EventQueue:
         item = await self._queue.get()
         return None if item is _SENTINEL else item
 
+    def get_nowait(self) -> StreamEvent | None:
+        """Return the next already-queued event without waiting.
+
+        Returns:
+            The next :class:`StreamEvent`, or ``None`` when the queue is
+            empty or the next item is the close sentinel.
+        """
+        try:
+            item = self._queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+        return None if item is _SENTINEL else item
+
     def put_event(self, event: StreamEvent) -> None:
         """Place an event on the queue (non-blocking, thread-safe).
 

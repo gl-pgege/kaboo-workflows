@@ -57,6 +57,7 @@ class TurnResult:
     events: list[Any]
     groups: dict[str, dict[str, Any]]
     exchange: HistoryExchange = field(default_factory=HistoryExchange)
+    usage_by_run: dict[str, dict[str, int]] = field(default_factory=dict)
 
     # -- AG-UI event helpers ------------------------------------------------
 
@@ -201,9 +202,15 @@ class Pipeline:
                 ev = await event_queue.get()
                 if ev is None:
                     break
-                if isinstance(ev, StreamEvent) and ev.agent_name != entry_name:
-                    tid = ev.data.get("thread_id") or bridge.DEFAULT_THREAD
+                if not isinstance(ev, StreamEvent):
+                    continue
+                tid = ev.data.get("thread_id") or bridge.DEFAULT_THREAD
+                if ev.agent_name != entry_name:
                     self.registry.apply(tid, ev)
+                else:
+                    # Mirror the endpoint pump: the entry agent's stream is not
+                    # rendered, but its completions count toward the run total.
+                    self.registry.apply_usage(tid, ev)
 
         pump_task = asyncio.create_task(pump())
 
@@ -242,11 +249,17 @@ class Pipeline:
                 continue
             events.append(item)
 
-        groups = self.registry.snapshot(thread_id).get("groups", {})
+        full_snapshot = self.registry.snapshot(thread_id)
+        groups = full_snapshot.get("groups", {})
         # Deep-ish copy of the mutable group dicts so later turns can't rewrite
         # what a prior TurnResult observed.
         snapshot = {gid: dict(g) for gid, g in groups.items()}
-        return TurnResult(events=events, groups=snapshot, exchange=exchange)
+        return TurnResult(
+            events=events,
+            groups=snapshot,
+            exchange=exchange,
+            usage_by_run=full_snapshot.get("usageByRun", {}),
+        )
 
 
 async def run_pipeline(
