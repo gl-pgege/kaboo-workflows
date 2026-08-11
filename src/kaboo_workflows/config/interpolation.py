@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 _VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
+_TOKEN_PATTERN = re.compile(r"\$\$(?=\{)|\$\{([^}]+)\}")
 
 
 def interpolate(
@@ -18,6 +19,12 @@ def interpolate(
     """Interpolate ${VAR} and ${VAR:-default} references in a YAML config dict.
 
     Lookup order: variables dict -> env dict -> default value -> raise error.
+
+    ``$${`` escapes to a literal ``${``, so config text (e.g. a system prompt
+    quoting template syntax from another language) can contain ``${...}``
+    without being treated as a variable reference. A ``$$`` not followed by
+    ``{`` is left untouched. The escape applies to config values, not to
+    entries inside the ``vars:`` block itself.
 
     Uses a two-pass strategy to resolve cross-variable references inside the
     ``vars:`` block before interpolating the rest of the config.  Pass 1
@@ -103,16 +110,19 @@ def _interpolate_string(
 
     If the entire string is a single ``${VAR}`` reference, the resolved value
     is returned in its original type (e.g. int stays int). Otherwise, all
-    resolved values are cast to str and concatenated.
+    resolved values are cast to str and concatenated. ``$${`` yields a
+    literal ``${``.
     """
     match = _VAR_PATTERN.fullmatch(value)
     if match is not None:
         return _resolve(match.group(1), variables, env)
 
     def _replacer(m: re.Match[str]) -> str:
+        if m.group(0) == "$$":
+            return "$"
         return str(_resolve(m.group(1), variables, env))
 
-    return _VAR_PATTERN.sub(_replacer, value)
+    return _TOKEN_PATTERN.sub(_replacer, value)
 
 
 def _resolve(
