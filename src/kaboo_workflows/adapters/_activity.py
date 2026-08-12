@@ -19,9 +19,12 @@ logger = logging.getLogger(__name__)
 
 
 _USAGE_KEYS = (
-    ("inputTokens", "input_tokens"),
-    ("outputTokens", "output_tokens"),
-    ("totalTokens", "total_tokens"),
+    ("inputTokens", "input_tokens", int),
+    ("outputTokens", "output_tokens", int),
+    ("totalTokens", "total_tokens", int),
+    ("cacheReadInputTokens", "cache_read_input_tokens", int),
+    ("cacheWriteInputTokens", "cache_write_input_tokens", int),
+    ("cost", "cost", float),
 )
 
 
@@ -32,9 +35,9 @@ def _accumulate_usage(target: dict[str, Any], key: str, usage: dict[str, Any]) -
     within one turn (interrupt resumes, delegate re-entry), and each completion
     reports the tokens of that invocation only.
     """
-    bucket = target.setdefault(key, {camel: 0 for camel, _ in _USAGE_KEYS})
-    for camel, snake in _USAGE_KEYS:
-        bucket[camel] += int(usage.get(snake, 0) or 0)
+    bucket = target.setdefault(key, {camel: cast(0) for camel, _, cast in _USAGE_KEYS})
+    for camel, snake, cast in _USAGE_KEYS:
+        bucket[camel] = bucket.get(camel, cast(0)) + cast(usage.get(snake, 0) or 0)
 
 
 def _fold_run_usage(state: dict[str, Any], event: StreamEvent) -> bool:

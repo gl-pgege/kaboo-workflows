@@ -62,14 +62,14 @@ def create_model(provider: str, model_id: str, **params: Any) -> Model:
 
         case "openai":
             try:
-                from strands.models.openai import OpenAIModel
+                from .models_openai import KabooOpenAIModel
             except ImportError:
                 raise ImportError(
                     "The 'openai' provider requires the openai extra:\n"
                     "  pip install kaboo-workflows[openai]\n"
                     "Or install directly: pip install strands-agents[openai]"
                 ) from None
-            return OpenAIModel(model_id=model_id, **_with_openai_client_defaults(params))
+            return KabooOpenAIModel(model_id=model_id, **_with_openai_client_defaults(params))
 
         case "gemini":
             try:

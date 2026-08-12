@@ -36,6 +36,7 @@ from strands.hooks.events import (
 
 from .._context import get_delegation_id, get_run_id, get_thread_id, get_turn_id
 from ..types import EventType, StreamEvent
+from .cost_tracking import pop_cost_box, push_cost_box
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,7 @@ class EventPublisher(HookProvider):
         continuation of the same logical run, so         the existing stream group is
         reused (no new ``#N`` group, no group-resetting STREAM_GROUP_START).
         """
+        push_cost_box()
         self._errored_by_thread[get_thread_id()] = False
 
         istate = getattr(event.agent, "_interrupt_state", None)
@@ -398,6 +400,7 @@ class EventPublisher(HookProvider):
         Suppressed when the invocation errored — an ERROR event was
         already emitted via :meth:`_on_model_error`.
         """
+        cost = pop_cost_box()
         if self._errored_by_thread.get(get_thread_id(), False):
             if self._stream_group:
                 self._callback(
@@ -437,6 +440,9 @@ class EventPublisher(HookProvider):
                     "input_tokens": usage.get("inputTokens", 0),
                     "output_tokens": usage.get("outputTokens", 0),
                     "total_tokens": usage.get("totalTokens", 0),
+                    "cache_read_input_tokens": usage.get("cacheReadInputTokens", 0),
+                    "cache_write_input_tokens": usage.get("cacheWriteInputTokens", 0),
+                    "cost": cost,
                 },
                 "text": str(result) if result is not None else "",
                 "message": result.message if result is not None else {},
