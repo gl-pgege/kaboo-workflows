@@ -100,7 +100,7 @@ async def test_json_schema_on_structured_output():
 
 
 async def test_run_succeeded_reflects_capture_error():
-    scorer = RunSucceededScorer()
+    scorer = build_scorer({"type": "run_succeeded"})
     assert (await scorer.score(ITEM, capture())).passed
     result = await scorer.score(ITEM, capture(error="boom"))
     assert not result.passed and result.details == "boom"

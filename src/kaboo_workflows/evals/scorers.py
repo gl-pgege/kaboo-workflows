@@ -289,6 +289,8 @@ def build_scorer(config: dict[str, Any], app_config: AppConfig | None = None) ->
             return BudgetScorer(**params)
         case "json_schema":
             return JsonSchemaScorer(**params)
+        case "run_succeeded":
+            return RunSucceededScorer()
         case "judge":
             from .judge import JudgeScorer
 
@@ -306,6 +308,6 @@ def build_scorer(config: dict[str, Any], app_config: AppConfig | None = None) ->
         case _:
             raise ValueError(
                 f"unknown scorer type '{kind}'. Built-ins: contains, not_contains, regex, "
-                "tool_called, trajectory, budget, json_schema, judge, deepeval; or use "
+                "tool_called, trajectory, budget, json_schema, run_succeeded, judge, deepeval; or use "
                 "'module.path:ClassName' for a custom scorer."
             )
