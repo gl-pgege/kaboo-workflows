@@ -139,6 +139,10 @@ def load(config: ConfigInput | list[ConfigInput]) -> ResolvedConfig:
 
     logging.getLogger("kaboo_workflows").setLevel(app_config.log_level.upper())
 
+    from ...telemetry import init_telemetry
+
+    init_telemetry(app_config.telemetry)
+
     infra = resolve_infra(app_config)
 
     # Start MCP servers BEFORE creating agents.

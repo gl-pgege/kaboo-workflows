@@ -11,12 +11,18 @@ Exposes two sub-commands:
     via :func:`validate_mcp`.  Starts MCP server processes; always cleans
     them up before exiting.
 
+``eval``
+    Run a golden dataset headlessly through the workflow and score it (see
+    :mod:`kaboo_workflows.evals`).  Exits nonzero when any item fails, so it
+    can gate CI.
+
 Usage::
 
     kaboo-workflows check config.yaml
     kaboo-workflows check base.yaml agents.yaml   # multi-file merge
     kaboo-workflows load  config.yaml [--json]
     kaboo-workflows load  config.yaml [--quiet]
+    kaboo-workflows eval  datasets/golden.yaml --config config.yaml
 
 Exit codes: ``0`` on success, ``1`` on any error or critical health failure.
 """
@@ -329,6 +335,52 @@ def _cmd_load(configs: list[ConfigInput], *, json_output: bool, quiet: bool) -> 
 
 
 # ---------------------------------------------------------------------------
+# eval sub-command
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_eval_async(args: argparse.Namespace) -> None:
+    """Async body of the ``eval`` sub-command."""
+    from .evals import ItemOutcome, run_eval
+
+    def progress(outcome: ItemOutcome) -> None:
+        if args.quiet or args.json_output:
+            return
+        mark = _colour("✓", _GREEN) if outcome.passed else _colour("✗", _RED)
+        print(f"{mark} {outcome.item.id} ({outcome.capture.latency_s:.1f}s)")  # noqa: T201
+
+    with cli_errors():
+        report = await run_eval(
+            args.dataset,
+            config=args.config,
+            item_ids=args.items or None,
+            max_items=args.max_items,
+            output=args.output,
+            on_item=progress,
+        )
+
+    if args.push_langfuse:
+        from .evals.langfuse_push import push_report
+
+        run_name = push_report(report)
+        if not args.quiet and not args.json_output:
+            print(f"pushed to Langfuse as experiment run '{run_name}'")  # noqa: T201
+
+    if args.json_output:
+        print(json.dumps(report.to_dict()))  # noqa: T201
+    elif not args.quiet:
+        print(report.summary())  # noqa: T201
+
+    if not report.ok:
+        sys.exit(1)
+
+
+def _cmd_eval(args: argparse.Namespace) -> None:
+    """Run the ``eval`` sub-command."""
+    asyncio.run(_cmd_eval_async(args))
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -411,6 +463,43 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_common_flags(load_parser)
 
+    # -- eval --
+    eval_parser = subparsers.add_parser(
+        "eval",
+        help="Run a golden dataset through the workflow and score it",
+        description="Run every dataset item headlessly through the same wire path as "
+        "production, score the outcomes (deterministic checks, budgets, LLM-as-judge), "
+        "and print a per-item report. Exits 0 when every item passes, 1 otherwise.",
+    )
+    eval_parser.add_argument(
+        "dataset", metavar="DATASET", help="Path to a golden dataset (.yaml/.yml or .jsonl)"
+    )
+    eval_parser.add_argument(
+        "--config",
+        metavar="CONFIG",
+        default=None,
+        help="Workflow config path (overrides the dataset's own 'config:')",
+    )
+    eval_parser.add_argument(
+        "--item",
+        dest="items",
+        action="append",
+        metavar="ID",
+        help="Run only this item id (repeatable)",
+    )
+    eval_parser.add_argument(
+        "--max-items", type=int, default=None, help="Cap the number of items run"
+    )
+    eval_parser.add_argument(
+        "--output", metavar="PATH", default=None, help="Write per-item JSONL results to PATH"
+    )
+    eval_parser.add_argument(
+        "--push-langfuse",
+        action="store_true",
+        help="Upload the run to Langfuse as a dataset experiment (requires the langfuse extra)",
+    )
+    _add_common_flags(eval_parser)
+
     return parser
 
 
@@ -430,5 +519,7 @@ def main() -> None:
 
     if args.command == "check":
         _cmd_check(args.config, json_output=args.json_output, quiet=args.quiet)
+    elif args.command == "eval":
+        _cmd_eval(args)
     else:
         _cmd_load(args.config, json_output=args.json_output, quiet=args.quiet)

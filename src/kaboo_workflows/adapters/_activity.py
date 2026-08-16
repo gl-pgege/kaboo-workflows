@@ -55,6 +55,11 @@ def _fold_run_usage(state: dict[str, Any], event: StreamEvent) -> bool:
     if not isinstance(usage, dict) or not run_id:
         return False
     _accumulate_usage(state.setdefault("usageByRun", {}), str(run_id), usage)
+    trace_id = event.data.get("trace_id")
+    if trace_id:
+        # First trace id wins: nested agents share the entry invocation's
+        # trace, and the run-level correlation should point at its root.
+        state.setdefault("traceByRun", {}).setdefault(str(run_id), trace_id)
     return True
 
 
@@ -91,6 +96,7 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
                 "toolCallId": event.data.get("tool_call_id"),
                 "runId": event.data.get("run_id"),
                 "turnId": event.data.get("turn_id"),
+                "traceId": event.data.get("trace_id"),
                 "task": event.data.get("task"),
                 "isChatReply": bool(event.data.get("is_chat_reply", False)),
                 "inlineChatOwner": bool(event.data.get("inline_chat_owner", False)),
@@ -161,6 +167,8 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
             usage = event.data.get("usage")
             if isinstance(usage, dict):
                 _accumulate_usage(groups[group], "usage", usage)
+            if event.data.get("trace_id"):
+                groups[group]["traceId"] = event.data["trace_id"]
             if "structured_output" in event.data:
                 groups[group]["structuredOutput"] = event.data["structured_output"]
                 groups[group]["outputSchemaName"] = event.data.get("output_schema_name")

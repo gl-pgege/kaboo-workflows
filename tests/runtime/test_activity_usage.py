@@ -213,6 +213,41 @@ def test_missing_usage_fields_default_to_zero() -> None:
     assert snap["groups"]["g1"]["usage"] == _bucket(4)
 
 
+def test_trace_id_lands_on_group_and_run() -> None:
+    reg = ActivityRegistry()
+    reg.apply("t1", _start("g1"))
+    reg.apply("t1", _complete("g1", usage={"input_tokens": 1}, trace_id="a" * 32))
+
+    snap = reg.snapshot("t1")
+    assert snap["groups"]["g1"]["traceId"] == "a" * 32
+    assert snap["traceByRun"] == {"r1": "a" * 32}
+
+
+def test_run_trace_id_first_seen_wins() -> None:
+    """Nested agents share the entry invocation's trace; the run-level id
+    should stay pointed at the first (root) trace even if a later completion
+    reports a different one."""
+    reg = ActivityRegistry()
+    reg.apply("t1", _start("g1"))
+    reg.apply("t1", _complete("g1", usage={"input_tokens": 1}, trace_id="a" * 32))
+    reg.apply("t1", _complete("g1", usage={"input_tokens": 1}, trace_id="b" * 32))
+
+    snap = reg.snapshot("t1")
+    assert snap["traceByRun"]["r1"] == "a" * 32
+    # The group itself reflects its latest invocation's trace.
+    assert snap["groups"]["g1"]["traceId"] == "b" * 32
+
+
+def test_no_trace_id_when_telemetry_disabled() -> None:
+    reg = ActivityRegistry()
+    reg.apply("t1", _start("g1"))
+    reg.apply("t1", _complete("g1", usage={"input_tokens": 1}))
+
+    snap = reg.snapshot("t1")
+    assert snap["groups"]["g1"].get("traceId") is None
+    assert "traceByRun" not in snap
+
+
 def test_pre_existing_bucket_without_new_keys_upgrades_in_place() -> None:
     """Buckets restored from a pre-0.16 snapshot lack the cache/cost keys;
     accumulation must tolerate and backfill them."""

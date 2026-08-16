@@ -35,6 +35,7 @@ from strands.hooks.events import (
 )
 
 from .._context import get_delegation_id, get_run_id, get_thread_id, get_turn_id
+from ..telemetry import current_trace_id
 from ..types import EventType, StreamEvent
 from .cost_tracking import pop_cost_box, push_cost_box
 
@@ -252,6 +253,12 @@ class EventPublisher(HookProvider):
         data["thread_id"] = thread_id
         data["run_id"] = get_run_id()
         data["turn_id"] = get_turn_id()
+        # Correlation id for evaluation backends: strands activates the agent
+        # span around the run loop, so the ambient trace id is this
+        # invocation's trace. None (and omitted) when telemetry is disabled.
+        trace_id = current_trace_id()
+        if trace_id:
+            data["trace_id"] = trace_id
         return data
 
     @override
@@ -448,6 +455,11 @@ class EventPublisher(HookProvider):
                 "message": result.message if result is not None else {},
             }
         )
+
+        if "trace_id" not in data:
+            trace_id = current_trace_id(span=getattr(event.agent, "trace_span", None))
+            if trace_id:
+                data["trace_id"] = trace_id
 
         structured = getattr(result, "structured_output", None) if result is not None else None
         if structured is not None:

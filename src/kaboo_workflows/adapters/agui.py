@@ -84,6 +84,7 @@ from kaboo_workflows.hooks import (
     session_state_snapshot,
 )
 from kaboo_workflows.mcp import MCPLifecycle
+from kaboo_workflows.telemetry import init_telemetry
 from kaboo_workflows.tools.fetching import (
     ConfiguredReferenceFetcher,
     get_attachment_url_template,
@@ -1473,6 +1474,11 @@ def create_agui_app(
     base_raw = parse_config_sources(str(config_path))
     app_config = validate_raw_config(base_raw)
     _install_reference_fetching(app_config)
+
+    # Process-wide, idempotent, and a no-op when telemetry.enabled is false.
+    # Initialized from the base config only — per-run overlays cannot toggle
+    # the global tracer provider.
+    init_telemetry(app_config.telemetry)
 
     infra = resolve_infra(app_config)
     # Servers are processes and stay process-wide either way. Clients are only

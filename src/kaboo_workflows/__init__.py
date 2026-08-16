@@ -41,6 +41,7 @@ from .exceptions import (
 from .hooks import EventPublisher, MaxToolCallsGuard, StopGuard, ToolNameSanitizer
 from .mcp import MCPLifecycle, create_mcp_client, create_mcp_server
 from .renderers import AnsiRenderer
+from .telemetry import current_trace_id, init_telemetry, telemetry_enabled
 from .tools import (
     node_as_async_tool,
     node_as_tool,
@@ -79,6 +80,9 @@ __all__ = [
     "cli_errors",
     "create_mcp_client",
     "create_mcp_server",
+    "current_trace_id",
+    "init_telemetry",
+    "telemetry_enabled",
     "get_auth_context",
     "get_forwarded_props",
     "load",

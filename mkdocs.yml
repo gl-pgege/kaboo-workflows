@@ -88,6 +88,7 @@ nav:
       - Human-in-the-loop: workflows/human-in-the-loop.md
       - Multi-turn history: workflows/multi-turn-history.md
       - Errors & rejection: workflows/errors-and-rejection.md
+  - Evaluation: evaluation.md
   - API reference:
       - Overview: api-reference.md
       - kaboo_workflows: api/kaboo_workflows.md

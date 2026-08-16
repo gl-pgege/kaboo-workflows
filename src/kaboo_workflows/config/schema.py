@@ -260,6 +260,48 @@ class AttachmentsDef(BaseModel):
         return self
 
 
+class TelemetryOTLPDef(BaseModel):
+    """OTLP trace export target.
+
+    - ``endpoint`` — OTLP/HTTP base URL (e.g. a collector or Langfuse's
+      ``/api/public/otel``). ``/v1/traces`` is appended when missing. Falls
+      back to ``KABOO_OTLP_ENDPOINT`` then ``OTEL_EXPORTER_OTLP_ENDPOINT``.
+    - ``headers`` — request headers, either a mapping or a ``k=v,k2=v2``
+      string (the ``OTEL_EXPORTER_OTLP_HEADERS`` wire format). Falls back to
+      ``KABOO_OTLP_HEADERS`` then ``OTEL_EXPORTER_OTLP_HEADERS``.
+    """
+
+    endpoint: str | None = None
+    headers: dict[str, str] | str | None = None
+
+
+class TelemetryDef(BaseModel):
+    """Opt-in OpenTelemetry tracing (off by default, zero-overhead when off).
+
+    When enabled, the process initializes strands' OpenTelemetry integration
+    (agent / model / tool spans with GenAI semantic conventions) and exports
+    them via OTLP to any backend (Langfuse, Phoenix, a bare collector, …).
+    Every span is additionally stamped with kaboo's conversation context
+    (``session.id`` = thread id, ``user.id`` from the authenticated caller,
+    ``kaboo.run.id`` / ``kaboo.turn.id``) plus any static ``trace_attributes``.
+
+    Telemetry is process-wide: it initializes once at boot from the base
+    config. Per-run session configs cannot toggle it. The
+    ``KABOO_TELEMETRY_ENABLED`` env var overrides ``enabled`` in either
+    direction (kill switch / opt-in without a config edit).
+
+    ``sample_ratio`` applies parent-based trace-id ratio sampling (1.0 =
+    every trace) so large pipelines can trace a fraction of traffic.
+    """
+
+    enabled: bool = False
+    service_name: str = "kaboo-workflows"
+    otlp: TelemetryOTLPDef = Field(default_factory=TelemetryOTLPDef)
+    console: bool = False
+    sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+    trace_attributes: dict[str, Any] = Field(default_factory=dict)
+
+
 class RuntimeDef(BaseModel):
     """Runtime behavior toggles.
 
@@ -587,6 +629,8 @@ class AppConfig(BaseModel):
     """Global reference/attachment policy (manifest + optional resolver tool)."""
     runtime: RuntimeDef = Field(default_factory=RuntimeDef)
     """Runtime behavior toggles (per-invocation agent overrides, …)."""
+    telemetry: TelemetryDef = Field(default_factory=TelemetryDef)
+    """Opt-in OpenTelemetry tracing (see :class:`TelemetryDef`)."""
     log_level: str = "WARNING"
 
     @model_validator(mode="after")
