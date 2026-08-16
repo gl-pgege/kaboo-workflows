@@ -1,12 +1,11 @@
 """Push an eval report to Langfuse as a dataset experiment (optional extra).
 
 Uploads the golden items to a Langfuse dataset (idempotent upsert by item id),
-then records one experiment run per report: each item becomes a trace linked
-to its dataset item, with every scorer verdict attached as a score. Requires
-the ``langfuse`` extra and ``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY`` /
-``LANGFUSE_BASE_URL`` (or ``LANGFUSE_HOST``) in the environment.
-
-Compatible with Langfuse Python SDK v3 and v4 (v4 dropped ``DatasetItem.run``).
+then records one experiment run per report via the v4 ``run_experiment`` API:
+each item is replayed as a trace linked to its dataset item, with every scorer
+verdict attached as a score. Requires the ``langfuse`` extra and
+``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY`` / ``LANGFUSE_BASE_URL``
+(or ``LANGFUSE_HOST``) in the environment.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .runner import EvalReport
+    from .runner import EvalReport, ItemOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +31,43 @@ def _ensure_dataset(client: Any, name: str) -> None:
     client.create_dataset(name=name)
 
 
-def _link_run_item(client: Any, *, run: str, dataset_item_id: str, trace_id: str, observation_id: str) -> None:
-    """Attach a trace to a dataset experiment run (Langfuse v4 REST)."""
-    client.api.dataset_run_items.create(
-        run_name=run,
-        dataset_item_id=dataset_item_id,
-        trace_id=trace_id,
-        observation_id=observation_id,
-    )
+def _replay_task(outcomes_by_id: dict[str, ItemOutcome]):
+    """Return already-captured output for a Langfuse dataset item."""
+
+    def task(*, item: Any, **_kwargs: Any) -> dict[str, Any]:
+        outcome = outcomes_by_id[item.id]
+        return {
+            "item_id": outcome.item.id,
+            "text": outcome.capture.text,
+            "tools": outcome.capture.tool_names(),
+            "usage": outcome.capture.usage,
+            "latency_s": outcome.capture.latency_s,
+            "error": outcome.capture.error,
+        }
+
+    return task
+
+
+def _replay_scores(outcomes_by_id: dict[str, ItemOutcome]):
+    """Attach stored scorer verdicts as Langfuse evaluations."""
+
+    def evaluator(*, output: Any, **_kwargs: Any) -> list[Any]:
+        from langfuse import Evaluation
+
+        item_id = output.get("item_id") if isinstance(output, dict) else None
+        outcome = outcomes_by_id.get(item_id) if item_id else None
+        if outcome is None:
+            return []
+        return [
+            Evaluation(
+                name=score.scorer,
+                value=score.score if score.score is not None else (1.0 if score.passed else 0.0),
+                comment=score.details,
+            )
+            for score in outcome.scores
+        ]
+
+    return evaluator
 
 
 def push_report(report: EvalReport, *, run_name: str | None = None) -> str:
@@ -79,43 +107,20 @@ def push_report(report: EvalReport, *, run_name: str | None = None) -> str:
         )
 
     dataset = client.get_dataset(report.dataset)
-    items_by_id = {item.id: item for item in dataset.items}
-    for outcome in report.outcomes:
-        dataset_item = items_by_id.get(outcome.item.id)
-        if dataset_item is None:
-            logger.warning("dataset item %s missing after upsert; skipping", outcome.item.id)
-            continue
-        metadata = {
-            "tools": outcome.capture.tool_names(),
-            "usage": outcome.capture.usage,
-            "latency_s": outcome.capture.latency_s,
-            "error": outcome.capture.error,
-        }
-        with client.start_as_current_observation(
-            name=f"eval:{outcome.item.id}",
-            as_type="span",
-            input=outcome.item.input,
-            output=outcome.capture.text,
-            metadata=metadata,
-        ) as span:
-            span.update(
-                input=outcome.item.input,
-                output=outcome.capture.text,
-                metadata=metadata,
-            )
-            for score in outcome.scores:
-                span.score_trace(
-                    name=score.scorer,
-                    value=score.score if score.score is not None else (1 if score.passed else 0),
-                    comment=score.details,
-                )
-            _link_run_item(
-                client,
-                run=run,
-                dataset_item_id=dataset_item.id,
-                trace_id=span.trace_id,
-                observation_id=span.id,
-            )
+    outcomes_by_id = {outcome.item.id: outcome for outcome in report.outcomes}
+    dataset.items = [item for item in dataset.items if item.id in outcomes_by_id]
+    if not dataset.items:
+        logger.warning("no dataset items matched report %s; skipping experiment", report.dataset)
+        client.flush()
+        return run
 
+    result = dataset.run_experiment(
+        name=run,
+        run_name=run,
+        description="kaboo-workflows eval",
+        task=_replay_task(outcomes_by_id),
+        evaluators=[_replay_scores(outcomes_by_id)],
+        metadata={"source": "kaboo-workflows.eval"},
+    )
     client.flush()
-    return run
+    return result.run_name or run

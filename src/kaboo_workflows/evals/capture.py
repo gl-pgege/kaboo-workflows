@@ -131,6 +131,9 @@ class EvalPipeline:
         """Resolve *config_path* and start its MCP servers/clients."""
         self.base_raw = parse_config_sources(str(config_path))
         self.app_config = validate_raw_config(self.base_raw)
+        from ..telemetry import init_telemetry
+
+        init_telemetry(self.app_config.telemetry)
         self.infra = resolve_infra(self.app_config)
         self.infra.mcp_lifecycle.start(pin_clients=True)
         self.registry = ActivityRegistry()

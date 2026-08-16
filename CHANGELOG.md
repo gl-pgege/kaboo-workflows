@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## v0.17.3 (2026-08-16)
+
+### Fix
+
+- Langfuse eval push uses ``dataset.run_experiment`` so runs appear as v4 experiments
+
 ## v0.17.2 (2026-08-16)
 
 ### Fix

@@ -1,4 +1,4 @@
-"""Langfuse experiment upload uses the v4 observation + dataset-run-item APIs."""
+"""Langfuse experiment upload uses the v4 run_experiment API."""
 
 from __future__ import annotations
 
@@ -13,20 +13,16 @@ from kaboo_workflows.evals.runner import EvalReport, ItemOutcome
 from kaboo_workflows.evals.scorers import ScoreResult
 
 
-def test_push_report_creates_dataset_run_without_item_run(monkeypatch):
-    span = MagicMock()
-    span.trace_id = "trace-1"
-    span.id = "obs-1"
-    span_cm = MagicMock()
-    span_cm.__enter__.return_value = span
-    span_cm.__exit__.return_value = False
-
+def test_push_report_replays_via_run_experiment(monkeypatch):
+    extra = SimpleNamespace(id="other")
     dataset_item = SimpleNamespace(id="greet")
-    client = MagicMock()
-    client.get_dataset.return_value = SimpleNamespace(items=[dataset_item])
-    client.start_as_current_observation.return_value = span_cm
+    dataset = SimpleNamespace(items=[extra, dataset_item], run_experiment=MagicMock())
+    dataset.run_experiment.return_value = SimpleNamespace(run_name="eval-test")
 
-    fake_langfuse = SimpleNamespace(get_client=lambda: client)
+    client = MagicMock()
+    client.get_dataset.return_value = dataset
+
+    fake_langfuse = SimpleNamespace(get_client=lambda: client, Evaluation=object)
     monkeypatch.setitem(sys.modules, "langfuse", fake_langfuse)
 
     report = EvalReport(
@@ -49,12 +45,12 @@ def test_push_report_creates_dataset_run_without_item_run(monkeypatch):
 
     assert run == "eval-test"
     client.create_dataset_item.assert_called_once()
-    client.start_as_current_observation.assert_called_once()
-    span.score_trace.assert_called_once()
-    client.api.dataset_run_items.create.assert_called_once_with(
-        run_name="eval-test",
-        dataset_item_id="greet",
-        trace_id="trace-1",
-        observation_id="obs-1",
-    )
+    dataset.run_experiment.assert_called_once()
+    kwargs = dataset.run_experiment.call_args.kwargs
+    assert kwargs["name"] == "eval-test"
+    assert kwargs["run_name"] == "eval-test"
+    assert [item.id for item in dataset.items] == ["greet"]
+    replayed = kwargs["task"](item=dataset_item)
+    assert replayed["item_id"] == "greet"
+    assert replayed["text"] == "hello"
     client.flush.assert_called_once()

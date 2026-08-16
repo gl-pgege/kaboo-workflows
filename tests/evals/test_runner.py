@@ -129,6 +129,28 @@ items:
         await run_eval(dataset)
 
 
+async def test_eval_pipeline_initializes_telemetry(tmp_path, monkeypatch):
+    called = {}
+
+    def fake_init(cfg):
+        called["cfg"] = cfg
+        return False
+
+    monkeypatch.setattr("kaboo_workflows.telemetry.init_telemetry", fake_init)
+    dataset = _dataset(
+        tmp_path,
+        f"""
+config: {CONFIGS / "plain.yaml"}
+items:
+  - id: greet
+    input: "hi"
+""",
+    )
+    report = await run_eval(dataset)
+    assert report.ok
+    assert "cfg" in called
+
+
 async def test_config_argument_overrides_dataset(tmp_path):
     dataset = _dataset(
         tmp_path,
