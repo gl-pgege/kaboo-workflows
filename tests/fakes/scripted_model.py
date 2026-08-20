@@ -38,6 +38,40 @@ from typing import Any
 from strands.models import Model
 
 
+def _validate_tool_pairing(messages: Any) -> None:
+    """Enforce Bedrock's toolUse/toolResult pairing on the conversation.
+
+    Bedrock rejects a turn whose toolResult blocks don't pair one-to-one with
+    the toolUse blocks of the immediately preceding assistant message (e.g. a
+    replayed transcript carrying a duplicate result for an interrupted call).
+    The real provider raises ValidationException and strands force-stops the
+    run silently; enforcing the same contract here makes the fakes as strict
+    as production so tests catch malformed conversations.
+    """
+    prev_use_ids: list[str] = []
+    for i, msg in enumerate(messages or []):
+        content = msg.get("content") or []
+        result_ids = [
+            b["toolResult"].get("toolUseId")
+            for b in content
+            if isinstance(b, dict) and "toolResult" in b
+        ]
+        if result_ids and (
+            len(result_ids) > len(prev_use_ids)
+            or any(r not in prev_use_ids for r in result_ids)
+        ):
+            raise RuntimeError(
+                f"ValidationException: The number of toolResult blocks at "
+                f"messages.{i}.content exceeds the number of toolUse blocks "
+                "of previous turn."
+            )
+        prev_use_ids = [
+            b["toolUse"].get("toolUseId")
+            for b in content
+            if isinstance(b, dict) and "toolUse" in b
+        ]
+
+
 class ScriptedModel(Model):
     def __init__(
         self,
@@ -64,6 +98,7 @@ class ScriptedModel(Model):
     async def stream(
         self, messages: Any, tool_specs: Any = None, system_prompt: Any = None, **kwargs: Any
     ):
+        _validate_tool_pairing(messages)
         if _is_fresh_human_turn(messages):
             self._step = 0
 

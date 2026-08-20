@@ -30,7 +30,7 @@ from .._context import (
 from ..adapters import _strands_bridge as bridge
 from ..adapters._activity import ActivityRegistry
 from ..adapters._multiagent import StrandsMultiAgent
-from ..adapters.agui import _build_session, _consume_run, _parse_session_state
+from ..adapters.agui import _build_session, _consume_run, _parse_references, _parse_session_state
 from ..config import parse_config_sources, resolve_infra, validate_raw_config
 from ..types import StreamEvent
 from .dataset import EvalItem
@@ -80,9 +80,17 @@ def _capture_from_state(
     run_id: str,
     latency_s: float,
     error: str | None,
+    entry_tools: list[ToolInvocation] | None = None,
 ) -> RunCapture:
     groups: dict[str, dict[str, Any]] = thread_state.get("groups", {})
-    tools: list[ToolInvocation] = []
+    # Entry-agent tool calls come from the AG-UI stream (they never fold into
+    # activity groups). Delegations surface on both channels — as an entry
+    # tool call named after the connection AND as an activity group — so drop
+    # entry entries that match a group's agent to avoid double counting.
+    group_agents = {str(g.get("agentName", "")) for g in groups.values()}
+    tools: list[ToolInvocation] = [
+        t for t in (entry_tools or []) if t.name not in group_agents
+    ]
     structured: list[dict[str, Any]] = []
     for group in groups.values():
         agent = str(group.get("agentName", ""))
@@ -167,7 +175,6 @@ class EvalPipeline:
         set_activity_context(thread_id, run_id, run_id)
         exchange = HistoryExchange()
         set_history_exchange(exchange)
-        set_references([])
         set_forwarded_props(item.forwarded_props or {})
         set_inline_requests(set())
 
@@ -180,6 +187,10 @@ class EvalPipeline:
             context=[],
             forwarded_props=item.forwarded_props or {},
         )
+        # Same reference parsing as the server path: custom entities the item
+        # supplies under state.kaboo_references reach the ReferenceHook and
+        # reference tools exactly as client-cited datasources do in production.
+        set_references(_parse_references(input_data))
         set_session_exchange(SessionExchange(inbound=_parse_session_state(input_data)))
 
         session = self._session_for_run()
@@ -225,6 +236,7 @@ class EvalPipeline:
         await pump_task
 
         text_parts: list[str] = []
+        entry_tools: list[ToolInvocation] = []
         while not merged.empty():
             event = merged.get_nowait()
             if event is bridge.STREAM_DONE:
@@ -232,6 +244,14 @@ class EvalPipeline:
             event_type = getattr(event, "type", None)
             if event_type == AGUIEventType.TEXT_MESSAGE_CONTENT:
                 text_parts.append(getattr(event, "delta", "") or "")
+            elif event_type == AGUIEventType.TOOL_CALL_START:
+                entry_tools.append(
+                    ToolInvocation(
+                        agent=entry_name,
+                        name=str(getattr(event, "tool_call_name", "") or ""),
+                        status="completed",
+                    )
+                )
             elif event_type == AGUIEventType.RUN_ERROR and error is None:
                 error = getattr(event, "message", None) or "RUN_ERROR"
 
@@ -246,4 +266,5 @@ class EvalPipeline:
             run_id=run_id,
             latency_s=latency_s,
             error=error,
+            entry_tools=entry_tools,
         )

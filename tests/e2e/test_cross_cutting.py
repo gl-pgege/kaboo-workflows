@@ -143,6 +143,67 @@ async def test_approval_survives_a_restart_of_the_service() -> None:
     # is the fake restarting with the process, not the resume failing.
 
 
+async def test_cold_resume_with_answered_tool_result_in_transcript() -> None:
+    """A restart-resume whose transcript already carries the answered card.
+
+    Real hosts (CopilotKit) append the resolved interrupt to the transcript as a
+    ``tool`` message before resuming, so the request carries that message AND the
+    ``resume`` payload for the same tool call. Replaying both left two toolResult
+    blocks for one toolUse; Bedrock rejected the turn and the run force-stopped
+    with no continuation and no error — the frontend just saw the run end after
+    the card was answered. The endpoint now drops the client's copy and lets the
+    interrupt resolution supply the single result.
+    """
+    import json
+
+    from ag_ui.core import ToolMessage
+
+    first = Pipeline(str(CONFIGS / "interrupt_plain.yaml"))
+    r1 = await first.turn("start the task", thread_id="c3", run_id="r1")
+
+    outcome = r1.run_outcome()
+    assert getattr(outcome, "type", None) == "interrupt"
+    interrupt_id = getattr((getattr(outcome, "interrupts", []) or [])[0], "id", None)
+    assert interrupt_id
+    paused_call_id = r1.of_type(AGUIEventType.TOOL_CALL_START)[0].tool_call_id
+
+    # The transcript as a real client sends it: the paused run's messages plus
+    # the answered card rendered as a tool-result message.
+    payload = {"answer": "yes"}
+    client_messages = list(r1.messages()) + [
+        ToolMessage(
+            id="answered-card",
+            role="tool",
+            tool_call_id=paused_call_id,
+            content=json.dumps(payload),
+        )
+    ]
+
+    restarted = Pipeline(str(CONFIGS / "interrupt_plain.yaml"))
+    r2 = await restarted.turn(
+        thread_id="c3",
+        run_id="r2",
+        state=r1.state(),
+        messages=client_messages,
+        resume=[{"interruptId": interrupt_id, "status": "resolved", "payload": payload}],
+    )
+
+    assert not r2.errored()
+    assert r2.finished()
+
+    # Exactly one result for the paused call — the resolution's, not a duplicate.
+    results = r2.of_type(AGUIEventType.TOOL_CALL_RESULT)
+    assert [r.tool_call_id for r in results] == [paused_call_id]
+    assert "yes" in results[0].content
+
+    # The proof the run continued: the model was re-engaged after the
+    # resolution and the run reached a terminal outcome. The silent
+    # force-stop ended with RUN_FINISHED carrying no outcome at all.
+    assert r2.run_outcome() is not None
+    resumed_state = r2.state()["kaboo_session"]["interrupt_state"]
+    assert interrupt_id not in resumed_state["interrupts"]
+
+
 async def test_resume_without_carried_state_still_reports_a_lost_session() -> None:
     """A cold resume with nothing to restore must fail loudly, not silently pass.
 

@@ -45,6 +45,10 @@ class ItemOutcome:
             "scores": [s.to_dict() for s in self.scores],
             "text": self.capture.text,
             "tools": self.capture.tool_names(),
+            "trajectory": [
+                {"agent": t.agent, "name": t.name, "status": t.status, "kind": t.kind}
+                for t in self.capture.tools
+            ],
             "usage": self.capture.usage,
             "latency_s": round(self.capture.latency_s, 3),
             "error": self.capture.error,

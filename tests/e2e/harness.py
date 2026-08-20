@@ -40,6 +40,7 @@ from kaboo_workflows.adapters.agui import (
     _build_resume_responses,
     _build_session,
     _consume_run,
+    _drop_replayed_tool_results,
     _make_session_resolver,
     _parse_session_state,
 )
@@ -187,6 +188,10 @@ class Pipeline:
             context=[],
             forwarded_props=forwarded_props or {},
         )
+        if resume:
+            # Mirror kaboo_endpoint: the client transcript carries a tool-result
+            # message for the answered card; the resume payload is authoritative.
+            _drop_replayed_tool_results(input_data, resume)
         set_session_exchange(SessionExchange(inbound=_parse_session_state(input_data)))
         set_forwarded_props(forwarded_props or {})
 

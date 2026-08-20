@@ -98,6 +98,7 @@ from kaboo_workflows.wire import EventQueue
 from . import _strands_bridge as bridge
 from ._activity import ActivityRegistry
 from ._interrupts import map_strands_interrupt_to_agui as _map_strands_interrupt_to_agui
+from ._interrupts import tool_call_id_from_interrupt_id as _tool_call_id_from_interrupt_id
 from ._multiagent import StrandsMultiAgent
 
 if TYPE_CHECKING:
@@ -387,6 +388,39 @@ def _parse_resume_entries(input_data: RunAgentInput) -> list[dict[str, Any]] | N
             "payload": entry.payload,
         }
         for entry in raw_resume
+    ]
+
+
+def _drop_replayed_tool_results(
+    input_data: RunAgentInput, resume_entries: list[dict[str, Any]]
+) -> None:
+    """Strip the client's tool-result messages for the interrupts being resumed.
+
+    Hosts append the answered card to the transcript as a ``tool`` message (that
+    is how the resolved Q&A renders inline), so a resume request carries both
+    that message and the ``resume`` payload for the same tool call. On a cold
+    resume the transcript is replayed into the model conversation, and strands'
+    interrupt resolution then appends its own toolResult from the payload —
+    leaving two toolResult blocks for one toolUse. Bedrock rejects that turn
+    ("the number of toolResult blocks exceeds the number of toolUse blocks"),
+    force-stopping the run with no continuation and no error on the stream.
+    Dropping the client's copy keeps the replayed history open-ended so the
+    resolution supplies the single, authoritative result.
+    """
+    resumed_tool_call_ids = {
+        tcid
+        for entry in resume_entries
+        if (tcid := _tool_call_id_from_interrupt_id(entry.get("interruptId")))
+    }
+    if not resumed_tool_call_ids or not input_data.messages:
+        return
+    input_data.messages[:] = [
+        m
+        for m in input_data.messages
+        if not (
+            getattr(m, "role", None) == "tool"
+            and getattr(m, "tool_call_id", None) in resumed_tool_call_ids
+        )
     ]
 
 
@@ -891,6 +925,8 @@ def _add_kaboo_endpoint(
         encoder = EventEncoder(accept=request.headers.get("accept"))  # ty: ignore[invalid-argument-type]
         thread_id = input_data.thread_id or bridge.DEFAULT_THREAD
         resume_entries = _parse_resume_entries(input_data)
+        if resume_entries:
+            _drop_replayed_tool_results(input_data, resume_entries)
         turn_id = _resolve_turn_id(
             thread_id, input_data.run_id, is_resume=resume_entries is not None
         )

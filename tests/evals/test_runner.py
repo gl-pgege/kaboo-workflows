@@ -43,6 +43,88 @@ items:
     lines = [json.loads(line) for line in out.read_text().splitlines()]
     assert lines[0]["item_id"] == "greet"
     assert lines[0]["passed"] is True
+    assert all({"agent", "name", "status", "kind"} <= set(t) for t in lines[0]["trajectory"])
+
+
+async def test_entry_agent_tool_calls_are_captured(tmp_path):
+    config = tmp_path / "entry_tools.yaml"
+    config.write_text(
+        """
+agents:
+  assistant:
+    stream: {title: "Assistant"}
+    tools: ["tests.fakes.gated_tools:submit_report"]
+    model:
+      provider: tests.fakes.scripted_model:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - {tool: submit_report, input: {title: "Q3"}}
+        final_text: "report filed"
+
+entry: assistant
+"""
+    )
+    dataset = _dataset(
+        tmp_path,
+        f"""
+name: entry-tools-golden
+config: {config}
+items:
+  - id: file-report
+    input: "file the report"
+    expect:
+      - type: tool_called
+        tool: submit_report
+      - type: contains
+        value: "report filed"
+""",
+    )
+    report = await run_eval(dataset)
+    assert report.ok, report.summary()
+    assert "submit_report" in report.outcomes[0].capture.tool_names()
+
+
+async def test_item_state_references_reach_the_run(tmp_path, monkeypatch):
+    import kaboo_workflows.evals.capture as capture_mod
+    from kaboo_workflows.evals.capture import EvalPipeline
+    from kaboo_workflows.evals.dataset import EvalItem
+
+    seen: list[list] = []
+    real = capture_mod.set_references
+
+    def spy(refs):
+        seen.append(refs)
+        real(refs)
+
+    monkeypatch.setattr(capture_mod, "set_references", spy)
+
+    pipeline = EvalPipeline(str(CONFIGS / "plain.yaml"))
+    try:
+        item = EvalItem(
+            id="refs",
+            input="hi",
+            state={
+                "kaboo_references": [
+                    {
+                        "kind": "database",
+                        "id": "db-1",
+                        "name": "cust-db",
+                        "meta": {"databaseId": "db-1", "databaseName": "cust-db"},
+                    }
+                ]
+            },
+        )
+        capture = await pipeline.run_item(item)
+    finally:
+        pipeline.close()
+
+    assert capture.error is None
+    refs = seen[-1]
+    assert len(refs) == 1
+    assert refs[0].kind == "database"
+    assert refs[0].id == "db-1"
+    assert refs[0].meta["databaseName"] == "cust-db"
 
 
 async def test_delegate_workflow_captures_tool_trajectory(tmp_path):

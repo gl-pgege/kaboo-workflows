@@ -100,6 +100,24 @@ def test_mapper_omits_expiry_when_absent() -> None:
     assert "expiresAt" not in descriptor
 
 
+def test_mapper_tolerates_form_questions_without_question_key() -> None:
+    descriptor = _map_strands_interrupt_to_agui(
+        _FakeStrandsInterrupt(
+            "v1:tool_call:use-1:abc",
+            {"type": "form", "questions": [{"prompt": "Pick a datasource"}]},
+        )
+    )
+    assert descriptor["reason"] == "input_required"
+    assert descriptor["message"] == "Pick a datasource"
+
+
+def test_mapper_defaults_form_message_when_questions_are_empty() -> None:
+    descriptor = _map_strands_interrupt_to_agui(
+        _FakeStrandsInterrupt("v1:tool_call:use-1:abc", {"type": "form", "questions": []})
+    )
+    assert descriptor["message"] == "Input required"
+
+
 def test_cancelled_response_cancels_the_tool() -> None:
     event = _fire(
         InterruptHook(tools=["transition_work_item"]),

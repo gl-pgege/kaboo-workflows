@@ -45,7 +45,13 @@ def map_strands_interrupt_to_agui(interrupt: Any) -> dict[str, Any]:
             agui_interrupt["message"] = reason.get("message", "Approval required")
         elif rtype == "form":
             questions = reason.get("questions", [])
-            first_q = questions[0]["question"] if questions else "Input required"
+            first = questions[0] if questions else None
+            if isinstance(first, dict):
+                first_q = str(first.get("question") or first.get("prompt") or "Input required")
+            elif first is not None:
+                first_q = str(first)
+            else:
+                first_q = "Input required"
             agui_interrupt["reason"] = "input_required"
             agui_interrupt["message"] = first_q
         else:

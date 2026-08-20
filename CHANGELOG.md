@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## v0.17.7 (2026-08-20)
+
+### Fix
+
+- cold resume drops the client's replayed tool-result message for the interrupts being resumed, so strands' own resolution supplies the single authoritative toolResult instead of Bedrock rejecting the turn for having more toolResult than toolUse blocks
+
+## v0.17.6 (2026-08-17)
+
+### Feat
+
+- eval report lines include a ``trajectory`` array with per-call agent attribution (agent, name, status, kind)
+
+## v0.17.5 (2026-08-16)
+
+### Fix
+
+- eval run capture records the entry agent's own tool calls (from the AG-UI stream) alongside sub-agent activity, deduplicating delegations that surface on both channels
+
+## v0.17.4 (2026-08-16)
+
+### Fix
+
+- eval runs parse ``state.kaboo_references`` like the server path, so item-supplied datasource references reach the ReferenceHook and reference tools
+- form-interrupt mapping tolerates question entries without a ``question`` key instead of raising ``KeyError``
+
 ## v0.17.3 (2026-08-16)
 
 ### Fix
