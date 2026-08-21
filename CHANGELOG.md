@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## v0.18.0 (2026-08-20)
+
+### Feat
+
+- ``obo`` auth exchanges the inbound user token for a workload access token itself when given ``workload_name``, so an agent whose runtime does not hand one in can still reach ``GetResourceOauth2Token``
+- ``obo`` auth forwards ``custom_parameters`` to the token exchange, which is what makes an Entra ID credential provider's ``requested_token_use=on_behalf_of`` a configuration value rather than a library change
+
+### Fix
+
+- ``obo`` auth always sends ``scopes``, which the AgentCore API declares required; omitting it failed the call for any client that configured no scopes
+
 ## v0.17.7 (2026-08-20)
 
 ### Fix
