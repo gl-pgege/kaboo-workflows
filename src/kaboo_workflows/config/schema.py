@@ -95,6 +95,11 @@ class MCPClientAuthDef(BaseModel):
       :class:`~kaboo_workflows.auth.RelayTokenAuth`).
     - ``obo`` — AgentCore On-Behalf-Of exchange
       (:class:`~kaboo_workflows.auth.OBOTokenAuth`); requires ``provider``.
+      Provider-specific differences stay in ``params``: ``workload_name`` to
+      mint the workload access token from the inbound user token, and
+      ``custom_parameters`` for anything the identity provider expects on the
+      exchange (an Entra ID provider wants
+      ``requested_token_use: on_behalf_of``).
     - ``m2m`` — client-credentials machine token
       (:class:`~kaboo_workflows.auth.M2MClientCredentialsAuth`).
     - ``static`` — a fixed token (:class:`~kaboo_workflows.auth.StaticTokenAuth`).

@@ -121,21 +121,36 @@ class StaticTokenAuth(_BearerAuth):
 class OBOTokenAuth(_BearerAuth):
     """AgentCore On-Behalf-Of token exchange for a downstream resource.
 
-    Exchanges the caller's AgentCore ``WorkloadAccessToken`` for a scoped
-    downstream access token via
-    ``bedrock-agentcore:GetResourceOauth2Token`` and caches it per workload
-    token until shortly before expiry.
+    Two exchanges happen, and both run inside AgentCore Identity:
 
-    The workload token is read from the inbound principal (its ``token`` or its
-    ``WorkloadAccessToken`` header) unless an explicit ``workload_token`` is
-    supplied.
+    1. The inbound end-user token is exchanged for a *workload access token*
+       (``GetWorkloadAccessTokenForJWT``), which is what binds this agent's
+       workload identity to that user. Set ``workload_name`` to perform it here;
+       leave it unset when the runtime already hands the workload token in on
+       the request, in which case it is read from the principal.
+    2. The workload access token is exchanged for a downstream access token
+       (``GetResourceOauth2Token``) against the named credential provider.
+
+    Downstream tokens are cached per workload token until shortly before expiry.
+
+    Provider differences belong in configuration, not in this class:
+    ``custom_parameters`` is passed through to the exchange, which is how an
+    Entra ID provider gets its ``requested_token_use=on_behalf_of``, and
+    ``header`` / ``scheme`` decide how the result is presented downstream.
 
     Args:
         provider: Name of the AgentCore OAuth2 credential provider (the
             downstream resource) to exchange for.
         region: AWS region of the AgentCore control plane.
-        scopes: Optional OAuth2 scopes to request.
+        scopes: OAuth2 scopes to request. The API requires the field, so an
+            empty list is sent when none are given.
+        workload_name: Workload identity to mint a workload access token for
+            from the inbound user token. Unset means the inbound request is
+            expected to carry the workload token already.
         workload_token: Explicit workload token (bypasses the principal).
+        custom_parameters: Extra provider-specific parameters forwarded to the
+            token exchange.
+        force_authentication: Skip AgentCore's cached token for this identity.
         header: Header to set (default ``Authorization``).
         scheme: Auth scheme prefix (default ``Bearer``).
     """
@@ -146,18 +161,25 @@ class OBOTokenAuth(_BearerAuth):
         provider: str,
         region: str = "us-east-1",
         scopes: list[str] | None = None,
+        workload_name: str | None = None,
         workload_token: str | None = None,
+        custom_parameters: dict[str, str] | None = None,
+        force_authentication: bool = False,
         header: str = "Authorization",
         scheme: str = "Bearer",
     ) -> None:
         self._provider = provider
         self._region = region
-        self._scopes = scopes
+        self._scopes = scopes or []
+        self._workload_name = workload_name
         self._explicit_workload = workload_token
+        self._custom_parameters = custom_parameters or {}
+        self._force = force_authentication
         self.header_name = header
         self.scheme = scheme
         self._client: Any = None
         self._cache: dict[str, tuple[str, float]] = {}
+        self._workload_cache: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def _boto(self) -> Any:
@@ -173,7 +195,18 @@ class OBOTokenAuth(_BearerAuth):
         principal = get_auth_context()
         if principal is None:
             return None
-        return principal.token or principal.headers.get("WorkloadAccessToken")
+        inbound = principal.token or principal.headers.get("WorkloadAccessToken")
+        if not inbound or not self._workload_name:
+            return inbound
+        cached = self._workload_cache.get(inbound)
+        if cached:
+            return cached
+        resp = self._boto().get_workload_access_token_for_jwt(
+            workloadName=self._workload_name, userToken=inbound
+        )
+        workload: str = resp["workloadAccessToken"]
+        self._workload_cache[inbound] = workload
+        return workload
 
     def _token(self) -> str | None:
         workload = self._workload_token()
@@ -191,9 +224,12 @@ class OBOTokenAuth(_BearerAuth):
                 "workloadIdentityToken": workload,
                 "resourceCredentialProviderName": self._provider,
                 "oauth2Flow": "ON_BEHALF_OF_TOKEN_EXCHANGE",
+                "scopes": self._scopes,
             }
-            if self._scopes:
-                kwargs["scopes"] = self._scopes
+            if self._custom_parameters:
+                kwargs["customParameters"] = self._custom_parameters
+            if self._force:
+                kwargs["forceAuthentication"] = True
             resp = self._boto().get_resource_oauth2_token(**kwargs)
             token: str = resp["accessToken"]
             expires_in = float(resp.get("expiresIn", 3600))
