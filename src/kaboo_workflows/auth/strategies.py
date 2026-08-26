@@ -29,10 +29,24 @@ import httpx
 from .._context import get_auth_context
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from collections.abc import AsyncGenerator, Generator, Sequence
 
 _LEEWAY_SECONDS = 60.0
 """Refresh a cached token this many seconds before its stated expiry."""
+
+
+def _header_names(header: str | Sequence[str]) -> tuple[str, ...]:
+    """Normalise a ``header`` argument, which YAML may give as a list.
+
+    More than one name is not redundancy: a managed AgentCore Gateway
+    authenticates the caller on ``Authorization`` and then replaces it with its
+    own outbound credential, so a token that must reach the service behind the
+    gateway has to travel in a second, allowlisted header as well.
+    """
+    names = (header,) if isinstance(header, str) else tuple(header)
+    if not names or not all(names):
+        raise ValueError("header must be a non-empty header name, or a list of them")
+    return names
 
 
 class _BearerAuth(httpx.Auth):
@@ -43,8 +57,13 @@ class _BearerAuth(httpx.Auth):
     the event loop is never blocked.
     """
 
-    header_name: str = "Authorization"
+    header_names: tuple[str, ...] = ("Authorization",)
     scheme: str = "Bearer"
+
+    @property
+    def header_name(self) -> str:
+        """The first configured header, for callers that expect a single name."""
+        return self.header_names[0]
 
     def _token(self) -> str | None:  # pragma: no cover - overridden
         raise NotImplementedError
@@ -55,7 +74,9 @@ class _BearerAuth(httpx.Auth):
     def _apply(self, request: httpx.Request, token: str | None) -> None:
         if not token:
             return
-        request.headers[self.header_name] = f"{self.scheme} {token}" if self.scheme else token
+        value = f"{self.scheme} {token}" if self.scheme else token
+        for name in self.header_names:
+            request.headers[name] = value
 
     def sync_auth_flow(
         self, request: httpx.Request
@@ -80,15 +101,21 @@ class RelayTokenAuth(_BearerAuth):
     Args:
         token: Explicit token to forward. When ``None``, the inbound
             principal's token is used at call time.
-        header: Header to set (default ``Authorization``).
+        header: Header to set, or several (default ``Authorization``). A managed
+            gateway that authenticates on ``Authorization`` and forwards its own
+            credential needs both it and the header the target reads.
         scheme: Auth scheme prefix (default ``Bearer``; ``""`` for a raw value).
     """
 
     def __init__(
-        self, *, token: str | None = None, header: str = "Authorization", scheme: str = "Bearer"
+        self,
+        *,
+        token: str | None = None,
+        header: str | Sequence[str] = "Authorization",
+        scheme: str = "Bearer",
     ) -> None:
         self._explicit = token
-        self.header_name = header
+        self.header_names = _header_names(header)
         self.scheme = scheme
 
     def _token(self) -> str | None:
@@ -103,15 +130,19 @@ class StaticTokenAuth(_BearerAuth):
 
     Args:
         token: The credential to send.
-        header: Header to set (default ``Authorization``).
+        header: Header to set, or several (default ``Authorization``).
         scheme: Auth scheme prefix (default ``Bearer``; ``""`` for a raw value).
     """
 
     def __init__(
-        self, *, token: str, header: str = "Authorization", scheme: str = "Bearer"
+        self,
+        *,
+        token: str,
+        header: str | Sequence[str] = "Authorization",
+        scheme: str = "Bearer",
     ) -> None:
         self._value = token
-        self.header_name = header
+        self.header_names = _header_names(header)
         self.scheme = scheme
 
     def _token(self) -> str | None:
@@ -151,7 +182,7 @@ class OBOTokenAuth(_BearerAuth):
         custom_parameters: Extra provider-specific parameters forwarded to the
             token exchange.
         force_authentication: Skip AgentCore's cached token for this identity.
-        header: Header to set (default ``Authorization``).
+        header: Header to set, or several (default ``Authorization``).
         scheme: Auth scheme prefix (default ``Bearer``).
     """
 
@@ -165,7 +196,7 @@ class OBOTokenAuth(_BearerAuth):
         workload_token: str | None = None,
         custom_parameters: dict[str, str] | None = None,
         force_authentication: bool = False,
-        header: str = "Authorization",
+        header: str | Sequence[str] = "Authorization",
         scheme: str = "Bearer",
     ) -> None:
         self._provider = provider
@@ -175,7 +206,7 @@ class OBOTokenAuth(_BearerAuth):
         self._explicit_workload = workload_token
         self._custom_parameters = custom_parameters or {}
         self._force = force_authentication
-        self.header_name = header
+        self.header_names = _header_names(header)
         self.scheme = scheme
         self._client: Any = None
         self._cache: dict[str, tuple[str, float]] = {}
@@ -256,7 +287,7 @@ class M2MClientCredentialsAuth(_BearerAuth):
         scope: Optional space-delimited scopes.
         audience: Optional audience parameter (e.g. Auth0).
         extra: Extra form fields to include in the token request.
-        header: Header to set (default ``Authorization``).
+        header: Header to set, or several (default ``Authorization``).
         scheme: Auth scheme prefix (default ``Bearer``).
     """
 
@@ -269,7 +300,7 @@ class M2MClientCredentialsAuth(_BearerAuth):
         scope: str | None = None,
         audience: str | None = None,
         extra: dict[str, str] | None = None,
-        header: str = "Authorization",
+        header: str | Sequence[str] = "Authorization",
         scheme: str = "Bearer",
     ) -> None:
         self._token_url = token_url
@@ -278,7 +309,7 @@ class M2MClientCredentialsAuth(_BearerAuth):
         self._scope = scope
         self._audience = audience
         self._extra = extra or {}
-        self.header_name = header
+        self.header_names = _header_names(header)
         self.scheme = scheme
         self._cache: tuple[str, float] | None = None
         self._lock = threading.Lock()

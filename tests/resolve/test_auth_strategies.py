@@ -63,9 +63,7 @@ def test_obo_exchanges_the_user_token_then_the_resource_token(
 
     request = _apply(auth)
 
-    assert identity.jwt_calls == [
-        {"workloadName": "kaboo-agent", "userToken": "user-jwt"}
-    ]
+    assert identity.jwt_calls == [{"workloadName": "kaboo-agent", "userToken": "user-jwt"}]
     assert identity.token_calls[0]["workloadIdentityToken"] == "workload-token"
     assert identity.token_calls[0]["scopes"] == ["api://kaboo/.default"]
     assert request.headers["Authorization"] == "Bearer downstream-token"
@@ -82,9 +80,7 @@ def test_obo_forwards_custom_parameters(user_principal: None) -> None:
 
     _apply(auth)
 
-    assert identity.token_calls[0]["customParameters"] == {
-        "requested_token_use": "on_behalf_of"
-    }
+    assert identity.token_calls[0]["customParameters"] == {"requested_token_use": "on_behalf_of"}
 
 
 def test_obo_sends_scopes_even_when_none_are_configured(user_principal: None) -> None:
@@ -133,3 +129,21 @@ def test_relay_header_and_scheme_come_from_config(user_principal: None) -> None:
 
     assert request.headers["x-kaboo-run-token"] == "user-jwt"
     assert "authorization" not in request.headers
+
+
+def test_relay_sends_the_token_in_every_configured_header(
+    user_principal: None,
+) -> None:
+    # A managed gateway authenticates the caller on Authorization and then
+    # replaces it, so reaching the service behind it needs both headers.
+    auth = build_auth("relay", {"header": ["Authorization", "x-kaboo-run-token"]})
+
+    request = _apply(auth)
+
+    assert request.headers["authorization"] == "Bearer user-jwt"
+    assert request.headers["x-kaboo-run-token"] == "Bearer user-jwt"
+
+
+def test_an_empty_header_list_is_rejected() -> None:
+    with pytest.raises(ValueError, match="non-empty header name"):
+        build_auth("relay", {"header": []})

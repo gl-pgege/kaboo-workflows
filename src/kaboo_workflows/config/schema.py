@@ -105,6 +105,10 @@ class MCPClientAuthDef(BaseModel):
     - ``static`` — a fixed token (:class:`~kaboo_workflows.auth.StaticTokenAuth`).
 
     ``params`` are forwarded as constructor kwargs to the chosen strategy.
+    ``header`` accepts a list as well as a single name, which is what a managed
+    AgentCore Gateway needs: it authenticates the caller on ``Authorization``
+    and then replaces that header with its own outbound credential, so a token
+    the target must also see has to be sent twice.
 
     Note: ``relay`` / ``obo`` derive from the *per-request* caller identity and
     are reliable only when the MCP client is created per request (started inside
