@@ -51,7 +51,10 @@ entry: researcher
 1. **Define** with `&name`: `x-my_block: &my_block { key: value }`
 2. **Reference** with `*name`: `field: *my_block`
 
-The anchor creates a deep copy at the alias site. The `x-` prefix is a kaboo-workflows convention — YAML anchors work on any key, but `x-` keys are cleaned up so they don't trigger "unknown field" errors.
+An alias is a **reference, not a copy** — every alias site and the anchor itself are the same
+object in the parsed document, so a tool that mutates one sees the change everywhere. This
+rarely matters for config you only read, but it is why you should not treat an alias as a
+template you can tweak afterwards. The `x-` prefix is a kaboo-workflows convention — YAML anchors work on any key, but `x-` keys are cleaned up so they don't trigger "unknown field" errors.
 
 ## Combining Anchors with Variables
 

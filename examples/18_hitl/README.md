@@ -21,13 +21,18 @@ review_team (delegate):
   coordinator ─▶ field_agent (interrupt: true, asks the user)
 ```
 
+## Prerequisites
+
+- AWS credentials configured (`aws configure` or environment variables)
+- Dependencies installed: `uv sync`
+
 ## Run
 
 HITL is best experienced through the server + a CopilotKit frontend (the resume
 UI lives in the client):
 
 ```bash
-OPENROUTER_API_KEY=... uv run kaboo-serve examples/18_hitl/config.yaml
+uv run kaboo-serve examples/18_hitl/config.yaml
 ```
 
 ## Proven by

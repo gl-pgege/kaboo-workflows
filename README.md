@@ -221,6 +221,11 @@ entry: pipeline
 | `uv run kaboo-serve config.yaml --port 9000` | Custom port |
 | `uv run kaboo-workflows check config.yaml` | Validate config (no side-effects) |
 | `uv run kaboo-workflows load config.yaml` | Full load + MCP health check |
+| `uv run kaboo-workflows eval dataset.yaml` | Run a golden dataset and score it; exits non-zero on any failure |
+
+`eval` runs every dataset item through the same wire path as production and
+scores the outcomes with deterministic checks, budgets and LLM-as-judge. See
+[evaluation](docs/evaluation.md).
 
 ---
 
@@ -310,11 +315,12 @@ AG-UI SSE, behind a CopilotKit runtime
 ```bash
 git clone https://github.com/gl-pgege/kaboo-workflows.git
 cd kaboo-workflows
-uv sync --all-extras
+uv run just install      # uv sync --all-groups --all-extras, plus git hooks
 
 uv run just check        # lint + type check + security scan
 uv run just test         # pytest with coverage (>=70% gate)
 uv run just format       # auto-format
+uv run just docs-llms    # regenerate llms.txt after changing docs
 ```
 
 ---

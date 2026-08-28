@@ -84,7 +84,7 @@ Module-based specs (`module.path:func`) use the standard Python import system �
 
 ## Directory Scanning
 
-The directory spec (`./dir/`) recursively loads all `.py` files in the directory, skipping any file whose name starts with `_`:
+The directory spec (`./dir/`) loads all `.py` files **directly inside** the directory, skipping any file whose name starts with `_`. It is not recursive — files in subdirectories are ignored, so nest deliberately:
 
 ```
 tools/
@@ -98,7 +98,7 @@ tools/
 >
 > - Organize tools in a directory when you have many of them. One file per domain: `tools/math.py`, `tools/text.py`, `tools/database.py`.
 > - The `strands_tools` package has built-in tools like `http_request`, `file_read`, `shell` — use them with `strands_tools.http_request`.
-> - Each agent gets its own copy of tools. Two agents referencing the same file get independent tool instances.
+> - Tools are resolved per agent, but that is not the same as isolation: `module.path:func` specs go through the normal import system, so two agents referencing one module share the same function object. Keep tools stateless rather than relying on a copy you do not get.
 > - Tool function docstrings are sent to the LLM as the tool description. Write good docstrings — they directly affect how well the model uses your tools.
 > - Type hints on tool parameters become the JSON schema the LLM sees. Use `str`, `int`, `float`, `bool`, `list[str]`, etc. The more specific your types, the better the LLM calls your tools.
 

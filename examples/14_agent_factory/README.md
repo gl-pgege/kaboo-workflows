@@ -45,9 +45,8 @@ Your factory must return a `strands.Agent` instance.
 
 ## Prerequisites
 
-```bash
-pip install kaboo-workflows
-```
+- AWS credentials configured (`aws configure` or environment variables) — the config uses Bedrock
+- Dependencies installed: `uv sync`
 
 ## Run
 

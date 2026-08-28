@@ -19,7 +19,14 @@ agents:
 
 ## Writing a Factory
 
-kaboo-workflows calls your factory with all standard agent parameters plus `agent_kwargs`:
+kaboo-workflows calls your factory with all standard agent parameters plus `agent_kwargs`. Precisely, and always, these:
+
+`name`, `agent_id` (both the YAML key), `model`, `system_prompt`, `description`,
+`tools`, `hooks`, `conversation_manager`, `session_manager` — then everything in
+`agent_kwargs` spread on top.
+
+So a factory needs `**kwargs` to absorb the ones it does not care about, and
+should name only the parameters it actually uses:
 
 ```python
 # factory.py

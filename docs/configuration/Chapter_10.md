@@ -106,7 +106,7 @@ entry: review_team
 | `session_manager` | dict | No | | Swarm-level session manager |
 | `hooks` | list | No | | Swarm-level hooks |
 
-**Limitation**: All swarm nodes must be plain agents — no nested orchestrations. Node agents cannot have session managers (see [Chapter 7](Chapter_07.md#swarm-agents-and-sessions)).
+**Limitation**: All swarm nodes must be plain agents — no nested orchestrations. Node agents cannot have session managers, which applies to graph nodes too (see [Chapter 7](Chapter_07.md#swarm-and-graph-agents-and-sessions)).
 
 ## Mode: Graph
 

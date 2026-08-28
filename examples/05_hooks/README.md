@@ -33,13 +33,17 @@ class FingerprintHook(HookProvider):
 In `config.yaml`, hooks are listed under the agent. They fire in order:
 
 ```yaml
-hooks:
-  - type: ./hooks.py:FingerprintHook           # custom — from local file
-  - type: kaboo_workflows.hooks:MaxToolCallsGuard
-    params:
-      max_calls: 5
-  - type: kaboo_workflows.hooks:ToolNameSanitizer
+agents:
+  researcher:
+    hooks:
+      - type: ./hooks.py:FingerprintHook           # custom — from local file
+      - type: kaboo_workflows.hooks:MaxToolCallsGuard
+        params:
+          max_calls: 5                             # defaults to 25
+      - type: kaboo_workflows.hooks:ToolNameSanitizer
 ```
+
+There is no top-level `hooks:` section — hooks belong to an agent.
 
 The spec format for hooks is always `module_or_file:ClassName` — the class name is required (no bulk scan).
 

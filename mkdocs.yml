@@ -93,6 +93,7 @@ nav:
       - Overview: api-reference.md
       - kaboo_workflows: api/kaboo_workflows.md
       - adapters: api/adapters.md
+      - auth: api/auth.md
       - config: api/config.md
       - hooks: api/hooks.md
       - mcp: api/mcp.md

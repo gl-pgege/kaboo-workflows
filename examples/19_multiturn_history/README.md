@@ -19,10 +19,15 @@ assistant_team (delegate):
   coordinator ─▶ memo (history: true)
 ```
 
+## Prerequisites
+
+- AWS credentials configured (`aws configure` or environment variables)
+- Dependencies installed: `uv sync`
+
 ## Run
 
 ```bash
-OPENROUTER_API_KEY=... uv run kaboo-serve examples/19_multiturn_history/config.yaml
+uv run kaboo-serve examples/19_multiturn_history/config.yaml
 ```
 
 ## Proven by

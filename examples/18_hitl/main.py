@@ -6,7 +6,7 @@ agent's `ask_user` interrupt bubbles to the single top-level handler.
 Note: driving HITL from a terminal REPL is limited (there is no resume UI). This
 flow is best experienced through the AG-UI server + a CopilotKit frontend:
 
-    OPENROUTER_API_KEY=... uv run kaboo-serve examples/18_hitl/config.yaml
+    uv run kaboo-serve examples/18_hitl/config.yaml
 
 Usage (REPL, first turn only):
     uv run python examples/18_hitl/main.py

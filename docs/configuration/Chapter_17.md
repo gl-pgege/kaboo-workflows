@@ -8,7 +8,7 @@ When you call `load("config.yaml")`, here's exactly what happens:
 
 ## Step 1: Parse Sources
 
-Each config source (file path or raw YAML string) is parsed with `yaml.safe_load()`. `Path` objects are always treated as files. Strings are files if the path exists on disk, otherwise parsed as inline YAML.
+Each config source (file path or raw YAML string) is parsed with `yaml.safe_load()`. `Path` objects are always treated as files. Strings are files if the path exists on disk, otherwise parsed as inline YAML — with two refinements worth knowing: a **multi-line** string is never probed as a path, and a single-line string that looks like a path (contains a separator, or ends `.yaml`/`.yml`) but does not exist raises `FileNotFoundError` rather than being parsed as YAML and failing confusingly later.
 
 ## Step 2: Strip Anchors and Interpolate Variables
 
@@ -29,13 +29,19 @@ Names in all collection sections are sanitized to `[a-zA-Z0-9_-]`. Cross-referen
 
 Collection sections are combined, duplicate names detected, singleton fields use last-wins.
 
-## Step 6: Validate Against Schema
+## Step 6: Normalize, Then Validate Against Schema
 
-The merged dict is validated against Pydantic models. Invalid fields, missing required values, wrong types — all caught here with clear error messages.
+`normalize()` runs first and checks `version`: only `"1"` exists, and anything else is rejected here rather than producing a confusing field error further down.
+
+The normalized dict is then validated against the Pydantic models. Invalid fields, missing required values, wrong types — all caught here. Only the **first** Pydantic error is surfaced, reshaped as `SchemaValidationError`:
+
+```
+Invalid config at 'agents.analyst.model': Input should be a valid string
+```
 
 ## Step 7: Validate References
 
-Cross-references are checked:
+Cross-references are checked, raising `UnresolvedReferenceError` — which, unlike the schema error above, lists the names that *are* available:
 - Agent `model` references → must exist in `models`
 - Agent `mcp` references → must exist in `mcp_clients`
 - MCP client `server` references → must exist in `mcp_servers`
@@ -45,6 +51,8 @@ Cross-references are checked:
 
 Models, MCP servers, MCP clients, and session managers are created as Python objects. Nothing is started yet.
 
+`resolve_infra()` also enforces one rule that is easier to catch here than later: a **global** `session_manager` with `provider: agentcore` is rejected, because that provider needs an `actor_id` unique to each agent.
+
 ## Step 9: Start MCP Lifecycle
 
 MCP servers are started in background threads. The pipeline waits for all servers to be ready (TCP port check). This happens **before** agent creation because `Agent.__init__` auto-starts MCP clients which need running servers.
@@ -52,6 +60,8 @@ MCP servers are started in background threads. The pipeline waits for all server
 ## Step 10: Create Agents
 
 Each agent definition is resolved: model looked up, tools loaded, hooks instantiated, MCP clients attached, session manager wired. Each agent is a fresh `strands.Agent` instance.
+
+Agents that are nodes of a **swarm or graph** are checked here and rejected if they carry a session manager, global or per-agent, because strands cannot persist those (see [Chapter 7](Chapter_07.md#swarm-and-graph-agents-and-sessions)).
 
 ## Step 11: Wire Orchestrations
 
@@ -64,6 +74,7 @@ The final `ResolvedConfig` has:
 - `orchestrators` — dict of all built orchestrations by name
 - `entry` — the entry point (Agent, Swarm, or Graph)
 - `mcp_lifecycle` — for managing shutdown
+- `app_config` — the validated `AppConfig` the rest was built from
 
 ## Advanced Topic: `load()` vs `load_config()` + `resolve_infra()` + `load_session()`
 
@@ -77,14 +88,17 @@ resolved = load("config.yaml")
 
 That one call runs the whole pipeline:
 
-1. Parse YAML
-2. Interpolate variables
-3. Sanitize names
-4. Merge files
-5. Validate schema + references
-6. Resolve infrastructure
-7. Start MCP lifecycle
-8. Create agents and orchestrations
+1. Parse YAML, then **per source**: pop `vars`, strip `x-*` anchors, interpolate, rewrite relative paths
+2. Sanitize names, per source
+3. Merge sources
+4. Normalize, validate schema, validate references
+5. Apply `log_level`
+6. Initialise telemetry — process-wide, and the first call wins, so a later `load()` cannot change it
+7. Resolve infrastructure
+8. Start MCP lifecycle
+9. Create agents and orchestrations
+
+Sanitizing and interpolating happen **before** the merge, per source, which is why one file's `vars` never leak into another's interpolation.
 
 But kaboo-workflows also exposes the lower-level split because **config parsing** and **session creation** are not always the same thing.
 
@@ -196,7 +210,9 @@ folder from `resolve_infra()`.
 
 The split above assumes one config, many sessions. Push it one step further and the config becomes per-request too: the run submits it, and the process only holds the base it layers over.
 
-That needs one more seam, because `load_config()` both parses *and* validates, and a base config that expects an overlay is not valid on its own — it may have no `entry`. So the two halves are separately available:
+That needs one more seam, because `load_config()` both parses *and* validates in one call, and here you need the raw parsed base kept around to merge each run's overlay into. So the two halves are separately available.
+
+The base is still validated at boot, and still needs an `entry` — `entry` is required and has no default. Give it a fallback agent, as [`examples/21_runtime_configs`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/21_runtime_configs) does, so the service is valid on its own and a run that submits no workflow still has something to answer with.
 
 ```{.python notest}
 from dataclasses import replace
@@ -218,8 +234,18 @@ infra.mcp_lifecycle.start(pin_clients=False)   # servers only; clients are per-r
 # Per run: merge, validate, resolve.
 config = load_session_config(base_raw, submitted_yaml, allowed_mcp_hosts=["gateway.internal"])
 clients = resolve_run_clients(config, infra)
-resolved = load_session(config, replace(infra, clients=clients.clients), session_id=thread_id)
+clients.start(pin_clients=False)               # the run owns these sessions
+resolved = load_session(
+    config,
+    replace(infra, clients=clients.clients, mcp_lifecycle=clients),
+    session_id=thread_id,
+)
 ```
+
+Both additions matter. Without `clients.start(...)`, the run's MCP sessions are
+never opened; without `mcp_lifecycle=clients`, `load_session` keeps the
+**boot-time** lifecycle, so shutting the run down closes nothing it opened and
+the sessions leak for the life of the process.
 
 `create_agui_app(config_path, session_config_key="workflow_config")` does exactly this for you, reading the overlay from `forwardedProps` and closing the run's clients when its stream ends. See [Chapter 13](Chapter_13.md) for the merge rules, and [`examples/21_runtime_configs`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/21_runtime_configs) for three runs resolving three different workflows against one base.
 

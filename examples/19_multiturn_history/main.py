@@ -6,7 +6,7 @@ sub-agent's transcript round-trips via state.kaboo_history across turns.
 The full round-trip (feeding a captured transcript back in) is a client concern,
 best seen through the AG-UI server + kaboo-runtime persistence:
 
-    OPENROUTER_API_KEY=... uv run kaboo-serve examples/19_multiturn_history/config.yaml
+    uv run kaboo-serve examples/19_multiturn_history/config.yaml
 
 Usage (REPL):
     uv run python examples/19_multiturn_history/main.py

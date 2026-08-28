@@ -25,6 +25,7 @@ DOCS_API = ROOT / "docs" / "api"
 PUBLIC_MODULES = [
     "kaboo_workflows",
     "kaboo_workflows.adapters",
+    "kaboo_workflows.auth",
     "kaboo_workflows.config",
     "kaboo_workflows.hooks",
     "kaboo_workflows.mcp",

@@ -26,14 +26,21 @@ chapter in the [Configuration reference](configuration/README.md)):
 
 | Section | What it is |
 |---------|-----------|
-| `models` | Named model providers (`openai`, `ollama`, `gemini`, Bedrock, …). |
-| `agents` | Named agents: a model, a system prompt, tools, and hooks. |
-| `tools` | Python `@tool` functions loaded from files, plus built-ins like `ask_user`. |
-| `hooks` | Lifecycle hooks — event publishing, interrupts/HITL, guards. |
-| `mcp` | Model Context Protocol servers/clients, lifecycle-managed for you. |
+| `models` | Named model providers (`bedrock`, `openai`, `ollama`, `gemini`). |
+| `agents` | Named agents: a model, a system prompt, tools, hooks and MCP clients. |
+| `mcp_servers` | MCP servers the library starts and stops for you. |
+| `mcp_clients` | Connections to MCP servers, which agents attach by name. |
 | `orchestrations` | How agents compose into a multi-agent system. |
 | `attachments` | How references (files + custom entities cited via `@`) reach agents. |
-| `entry` | The root agent or orchestration a run starts from. |
+| `session_manager` | Where conversation state persists between runs. |
+| `entry` | The root agent or orchestration a run starts from. **The only required key.** |
+
+Tools and hooks are not top-level sections — they are declared per agent, as
+`agents.<name>.tools` and `agents.<name>.hooks`. Tools are Python `@tool`
+functions loaded from files or modules, plus built-ins like `ask_user`; hooks are
+lifecycle callbacks for event publishing, interrupts and guards. The remaining
+root keys are settings rather than wiring: `history`, `telemetry`, `runtime`,
+`log_level` and `version`, plus `vars` for interpolation.
 
 ## Orchestration shapes
 
@@ -43,8 +50,13 @@ Agents compose through orchestrations, which nest arbitrarily:
   [deep nesting](workflows/deep-nesting.md)).
 - **swarm** — agents hand off to one another until one produces the answer.
 - **graph** — an explicit DAG of agents with edges and an entry point.
-- **parallel** — fan out to several branches and merge (see
-  [parallel](workflows/parallel.md)).
+
+Those three are the whole list — `mode:` accepts nothing else. Two patterns
+people look for as modes are properties of a graph rather than shapes of their
+own:
+
+- **parallel** — a graph node with several outgoing edges fans out, and the
+  branches run concurrently (see [parallel](workflows/parallel.md)).
 - **nested** — any orchestration can be a node inside another (see
   [swarm + graph](workflows/swarm-and-graph.md)).
 

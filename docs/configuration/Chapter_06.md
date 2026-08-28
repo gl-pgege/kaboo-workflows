@@ -47,11 +47,16 @@ Both the `type` field and the string shorthand accept:
 
 ## Built-in Hooks
 
-kaboo-workflows ships with four hooks:
+kaboo-workflows exports eleven hook classes, but most are wired up for you when you enable
+the feature they serve — `HistoryHook`, `InterruptHook`, `ReferenceHook`, `SessionStateHook`,
+`ForwardedPropsHook`, `EventPublisher` and `MultiAgentStopGuard` all appear because of some
+other config key, not because you listed them. These four are the ones you add by hand:
 
 ### `MaxToolCallsGuard`
 
 Limits how many tool calls an agent can make in a single invocation. Two-phase behavior:
+
+`max_calls` defaults to **25**. Two-phase behaviour:
 
 1. **First violation** — injects a system message telling the LLM to stop and write a final answer.
 2. **Second violation** — if the LLM ignores the warning and calls another tool, the loop is terminated.

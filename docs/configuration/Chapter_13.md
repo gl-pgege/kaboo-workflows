@@ -24,10 +24,10 @@ resolved = load(["base.yaml", "agents.yaml", "mcp.yaml"])
 
 **Singleton fields** use last-wins semantics:
 
-- `entry` — last file's value wins
-- `session_manager` — last file's value wins
-- `log_level` — last file's value wins
-- `version` — last file's value wins
+Everything that is not one of those five collections is a singleton, so the rule
+is simpler than a list: `entry`, `session_manager`, `history`, `attachments`,
+`runtime`, `telemetry`, `log_level` and `version` all take the last file's
+value.
 
 ## Duplicate Detection
 
@@ -107,10 +107,22 @@ A server whose runs bring their own workflow needs the opposite — **substituti
 
 | Section | Multi-file merge | Session overlay |
 |---------|------------------|-----------------|
-| `agents`, `orchestrations`, `entry` | merged; duplicate name is an error | **replaced** wholesale by the overlay |
+| `agents`, `orchestrations` | merged; duplicate name is an error | **replaced** wholesale by the overlay |
 | `models`, `mcp_clients` | merged; duplicate name is an error | **unioned**, and the overlay wins a name clash |
-| `runtime`, `attachments`, `log_level`, `session_manager` | last-wins | last-wins from the overlay |
+| `entry`, `runtime`, `attachments`, `telemetry`, `history`, `log_level`, `session_manager` | last-wins | last-wins from the overlay |
 | `mcp_servers` | merged | **rejected** in an overlay |
+
+Only `agents` and `orchestrations` are genuinely replaced. `entry` is last-wins
+like any other singleton, which usually looks the same — an overlay that brings
+its own agents names its own entry — but differs in one case worth knowing: an
+overlay that omits `entry` inherits the base's, and the base's entry agent has
+just been replaced out of existence. That fails at load rather than
+falling back silently:
+
+```
+SchemaValidationError: Invalid config at '': Value error, entry 'base_agent'
+is not defined under agents: or orchestrations:.
+```
 
 Replace rather than merge is what makes a submitted config a whole workflow instead of an addition to someone else's. Union on `models` and `mcp_clients` is what makes the base useful: it holds the shared infrastructure every workflow draws on by name, and an overlay may still add its own.
 

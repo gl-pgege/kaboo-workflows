@@ -1,7 +1,7 @@
 # 10_nested — Nested Orchestration
 #
 # A Swarm embedded as a named target inside a Delegate orchestration.
-# kaboo-workflows topological sort builds content_team before pipeline.
+# kaboo-workflows topological sort builds content_team before manager.
 #
 # Namespace rule: agents and orchestrations share a single namespace —
 # 'content_team' here cannot be both an agent name and an orchestration name.

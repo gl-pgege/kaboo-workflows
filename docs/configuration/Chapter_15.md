@@ -56,7 +56,26 @@ The `SESSION_START` payload wraps the full wired topology snapshot together with
 | `TOOL_END` | Tool execution completes |
 | `INTERRUPT` | Agent pauses for human input |
 | `AGENT_COMPLETE` | Agent finishes — `data` carries `usage` metrics, `text` (final output string), and `message` (raw message dict) |
-| `ERROR` | Model or execution error |
+| `ERROR` | Model or execution error — `data` carries `text` and `exception_type` |
+
+`AGENT_COMPLETE` is not guaranteed on every finish. When a run stops because an
+agent raised an interrupt, `INTERRUPT` is emitted and the publisher returns
+without a completion event, so a consumer that waits for `AGENT_COMPLETE` before
+releasing a turn will hang on any human-in-the-loop pause. Treat `INTERRUPT` as
+an equally valid end of turn.
+
+### Stream group events
+
+| Event Type | Description |
+|------------|-------------|
+| `STREAM_GROUP_START` | An agent in a `stream.group` begins; `data` carries `parent_group`, `tool_call_id` and the `task` it was handed |
+| `STREAM_GROUP_END` | That group finishes |
+
+Once an agent is in a group, **every** event it emits also carries
+`stream_group` and `stream_title` in `data`, so a consumer can route events to
+the right activity card without tracking the start event. A grouped agent that
+sets no `title` gets one derived from its name — `data_analyst` becomes
+`Data Analyst`.
 
 ### Multi-agent events
 
@@ -97,9 +116,27 @@ while (event := await queue.get()) is not None:
         process(event)
 ```
 
-## Configuring the Queue in YAML
+## What Is Configured Where
 
-Event streaming is configured in Python, not YAML — it's a runtime concern. But the **hooks** it installs (`EventPublisher`) listen to the same lifecycle events as your YAML-defined hooks. They coexist peacefully.
+The **queue** is a Python concern: you create it and call `wire_event_queue()`,
+and there is no YAML for it. The hooks that fills in (`EventPublisher`) listen to
+the same lifecycle events as your YAML-defined hooks, and the two coexist.
+
+How an agent's output is **labelled** in that stream, though, is YAML:
+
+```yaml
+agents:
+  researcher:
+    model: default
+    stream:
+      group: research      # groups this agent's events with others in `research`
+      title: Researching    # human-readable label for the group
+```
+
+`stream:` takes `group` and `title`, both optional. Agents sharing a `group`
+bracket their combined output with `STREAM_GROUP_START` and `STREAM_GROUP_END`
+events, which is how a UI renders several agents' work as one collapsible
+activity rather than an interleaved mess.
 
 > **Tips & Tricks**
 >

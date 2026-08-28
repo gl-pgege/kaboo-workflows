@@ -23,6 +23,10 @@ The curated top-level exports, for the common case:
 - **Tools**: `node_as_tool`, `node_as_async_tool`, `serialize_multiagent_result`
 - **MCP**: `create_mcp_client`, `create_mcp_server`, `MCPLifecycle`
 - **Hooks**: `EventPublisher`, `MaxToolCallsGuard`, `StopGuard`, `ToolNameSanitizer`
+- **Auth**: `Principal`, `get_auth_context`, `set_auth_context`, `build_auth`,
+  `RelayTokenAuth`, `OBOTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`
+- **Forwarded props**: `get_forwarded_props`, `set_forwarded_props`
+- **Telemetry**: `init_telemetry`, `telemetry_enabled`, `current_trace_id`
 - **Rendering / CLI**: `AnsiRenderer`, `cli_errors`
 - **Errors**: `ConfigurationError`, `SchemaValidationError`,
   `UnresolvedReferenceError`, `CircularDependencyError`,
@@ -34,6 +38,18 @@ The curated top-level exports, for the common case:
   the primary serving entrypoint and lives here (not re-exported top level).
   `session_config_key=` makes each run bring its own config;
   `allowed_mcp_hosts=` bounds what a submitted config may connect to.
+
+## Auth — [`kaboo_workflows.auth`](api/auth.md)
+
+The outbound MCP auth strategies an `auth:` block resolves to
+([Chapter 9](configuration/Chapter_09.md#outbound-auth--the-auth-field)):
+`RelayTokenAuth`, `OBOTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`,
+plus `build_auth` to construct one from a name and params, and
+`apply_auth_to_transport_options` to wire one into a transport.
+
+Inbound identity is separate and lives at top level: `Principal`,
+`get_auth_context`, `set_auth_context`. A `relay` strategy reads the current
+`Principal`, which is what an AG-UI `auth=` verifier sets.
 
 ## Configuration — [`kaboo_workflows.config`](api/config.md)
 

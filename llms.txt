@@ -45,6 +45,7 @@
 ## API reference
 
 - [kaboo_workflows.adapters](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/adapters.md)
+- [kaboo_workflows.auth](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/auth.md)
 - [kaboo_workflows.config](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/config.md)
 - [kaboo_workflows.converters](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/converters.md)
 - [kaboo_workflows.hooks](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/hooks.md)

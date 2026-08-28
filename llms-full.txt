@@ -223,6 +223,11 @@ entry: pipeline
 | `uv run kaboo-serve config.yaml --port 9000` | Custom port |
 | `uv run kaboo-workflows check config.yaml` | Validate config (no side-effects) |
 | `uv run kaboo-workflows load config.yaml` | Full load + MCP health check |
+| `uv run kaboo-workflows eval dataset.yaml` | Run a golden dataset and score it; exits non-zero on any failure |
+
+`eval` runs every dataset item through the same wire path as production and
+scores the outcomes with deterministic checks, budgets and LLM-as-judge. See
+[evaluation](docs/evaluation.md).
 
 ---
 
@@ -312,11 +317,12 @@ AG-UI SSE, behind a CopilotKit runtime
 ```bash
 git clone https://github.com/gl-pgege/kaboo-workflows.git
 cd kaboo-workflows
-uv sync --all-extras
+uv run just install      # uv sync --all-groups --all-extras, plus git hooks
 
 uv run just check        # lint + type check + security scan
 uv run just test         # pytest with coverage (>=70% gate)
 uv run just format       # auto-format
+uv run just docs-llms    # regenerate llms.txt after changing docs
 ```
 
 ---
@@ -352,6 +358,10 @@ The curated top-level exports, for the common case:
 - **Tools**: `node_as_tool`, `node_as_async_tool`, `serialize_multiagent_result`
 - **MCP**: `create_mcp_client`, `create_mcp_server`, `MCPLifecycle`
 - **Hooks**: `EventPublisher`, `MaxToolCallsGuard`, `StopGuard`, `ToolNameSanitizer`
+- **Auth**: `Principal`, `get_auth_context`, `set_auth_context`, `build_auth`,
+  `RelayTokenAuth`, `OBOTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`
+- **Forwarded props**: `get_forwarded_props`, `set_forwarded_props`
+- **Telemetry**: `init_telemetry`, `telemetry_enabled`, `current_trace_id`
 - **Rendering / CLI**: `AnsiRenderer`, `cli_errors`
 - **Errors**: `ConfigurationError`, `SchemaValidationError`,
   `UnresolvedReferenceError`, `CircularDependencyError`,
@@ -363,6 +373,18 @@ The curated top-level exports, for the common case:
   the primary serving entrypoint and lives here (not re-exported top level).
   `session_config_key=` makes each run bring its own config;
   `allowed_mcp_hosts=` bounds what a submitted config may connect to.
+
+## Auth — [`kaboo_workflows.auth`](api/auth.md)
+
+The outbound MCP auth strategies an `auth:` block resolves to
+([Chapter 9](configuration/Chapter_09.md#outbound-auth--the-auth-field)):
+`RelayTokenAuth`, `OBOTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`,
+plus `build_auth` to construct one from a name and params, and
+`apply_auth_to_transport_options` to wire one into a transport.
+
+Inbound identity is separate and lives at top level: `Principal`,
+`get_auth_context`, `set_auth_context`. A `relay` strategy reads the current
+`Principal`, which is what an AG-UI `auth=` verifier sets.
 
 ## Configuration — [`kaboo_workflows.config`](api/config.md)
 
@@ -408,6 +430,20 @@ Loaders, interpolation, infra resolution, and the full YAML schema models
 The serving layer: turn a resolved config into an AG-UI / CopilotKit app.
 
 ::: kaboo_workflows.adapters
+    options:
+      show_root_heading: true
+      members_order: source
+
+# docs/api/auth.md
+
+# kaboo_workflows.auth
+
+Outbound MCP auth strategies: relay, on-behalf-of, machine-to-machine and static
+tokens. These are what an `auth:` block on an MCP client resolves to — see
+[Chapter 9](../configuration/Chapter_09.md#outbound-auth--the-auth-field) for the
+YAML form.
+
+::: kaboo_workflows.auth
     options:
       show_root_heading: true
       members_order: source
@@ -531,14 +567,21 @@ chapter in the [Configuration reference](configuration/README.md)):
 
 | Section | What it is |
 |---------|-----------|
-| `models` | Named model providers (`openai`, `ollama`, `gemini`, Bedrock, …). |
-| `agents` | Named agents: a model, a system prompt, tools, and hooks. |
-| `tools` | Python `@tool` functions loaded from files, plus built-ins like `ask_user`. |
-| `hooks` | Lifecycle hooks — event publishing, interrupts/HITL, guards. |
-| `mcp` | Model Context Protocol servers/clients, lifecycle-managed for you. |
+| `models` | Named model providers (`bedrock`, `openai`, `ollama`, `gemini`). |
+| `agents` | Named agents: a model, a system prompt, tools, hooks and MCP clients. |
+| `mcp_servers` | MCP servers the library starts and stops for you. |
+| `mcp_clients` | Connections to MCP servers, which agents attach by name. |
 | `orchestrations` | How agents compose into a multi-agent system. |
 | `attachments` | How references (files + custom entities cited via `@`) reach agents. |
-| `entry` | The root agent or orchestration a run starts from. |
+| `session_manager` | Where conversation state persists between runs. |
+| `entry` | The root agent or orchestration a run starts from. **The only required key.** |
+
+Tools and hooks are not top-level sections — they are declared per agent, as
+`agents.<name>.tools` and `agents.<name>.hooks`. Tools are Python `@tool`
+functions loaded from files or modules, plus built-ins like `ask_user`; hooks are
+lifecycle callbacks for event publishing, interrupts and guards. The remaining
+root keys are settings rather than wiring: `history`, `telemetry`, `runtime`,
+`log_level` and `version`, plus `vars` for interpolation.
 
 ## Orchestration shapes
 
@@ -548,8 +591,13 @@ Agents compose through orchestrations, which nest arbitrarily:
   [deep nesting](workflows/deep-nesting.md)).
 - **swarm** — agents hand off to one another until one produces the answer.
 - **graph** — an explicit DAG of agents with edges and an entry point.
-- **parallel** — fan out to several branches and merge (see
-  [parallel](workflows/parallel.md)).
+
+Those three are the whole list — `mode:` accepts nothing else. Two patterns
+people look for as modes are properties of a graph rather than shapes of their
+own:
+
+- **parallel** — a graph node with several outgoing edges fans out, and the
+  branches run concurrently (see [parallel](workflows/parallel.md)).
 - **nested** — any orchestration can be a node inside another (see
   [swarm + graph](workflows/swarm-and-graph.md)).
 
@@ -1068,7 +1116,10 @@ entry: researcher
 1. **Define** with `&name`: `x-my_block: &my_block { key: value }`
 2. **Reference** with `*name`: `field: *my_block`
 
-The anchor creates a deep copy at the alias site. The `x-` prefix is a kaboo-workflows convention — YAML anchors work on any key, but `x-` keys are cleaned up so they don't trigger "unknown field" errors.
+An alias is a **reference, not a copy** — every alias site and the anchor itself are the same
+object in the parsed document, so a tool that mutates one sees the change everywhere. This
+rarely matters for config you only read, but it is why you should not treat an alias as a
+template you can tweak afterwards. The `x-` prefix is a kaboo-workflows convention — YAML anchors work on any key, but `x-` keys are cleaned up so they don't trigger "unknown field" errors.
 
 ## Combining Anchors with Variables
 
@@ -1219,7 +1270,7 @@ Module-based specs (`module.path:func`) use the standard Python import system �
 
 ## Directory Scanning
 
-The directory spec (`./dir/`) recursively loads all `.py` files in the directory, skipping any file whose name starts with `_`:
+The directory spec (`./dir/`) loads all `.py` files **directly inside** the directory, skipping any file whose name starts with `_`. It is not recursive — files in subdirectories are ignored, so nest deliberately:
 
 ```
 tools/
@@ -1233,7 +1284,7 @@ tools/
 >
 > - Organize tools in a directory when you have many of them. One file per domain: `tools/math.py`, `tools/text.py`, `tools/database.py`.
 > - The `strands_tools` package has built-in tools like `http_request`, `file_read`, `shell` — use them with `strands_tools.http_request`.
-> - Each agent gets its own copy of tools. Two agents referencing the same file get independent tool instances.
+> - Tools are resolved per agent, but that is not the same as isolation: `module.path:func` specs go through the normal import system, so two agents referencing one module share the same function object. Keep tools stateless rather than relying on a copy you do not get.
 > - Tool function docstrings are sent to the LLM as the tool description. Write good docstrings — they directly affect how well the model uses your tools.
 > - Type hints on tool parameters become the JSON schema the LLM sees. Use `str`, `int`, `float`, `bool`, `list[str]`, etc. The more specific your types, the better the LLM calls your tools.
 
@@ -1292,11 +1343,16 @@ Both the `type` field and the string shorthand accept:
 
 ## Built-in Hooks
 
-kaboo-workflows ships with four hooks:
+kaboo-workflows exports eleven hook classes, but most are wired up for you when you enable
+the feature they serve — `HistoryHook`, `InterruptHook`, `ReferenceHook`, `SessionStateHook`,
+`ForwardedPropsHook`, `EventPublisher` and `MultiAgentStopGuard` all appear because of some
+other config key, not because you listed them. These four are the ones you add by hand:
 
 ### `MaxToolCallsGuard`
 
 Limits how many tool calls an agent can make in a single invocation. Two-phase behavior:
+
+`max_calls` defaults to **25**. Two-phase behaviour:
 
 1. **First violation** — injects a system message telling the LLM to stop and write a final answer.
 2. **Second violation** — if the LLM ignores the warning and calls another tool, the loop is terminated.
@@ -1567,17 +1623,18 @@ session_manager:
 
 The class must be a subclass of `strands.session.SessionManager`. When `type` is set, `provider` is ignored.
 
-## Swarm Agents and Sessions
+## Swarm and Graph Agents, and Sessions
 
-**Important limitation**: agents that participate in a Swarm orchestration **cannot** have a session manager. This is a strands-agents limitation. If a global session manager is set and an agent is used in a swarm, kaboo-workflows will raise a clear error:
+**Important limitation**: an agent that is a node in a **Swarm or a Graph** orchestration **cannot** have a session manager. This is a strands-agents limitation, and it applies to both shapes — a delegate orchestration is unaffected. The check runs at load time, so a global session manager plus a swarm or graph agent fails before the first run rather than during it:
 
 ```
-ConfigurationError: Agent 'drafter' is in swarm orchestration and cannot
+ConfigurationError: Agent 'drafter' is in a swarm or graph orchestration and cannot
 have a session manager (source: global 'session_manager:' in config).
+Strands does not yet support session persistence for Swarm or Graph node agents.
 Fix: Add 'session_manager: ~' to agent 'drafter' to opt out of the global default.
 ```
 
-The fix: add `session_manager: ~` to each swarm agent to opt out.
+The fix: add `session_manager: ~` to each swarm or graph node agent to opt out.
 
 > **Tips & Tricks**
 >
@@ -2191,7 +2248,7 @@ entry: review_team
 | `session_manager` | dict | No | | Swarm-level session manager |
 | `hooks` | list | No | | Swarm-level hooks |
 
-**Limitation**: All swarm nodes must be plain agents — no nested orchestrations. Node agents cannot have session managers (see [Chapter 7](Chapter_07.md#swarm-agents-and-sessions)).
+**Limitation**: All swarm nodes must be plain agents — no nested orchestrations. Node agents cannot have session managers, which applies to graph nodes too (see [Chapter 7](Chapter_07.md#swarm-and-graph-agents-and-sessions)).
 
 ## Mode: Graph
 
@@ -2475,10 +2532,10 @@ resolved = load(["base.yaml", "agents.yaml", "mcp.yaml"])
 
 **Singleton fields** use last-wins semantics:
 
-- `entry` — last file's value wins
-- `session_manager` — last file's value wins
-- `log_level` — last file's value wins
-- `version` — last file's value wins
+Everything that is not one of those five collections is a singleton, so the rule
+is simpler than a list: `entry`, `session_manager`, `history`, `attachments`,
+`runtime`, `telemetry`, `log_level` and `version` all take the last file's
+value.
 
 ## Duplicate Detection
 
@@ -2558,10 +2615,22 @@ A server whose runs bring their own workflow needs the opposite — **substituti
 
 | Section | Multi-file merge | Session overlay |
 |---------|------------------|-----------------|
-| `agents`, `orchestrations`, `entry` | merged; duplicate name is an error | **replaced** wholesale by the overlay |
+| `agents`, `orchestrations` | merged; duplicate name is an error | **replaced** wholesale by the overlay |
 | `models`, `mcp_clients` | merged; duplicate name is an error | **unioned**, and the overlay wins a name clash |
-| `runtime`, `attachments`, `log_level`, `session_manager` | last-wins | last-wins from the overlay |
+| `entry`, `runtime`, `attachments`, `telemetry`, `history`, `log_level`, `session_manager` | last-wins | last-wins from the overlay |
 | `mcp_servers` | merged | **rejected** in an overlay |
+
+Only `agents` and `orchestrations` are genuinely replaced. `entry` is last-wins
+like any other singleton, which usually looks the same — an overlay that brings
+its own agents names its own entry — but differs in one case worth knowing: an
+overlay that omits `entry` inherits the base's, and the base's entry agent has
+just been replaced out of existence. That fails at load rather than
+falling back silently:
+
+```
+SchemaValidationError: Invalid config at '': Value error, entry 'base_agent'
+is not defined under agents: or orchestrations:.
+```
 
 Replace rather than merge is what makes a submitted config a whole workflow instead of an addition to someone else's. Union on `models` and `mcp_clients` is what makes the base useful: it holds the shared infrastructure every workflow draws on by name, and an overlay may still add its own.
 
@@ -2617,7 +2686,14 @@ agents:
 
 ## Writing a Factory
 
-kaboo-workflows calls your factory with all standard agent parameters plus `agent_kwargs`:
+kaboo-workflows calls your factory with all standard agent parameters plus `agent_kwargs`. Precisely, and always, these:
+
+`name`, `agent_id` (both the YAML key), `model`, `system_prompt`, `description`,
+`tools`, `hooks`, `conversation_manager`, `session_manager` — then everything in
+`agent_kwargs` spread on top.
+
+So a factory needs `**kwargs` to absorb the ones it does not care about, and
+should name only the parameters it actually uses:
 
 ```python
 # factory.py
@@ -2754,7 +2830,26 @@ The `SESSION_START` payload wraps the full wired topology snapshot together with
 | `TOOL_END` | Tool execution completes |
 | `INTERRUPT` | Agent pauses for human input |
 | `AGENT_COMPLETE` | Agent finishes — `data` carries `usage` metrics, `text` (final output string), and `message` (raw message dict) |
-| `ERROR` | Model or execution error |
+| `ERROR` | Model or execution error — `data` carries `text` and `exception_type` |
+
+`AGENT_COMPLETE` is not guaranteed on every finish. When a run stops because an
+agent raised an interrupt, `INTERRUPT` is emitted and the publisher returns
+without a completion event, so a consumer that waits for `AGENT_COMPLETE` before
+releasing a turn will hang on any human-in-the-loop pause. Treat `INTERRUPT` as
+an equally valid end of turn.
+
+### Stream group events
+
+| Event Type | Description |
+|------------|-------------|
+| `STREAM_GROUP_START` | An agent in a `stream.group` begins; `data` carries `parent_group`, `tool_call_id` and the `task` it was handed |
+| `STREAM_GROUP_END` | That group finishes |
+
+Once an agent is in a group, **every** event it emits also carries
+`stream_group` and `stream_title` in `data`, so a consumer can route events to
+the right activity card without tracking the start event. A grouped agent that
+sets no `title` gets one derived from its name — `data_analyst` becomes
+`Data Analyst`.
 
 ### Multi-agent events
 
@@ -2795,9 +2890,27 @@ while (event := await queue.get()) is not None:
         process(event)
 ```
 
-## Configuring the Queue in YAML
+## What Is Configured Where
 
-Event streaming is configured in Python, not YAML — it's a runtime concern. But the **hooks** it installs (`EventPublisher`) listen to the same lifecycle events as your YAML-defined hooks. They coexist peacefully.
+The **queue** is a Python concern: you create it and call `wire_event_queue()`,
+and there is no YAML for it. The hooks that fills in (`EventPublisher`) listen to
+the same lifecycle events as your YAML-defined hooks, and the two coexist.
+
+How an agent's output is **labelled** in that stream, though, is YAML:
+
+```yaml
+agents:
+  researcher:
+    model: default
+    stream:
+      group: research      # groups this agent's events with others in `research`
+      title: Researching    # human-readable label for the group
+```
+
+`stream:` takes `group` and `title`, both optional. Agents sharing a `group`
+bracket their combined output with `STREAM_GROUP_START` and `STREAM_GROUP_END`
+events, which is how a UI renders several agents' work as one collapsible
+activity rather than an interleaved mess.
 
 > **Tips & Tricks**
 >
@@ -2895,7 +3008,7 @@ When you call `load("config.yaml")`, here's exactly what happens:
 
 ## Step 1: Parse Sources
 
-Each config source (file path or raw YAML string) is parsed with `yaml.safe_load()`. `Path` objects are always treated as files. Strings are files if the path exists on disk, otherwise parsed as inline YAML.
+Each config source (file path or raw YAML string) is parsed with `yaml.safe_load()`. `Path` objects are always treated as files. Strings are files if the path exists on disk, otherwise parsed as inline YAML — with two refinements worth knowing: a **multi-line** string is never probed as a path, and a single-line string that looks like a path (contains a separator, or ends `.yaml`/`.yml`) but does not exist raises `FileNotFoundError` rather than being parsed as YAML and failing confusingly later.
 
 ## Step 2: Strip Anchors and Interpolate Variables
 
@@ -2916,13 +3029,19 @@ Names in all collection sections are sanitized to `[a-zA-Z0-9_-]`. Cross-referen
 
 Collection sections are combined, duplicate names detected, singleton fields use last-wins.
 
-## Step 6: Validate Against Schema
+## Step 6: Normalize, Then Validate Against Schema
 
-The merged dict is validated against Pydantic models. Invalid fields, missing required values, wrong types — all caught here with clear error messages.
+`normalize()` runs first and checks `version`: only `"1"` exists, and anything else is rejected here rather than producing a confusing field error further down.
+
+The normalized dict is then validated against the Pydantic models. Invalid fields, missing required values, wrong types — all caught here. Only the **first** Pydantic error is surfaced, reshaped as `SchemaValidationError`:
+
+```
+Invalid config at 'agents.analyst.model': Input should be a valid string
+```
 
 ## Step 7: Validate References
 
-Cross-references are checked:
+Cross-references are checked, raising `UnresolvedReferenceError` — which, unlike the schema error above, lists the names that *are* available:
 - Agent `model` references → must exist in `models`
 - Agent `mcp` references → must exist in `mcp_clients`
 - MCP client `server` references → must exist in `mcp_servers`
@@ -2932,6 +3051,8 @@ Cross-references are checked:
 
 Models, MCP servers, MCP clients, and session managers are created as Python objects. Nothing is started yet.
 
+`resolve_infra()` also enforces one rule that is easier to catch here than later: a **global** `session_manager` with `provider: agentcore` is rejected, because that provider needs an `actor_id` unique to each agent.
+
 ## Step 9: Start MCP Lifecycle
 
 MCP servers are started in background threads. The pipeline waits for all servers to be ready (TCP port check). This happens **before** agent creation because `Agent.__init__` auto-starts MCP clients which need running servers.
@@ -2939,6 +3060,8 @@ MCP servers are started in background threads. The pipeline waits for all server
 ## Step 10: Create Agents
 
 Each agent definition is resolved: model looked up, tools loaded, hooks instantiated, MCP clients attached, session manager wired. Each agent is a fresh `strands.Agent` instance.
+
+Agents that are nodes of a **swarm or graph** are checked here and rejected if they carry a session manager, global or per-agent, because strands cannot persist those (see [Chapter 7](Chapter_07.md#swarm-and-graph-agents-and-sessions)).
 
 ## Step 11: Wire Orchestrations
 
@@ -2951,6 +3074,7 @@ The final `ResolvedConfig` has:
 - `orchestrators` — dict of all built orchestrations by name
 - `entry` — the entry point (Agent, Swarm, or Graph)
 - `mcp_lifecycle` — for managing shutdown
+- `app_config` — the validated `AppConfig` the rest was built from
 
 ## Advanced Topic: `load()` vs `load_config()` + `resolve_infra()` + `load_session()`
 
@@ -2964,14 +3088,17 @@ resolved = load("config.yaml")
 
 That one call runs the whole pipeline:
 
-1. Parse YAML
-2. Interpolate variables
-3. Sanitize names
-4. Merge files
-5. Validate schema + references
-6. Resolve infrastructure
-7. Start MCP lifecycle
-8. Create agents and orchestrations
+1. Parse YAML, then **per source**: pop `vars`, strip `x-*` anchors, interpolate, rewrite relative paths
+2. Sanitize names, per source
+3. Merge sources
+4. Normalize, validate schema, validate references
+5. Apply `log_level`
+6. Initialise telemetry — process-wide, and the first call wins, so a later `load()` cannot change it
+7. Resolve infrastructure
+8. Start MCP lifecycle
+9. Create agents and orchestrations
+
+Sanitizing and interpolating happen **before** the merge, per source, which is why one file's `vars` never leak into another's interpolation.
 
 But kaboo-workflows also exposes the lower-level split because **config parsing** and **session creation** are not always the same thing.
 
@@ -3083,7 +3210,9 @@ folder from `resolve_infra()`.
 
 The split above assumes one config, many sessions. Push it one step further and the config becomes per-request too: the run submits it, and the process only holds the base it layers over.
 
-That needs one more seam, because `load_config()` both parses *and* validates, and a base config that expects an overlay is not valid on its own — it may have no `entry`. So the two halves are separately available:
+That needs one more seam, because `load_config()` both parses *and* validates in one call, and here you need the raw parsed base kept around to merge each run's overlay into. So the two halves are separately available.
+
+The base is still validated at boot, and still needs an `entry` — `entry` is required and has no default. Give it a fallback agent, as [`examples/21_runtime_configs`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/21_runtime_configs) does, so the service is valid on its own and a run that submits no workflow still has something to answer with.
 
 ```{.python notest}
 from dataclasses import replace
@@ -3105,8 +3234,18 @@ infra.mcp_lifecycle.start(pin_clients=False)   # servers only; clients are per-r
 # Per run: merge, validate, resolve.
 config = load_session_config(base_raw, submitted_yaml, allowed_mcp_hosts=["gateway.internal"])
 clients = resolve_run_clients(config, infra)
-resolved = load_session(config, replace(infra, clients=clients.clients), session_id=thread_id)
+clients.start(pin_clients=False)               # the run owns these sessions
+resolved = load_session(
+    config,
+    replace(infra, clients=clients.clients, mcp_lifecycle=clients),
+    session_id=thread_id,
+)
 ```
+
+Both additions matter. Without `clients.start(...)`, the run's MCP sessions are
+never opened; without `mcp_lifecycle=clients`, `load_session` keeps the
+**boot-time** lifecycle, so shutting the run down closes nothing it opened and
+the sessions leak for the life of the process.
 
 `create_agui_app(config_path, session_config_key="workflow_config")` does exactly this for you, reading the overlay from `forwardedProps` and closing the run's clients when its stream ends. See [Chapter 13](Chapter_13.md) for the merge rules, and [`examples/21_runtime_configs`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/21_runtime_configs) for three runs resolving three different workflows against one base.
 
