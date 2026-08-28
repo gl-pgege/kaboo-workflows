@@ -15,10 +15,15 @@ orchestrations: {}    # Named orchestration definitions
 mcp_servers: {}       # Named MCP server definitions
 mcp_clients: {}       # Named MCP client connections
 session_manager: {}   # Global session manager
+history: false        # Default for per-agent history when an agent omits history:
 attachments: {}       # Global reference/attachment policy (AttachmentsDef)
 runtime: {}           # Runtime behavior toggles (RuntimeDef)
+telemetry: {}         # OpenTelemetry export (TelemetryDef), off by default
 entry: "name"         # Required: entry point agent or orchestration
 log_level: "WARNING"  # Optional: DEBUG, INFO, WARNING, ERROR
+
+# Top-level keys beginning x- are stripped before validation, like vars,
+# which is what makes them usable as YAML anchor scratch pads.
 ```
 
 ## ModelDef
@@ -46,8 +51,17 @@ agents:
     mcp: []                        # List of MCP client names
     tool_labels: {}                # Tool name -> display label mapping
     conversation_manager: null     # ConversationManagerDef
-    session_manager: null          # Per-agent SessionManagerDef (overrides global)
+    session_manager: null          # Per-agent SessionManagerDef (overrides global);
+                                   # ~ opts this agent out of the global one
+    stream: null                   # {group, title} — how this agent's output is
+                                   # labelled in the event stream (Chapter 15)
+    interrupt: null                # InterruptDef, or true for defaults (Chapter 6):
+                                   # {tools: [], ask_user: true, ttl_seconds: null}
+    history: null                  # true/false, or {enabled, group}; falls back to
+                                   # the root history: default
     attachments: null              # none | reference | inline | bool | {enabled, inline}
+    output_schema: null            # Import path to a Pydantic model the agent must
+                                   # return (module.path:Model)
 ```
 
 ## AttachmentsDef
@@ -86,6 +100,23 @@ runtime:
                                      # (system_prompt / model_id) per invocation.
                                      # Submit a config instead (Chapter 13).
 ```
+
+## TelemetryDef
+
+```yaml
+telemetry:
+  enabled: false                   # Opt in; KABOO_TELEMETRY_ENABLED overrides
+  service_name: kaboo-workflows    # OTel service name
+  console: false                   # Also export spans to stdout
+  sample_ratio: 1.0                # 0.0-1.0
+  trace_attributes: {}             # Static attributes on every span
+  otlp:
+    endpoint: null                 # Falls back to KABOO_OTLP_ENDPOINT / OTEL_*
+    headers: null                  # Falls back to KABOO_OTLP_HEADERS / OTEL_*
+```
+
+Telemetry is initialised once per process, first call wins, so it is not
+something a per-run submitted config can change.
 
 ## HookDef
 
@@ -136,9 +167,32 @@ mcp_clients:
     command: ["cmd", "arg"]        # Stdio subprocess command
 
     transport: null                # Override: "streamable-http" | "sse" | "stdio"
-    params: {}                     # Forwarded to strands MCPClient (prefix, startup_timeout, etc.)
-    transport_options: {}          # Transport-specific options (headers, timeout, etc.)
+    params: {}                     # Forwarded to strands MCPClient
+                                   # (prefix, startup_timeout, tool_filters)
+    transport_options: {}          # Transport-specific options. Declare once per
+                                   # client — a second block silently replaces it.
+    tool_labels: {}                # Tool name -> display label (agent labels win)
+    auth: null                     # Outbound auth; "relay" shorthand expands to the
+                                   # block below. Not valid with command:.
 ```
+
+### MCPClientAuthDef
+
+```yaml
+    auth:
+      type: relay | obo | m2m | static
+      params:
+        header: Authorization      # One name, or a list to send the token twice
+        scheme: Bearer             # "" sends the raw value
+        # relay:  token
+        # static: token (required)
+        # m2m:    token_url, client_id, client_secret, scope, audience, extra
+        # obo:    provider (required), region, scopes, workload_name,
+        #         workload_token, custom_parameters, force_authentication
+```
+
+`relay` and `obo` resolve the caller's identity from the request context, so they
+only work when clients are resolved per run. See [Chapter 9](Chapter_09.md).
 
 ## DelegateOrchestrationDef
 
@@ -163,6 +217,7 @@ orchestrations:
     mode: swarm
     agents: [agent1, agent2]       # Participating agents
     entry_name: "agent1"           # Starting agent
+    chat_output: null              # Member agent whose text becomes the reply
     max_handoffs: 20               # Max handoffs
     max_iterations: 20             # Max iterations
     execution_timeout: 900.0       # Total timeout (seconds)
@@ -178,6 +233,7 @@ orchestrations:
   name:
     mode: graph
     entry_name: "start_node"       # Node with no incoming edges
+    chat_output: null              # Node whose text becomes the reply
     edges:
       - from: "node_a"
         to: "node_b"

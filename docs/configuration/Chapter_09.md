@@ -110,7 +110,26 @@ The `params` dict on an MCP client is forwarded to strands' `MCPClient` construc
 |-------|------|-------------|
 | `prefix` | string | Prefix all tool names from this server (e.g., `calc_add`) |
 | `startup_timeout` | number | Seconds to wait for the server to respond |
-| `tool_filters` | list | Filter which tools to expose |
+| `tool_filters` | mapping | Restrict which of the server's tools the agent sees |
+
+`tool_filters` is forwarded to strands rather than implemented here, so its
+matching rules are strands'. In practice that means **exact names, not globs**:
+
+```yaml
+mcp_clients:
+  platform_read:
+    url: ${GATEWAY_URL}
+    params:
+      tool_filters:
+        allowed:
+          - platform___get_record
+          - platform___list_records
+```
+
+Filtering one client down to a read-only subset, and pointing a second client at
+the same URL with the full set, is how one server becomes two capability levels.
+Give each to a different agent — an agent holding both registers the overlapping
+tools twice under one name.
 
 ## Client `transport_options`
 
@@ -127,9 +146,151 @@ mcp_clients:
 
 Available options vary by transport:
 
-- **stdio**: `env`, `cwd`, `encoding`
-- **sse**: `headers`, `timeout`, `sse_read_timeout`
-- **streamable-http**: `headers`, `http_client`, `terminate_on_close`
+- **stdio**: `env`, `cwd`, `encoding`, `encoding_error_handler`
+- **sse**: `headers`, `timeout` (default 5), `sse_read_timeout` (default 300), `auth`, `httpx_client_factory`
+- **streamable-http**: `headers`, `http_client`, `terminate_on_close`, `timeout`
+
+### Timeouts on `streamable-http`
+
+`timeout` takes either a number of seconds applied to every phase, or a dict
+naming httpx phases individually. **Phases you do not name keep httpx's 5s
+default**, which is the trap: a tool that streams for minutes needs `read`
+raised explicitly.
+
+```yaml
+mcp_clients:
+  slow_queries:
+    url: ${GATEWAY_URL}
+    transport: streamable-http
+    transport_options:
+      terminate_on_close: false
+      timeout: { read: 840 }        # connect/write/pool stay at 5s
+```
+
+Declare `transport_options` **once per client**. YAML mappings are last-wins, so
+a second `transport_options:` further down the same client silently replaces the
+first — including a carefully raised `read` timeout — with no warning from the
+parser.
+
+When you pass your own `http_client`, both `headers` and `timeout` are ignored;
+configure them on the client you supply.
+
+## Outbound Auth — the `auth:` Field
+
+`transport_options.headers` is a fixed dict, decided when the config is parsed.
+That is enough for a static API key and useless for anything that has to be
+resolved per call — a caller's own token, or one that expires. `auth:` is the
+declarative form for those.
+
+```yaml
+mcp_clients:
+  platform:
+    url: ${GATEWAY_URL}
+    transport: streamable-http
+    auth:
+      type: relay
+      params:
+        header: Authorization
+```
+
+`auth: relay` is shorthand for the same strategy with no params, which lands in
+the same place because `Authorization` is the default header. `auth:` is not
+valid alongside `command:` — a stdio subprocess has no HTTP request to attach a
+header to.
+
+### The four strategies
+
+| `type` | Whose identity | Where the token comes from | Safe on a shared client |
+|--------|----------------|----------------------------|-------------------------|
+| `relay` | The inbound caller | The current request's principal, unchanged | **No** — see below |
+| `obo` | The inbound caller, exchanged | AgentCore Identity, two exchanges | **No** — see below |
+| `m2m` | The workflow service itself | OAuth2 client-credentials grant, cached | Yes |
+| `static` | Whoever the token belongs to | A fixed value you supply | Yes |
+
+`relay` and `obo` resolve identity from the ambient request context, which
+strands snapshots when a client **starts**. A client started at boot has no
+caller to relay, so these two only work when clients are resolved per run — that
+is, when the app is serving runs that submit their own config
+(`session_config_key=`, [Chapter 17](Chapter_17.md)). `m2m` and `static` have no
+such constraint because they do not depend on who is calling.
+
+### Common params
+
+Every strategy accepts these:
+
+| Param | Default | Purpose |
+|-------|---------|---------|
+| `header` | `Authorization` | Header name, or a **list** of names |
+| `scheme` | `Bearer` | Prefix before the token; `""` sends the raw value |
+
+`header` accepting a list (0.19.0) exists for gateways that consume the header
+they authenticate on. A managed gateway that validates the caller on
+`Authorization` and then replaces it with its own outbound credential leaves the
+target seeing nothing — so the token has to be sent twice, under two names:
+
+```yaml
+    auth:
+      type: relay
+      params:
+        header:
+          - Authorization                 # the gateway authenticates on this
+          - x-kaboo-run-token             # the target reads this one
+```
+
+The same value is written to every name listed. An empty list is rejected.
+
+### Per-strategy params
+
+**`relay`** — forward the caller's token untouched.
+
+| Param | Default | Purpose |
+|-------|---------|---------|
+| `token` | principal's token | Explicit override, for a client bound to a captured token |
+
+**`static`** — a fixed token on every request.
+
+| Param | Default | Purpose |
+|-------|---------|---------|
+| `token` | required | The value to send |
+
+**`m2m`** — the service's own machine identity, cached until shortly before expiry.
+
+| Param | Default | Purpose |
+|-------|---------|---------|
+| `token_url` | required | OAuth2 token endpoint |
+| `client_id` / `client_secret` | required | Client credentials |
+| `scope` | none | Space-delimited scopes |
+| `audience` | none | Audience parameter (e.g. Auth0) |
+| `extra` | `{}` | Extra form fields on the token request |
+
+**`obo`** — AgentCore On-Behalf-Of exchange, so a downstream resource sees the
+end user rather than the agent. Two exchanges happen, both inside AgentCore
+Identity: the inbound user token becomes a *workload access token*
+(`GetWorkloadAccessTokenForJWT`), which is then exchanged for a downstream token
+against the named credential provider (`GetResourceOauth2Token`). Downstream
+tokens are cached per workload token until shortly before expiry.
+
+| Param | Default | Purpose |
+|-------|---------|---------|
+| `provider` | required | AgentCore OAuth2 credential provider to exchange for |
+| `region` | `us-east-1` | AgentCore control-plane region |
+| `scopes` | `[]` | Scopes to request |
+| `workload_name` | none | Mint the workload token here. Leave unset when the runtime already supplies it on the request |
+| `workload_token` | none | Explicit workload token, bypassing the principal |
+| `custom_parameters` | `{}` | Provider-specific extras forwarded to the exchange |
+| `force_authentication` | `false` | Skip AgentCore's cached token |
+
+Provider differences belong in `custom_parameters` rather than in code — an
+Entra ID provider gets its `requested_token_use=on_behalf_of` that way.
+
+### How it reaches the wire
+
+For `streamable-http`, the strategy is attached to a dedicated `httpx.AsyncClient`
+built for that MCP client; for `sse` it becomes `transport_options.auth`. Either
+way the token is resolved **per request**, not once at parse time. If the
+strategy resolves to no token — `relay` with no principal in context, most often
+— the header is simply omitted and the request goes out unauthenticated, so a
+misconfigured relay looks like a 401 from the target rather than an error here.
 
 ## Lifecycle Management
 

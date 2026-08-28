@@ -43,7 +43,16 @@ Here is the full list of top-level keys you can put in a config file:
 | `mcp_clients` | dict | No | Named MCP client connections. |
 | `session_manager` | dict | No | Global session manager (inherited by all agents). |
 | `entry` | string | **Yes** | Name of the agent or orchestration to use as the entry point. |
+| `history` | bool | No | Default for per-agent conversation history when an agent omits `history:`. Default: `false`. See [Chapter 7](Chapter_07.md). |
+| `attachments` | dict | No | How agents receive files and references. Default: reference mode with the fetch tool on. See [Chapter 19](Chapter_19.md). |
+| `telemetry` | dict | No | OpenTelemetry export. Off unless `enabled: true`. See [Chapter 15](Chapter_15.md). |
+| `runtime` | dict | No | Runtime behaviour switches (`allow_invocation_overrides`, `persist_session_state`). |
 | `log_level` | string | No | Logging level for kaboo_workflows. Default: `"WARNING"`. |
+
+Two keys behave differently from the rest. `vars` is consumed during
+interpolation and removed before validation, so it never reaches the config
+object. Top-level keys beginning `x-` are stripped the same way, which is what
+makes them usable as anchor scratch pads ([Chapter 4](Chapter_04.md)).
 
 Sections marked as **dict** are name-keyed dictionaries — you pick the name, and it becomes the identifier:
 

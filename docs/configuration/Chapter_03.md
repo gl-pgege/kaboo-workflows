@@ -101,6 +101,49 @@ Use ${REQUIRED_MODEL:-fallback} to set a fallback value.
 
 This is intentional — it forces explicit configuration for deployment-critical values.
 
+### Set-but-empty is not unset
+
+The check is whether the name **exists**, not whether it has a useful value. An
+environment variable set to the empty string exists, so its default is *not*
+applied and the empty string is substituted:
+
+```bash
+GATEWAY_URL= python app.py      # ${GATEWAY_URL:-http://localhost:8090} -> ""
+```
+
+That is why a variable you want to be mandatory is better left out of `.env`
+entirely than written with a blank value — blank passes the check and fails
+later, somewhere less obvious.
+
+## Escaping: Passing `${...}` Through Untouched
+
+Some downstream consumer may have its own `${...}` syntax that must survive
+interpolation — a prompt template filled in later, for instance. Write `$${` to
+emit a literal `${`:
+
+```yaml
+agents:
+  assistant:
+    system_prompt: "Substitute $${user_name} yourself, later."
+```
+
+That loads as `Substitute ${user_name} yourself, later.` A `$$` not followed by
+`{` is left exactly as written, so ordinary shell or currency text needs no
+special handling.
+
+## What Interpolation Applies To
+
+Interpolation runs **after** the YAML is parsed, walking every string in the
+tree — keys' values, list items, nested dicts alike. Two consequences are worth
+knowing:
+
+- A value that is *exactly* `${VAR}` keeps its native type, so `${MAX_TOKENS}`
+  resolving to `1024` stays an integer rather than becoming `"1024"`.
+- A variable embedded in a larger string is coerced to text and concatenated,
+  as you would expect.
+
+Lookup order is `vars` first, then the environment, then the `:-` default.
+
 ## Per-Source Interpolation
 
 When you use [multi-file configs](Chapter_13.md), each file's `vars` block is interpolated independently before merging. File A's vars don't leak into File B's interpolation.

@@ -98,6 +98,7 @@ entry: review_team
 | `mode` | `"swarm"` | Yes | | |
 | `agents` | list[str] | Yes | | Agent names participating in the swarm |
 | `entry_name` | string | Yes | | Which agent starts first |
+| `chat_output` | string | No | | Member agent whose streamed text becomes the assistant reply when the swarm is an AG-UI entry point. Omitted, the adapter emits the final active node's text once the run completes. Must name one of `agents`. |
 | `max_handoffs` | int | No | 20 | Maximum handoffs before termination |
 | `max_iterations` | int | No | 20 | Maximum iterations |
 | `execution_timeout` | float | No | 900.0 | Total execution timeout (seconds) |
@@ -146,6 +147,7 @@ entry: pipeline
 |-------|------|----------|---------|-------------|
 | `mode` | `"graph"` | Yes | | |
 | `entry_name` | string | Yes | | Starting node (must have no incoming edges) |
+| `chat_output` | string | No | | Node whose streamed text becomes the assistant reply when the graph is an AG-UI entry point. Must name a node in the graph. |
 | `edges` | list | Yes | | Edge definitions |
 | `edges[].from` | string | Yes | | Source node name |
 | `edges[].to` | string | Yes | | Target node name |
