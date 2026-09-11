@@ -88,9 +88,7 @@ def _capture_from_state(
     # tool call named after the connection AND as an activity group — so drop
     # entry entries that match a group's agent to avoid double counting.
     group_agents = {str(g.get("agentName", "")) for g in groups.values()}
-    tools: list[ToolInvocation] = [
-        t for t in (entry_tools or []) if t.name not in group_agents
-    ]
+    tools: list[ToolInvocation] = [t for t in (entry_tools or []) if t.name not in group_agents]
     structured: list[dict[str, Any]] = []
     for group in groups.values():
         agent = str(group.get("agentName", ""))

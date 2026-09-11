@@ -24,7 +24,7 @@ The curated top-level exports, for the common case:
 - **MCP**: `create_mcp_client`, `create_mcp_server`, `MCPLifecycle`
 - **Hooks**: `EventPublisher`, `MaxToolCallsGuard`, `StopGuard`, `ToolNameSanitizer`
 - **Auth**: `Principal`, `get_auth_context`, `set_auth_context`, `build_auth`,
-  `RelayTokenAuth`, `OBOTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`
+  `RelayTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`
 - **Forwarded props**: `get_forwarded_props`, `set_forwarded_props`
 - **Telemetry**: `init_telemetry`, `telemetry_enabled`, `current_trace_id`
 - **Rendering / CLI**: `AnsiRenderer`, `cli_errors`
@@ -43,7 +43,7 @@ The curated top-level exports, for the common case:
 
 The outbound MCP auth strategies an `auth:` block resolves to
 ([Chapter 9](configuration/Chapter_09.md#outbound-auth--the-auth-field)):
-`RelayTokenAuth`, `OBOTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`,
+`RelayTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`,
 plus `build_auth` to construct one from a name and params, and
 `apply_auth_to_transport_options` to wire one into a transport.
 

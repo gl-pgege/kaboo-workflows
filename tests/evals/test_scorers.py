@@ -7,7 +7,7 @@ import pytest
 from kaboo_workflows.evals.capture import RunCapture, ToolInvocation
 from kaboo_workflows.evals.dataset import EvalItem
 from kaboo_workflows.evals.judge import JudgeScorer, _extract_json
-from kaboo_workflows.evals.scorers import RunSucceededScorer, build_scorer
+from kaboo_workflows.evals.scorers import build_scorer
 
 ITEM = EvalItem(id="i1", input="question")
 

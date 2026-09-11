@@ -13,9 +13,7 @@ def test_escaped_reference_is_left_literal():
 
 
 def test_escape_and_real_reference_in_one_string():
-    result = interpolate(
-        {"k": "$${literal} and ${REAL}"}, variables={}, env={"REAL": "resolved"}
-    )
+    result = interpolate({"k": "$${literal} and ${REAL}"}, variables={}, env={"REAL": "resolved"})
     assert result["k"] == "${literal} and resolved"
 
 

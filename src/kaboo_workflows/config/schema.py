@@ -93,13 +93,6 @@ class MCPClientAuthDef(BaseModel):
 
     - ``relay`` — forward the inbound caller token (see
       :class:`~kaboo_workflows.auth.RelayTokenAuth`).
-    - ``obo`` — AgentCore On-Behalf-Of exchange
-      (:class:`~kaboo_workflows.auth.OBOTokenAuth`); requires ``provider``.
-      Provider-specific differences stay in ``params``: ``workload_name`` to
-      mint the workload access token from the inbound user token, and
-      ``custom_parameters`` for anything the identity provider expects on the
-      exchange (an Entra ID provider wants
-      ``requested_token_use: on_behalf_of``).
     - ``m2m`` — client-credentials machine token
       (:class:`~kaboo_workflows.auth.M2MClientCredentialsAuth`).
     - ``static`` — a fixed token (:class:`~kaboo_workflows.auth.StaticTokenAuth`).
@@ -110,14 +103,14 @@ class MCPClientAuthDef(BaseModel):
     and then replaces that header with its own outbound credential, so a token
     the target must also see has to be sent twice.
 
-    Note: ``relay`` / ``obo`` derive from the *per-request* caller identity and
+    Note: ``relay`` derives from the *per-request* caller identity and
     are reliable only when the MCP client is created per request (started inside
     the request context). On a long-lived shared client (``create_agui_app``),
     prefer ``static`` / ``m2m`` (machine identity) unless the deployment is
     process-per-session (e.g. AgentCore Runtime).
     """
 
-    type: Literal["relay", "obo", "m2m", "static"]
+    type: Literal["relay", "m2m", "static"]
     params: dict[str, Any] = Field(default_factory=dict)
 
 

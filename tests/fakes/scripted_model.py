@@ -57,8 +57,7 @@ def _validate_tool_pairing(messages: Any) -> None:
             if isinstance(b, dict) and "toolResult" in b
         ]
         if result_ids and (
-            len(result_ids) > len(prev_use_ids)
-            or any(r not in prev_use_ids for r in result_ids)
+            len(result_ids) > len(prev_use_ids) or any(r not in prev_use_ids for r in result_ids)
         ):
             raise RuntimeError(
                 f"ValidationException: The number of toolResult blocks at "
@@ -66,9 +65,7 @@ def _validate_tool_pairing(messages: Any) -> None:
                 "of previous turn."
             )
         prev_use_ids = [
-            b["toolUse"].get("toolUseId")
-            for b in content
-            if isinstance(b, dict) and "toolUse" in b
+            b["toolUse"].get("toolUseId") for b in content if isinstance(b, dict) and "toolUse" in b
         ]
 
 

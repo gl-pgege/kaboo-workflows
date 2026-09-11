@@ -23,7 +23,7 @@ dataset-run uploads behind the ``langfuse`` extra.
 from .capture import EvalPipeline, RunCapture
 from .dataset import EvalDataset, EvalItem, load_eval_dataset
 from .runner import EvalReport, ItemOutcome, assert_eval, run_eval
-from .scorers import ScoreResult, Scorer, build_scorer
+from .scorers import Scorer, ScoreResult, build_scorer
 
 __all__ = [
     "EvalDataset",

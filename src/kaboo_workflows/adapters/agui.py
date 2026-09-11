@@ -934,7 +934,7 @@ def _add_kaboo_endpoint(
 
         # Inbound auth: validate/extract the caller identity and bind it to the
         # request context BEFORE any run task or MCP client starts, so outbound
-        # auth strategies (relay / OBO) and per-request MCP clients inherit it
+        # auth strategies (relay) and per-request MCP clients inherit it
         # via contextvars.copy_context(). A raise here rejects the request.
         await _verify_inbound(auth, request)
 
@@ -975,7 +975,7 @@ def _add_kaboo_endpoint(
         set_inline_requests(set())
 
         # Build the session last, so anything it starts — notably MCP clients,
-        # whose relay/OBO strategies snapshot contextvars at start — sees the
+        # whose relay strategy snapshots contextvars at start — sees the
         # caller's identity and this run's props.
         try:
             session = resolve_session(input_data)

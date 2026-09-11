@@ -180,19 +180,17 @@ mcp_clients:
 
 ```yaml
     auth:
-      type: relay | obo | m2m | static
+      type: relay | m2m | static
       params:
         header: Authorization      # One name, or a list to send the token twice
         scheme: Bearer             # "" sends the raw value
         # relay:  token
         # static: token (required)
         # m2m:    token_url, client_id, client_secret, scope, audience, extra
-        # obo:    provider (required), region, scopes, workload_name,
-        #         workload_token, custom_parameters, force_authentication
 ```
 
-`relay` and `obo` resolve the caller's identity from the request context, so they
-only work when clients are resolved per run. See [Chapter 9](Chapter_09.md).
+`relay` resolves the caller's identity from the request context, so it only
+works when clients are resolved per run. See [Chapter 9](Chapter_09.md).
 
 ## DelegateOrchestrationDef
 

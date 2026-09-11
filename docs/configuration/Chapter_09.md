@@ -198,21 +198,27 @@ the same place because `Authorization` is the default header. `auth:` is not
 valid alongside `command:` — a stdio subprocess has no HTTP request to attach a
 header to.
 
-### The four strategies
+### The three strategies
 
 | `type` | Whose identity | Where the token comes from | Safe on a shared client |
 |--------|----------------|----------------------------|-------------------------|
 | `relay` | The inbound caller | The current request's principal, unchanged | **No** — see below |
-| `obo` | The inbound caller, exchanged | AgentCore Identity, two exchanges | **No** — see below |
 | `m2m` | The workflow service itself | OAuth2 client-credentials grant, cached | Yes |
 | `static` | Whoever the token belongs to | A fixed value you supply | Yes |
 
-`relay` and `obo` resolve identity from the ambient request context, which
-strands snapshots when a client **starts**. A client started at boot has no
-caller to relay, so these two only work when clients are resolved per run — that
+`relay` resolves identity from the ambient request context, which strands
+snapshots when a client **starts**. A client started at boot has no caller to
+relay, so it only works when clients are resolved per run — that
 is, when the app is serving runs that submit their own config
 (`session_config_key=`, [Chapter 17](Chapter_17.md)). `m2m` and `static` have no
 such constraint because they do not depend on who is calling.
+
+There is deliberately no on-behalf-of strategy. Token exchange belongs to
+whatever sits between the agent and the service — a gateway can exchange
+against an authorization server that knows what the downstream audience should
+be, where this library would have to be told, per deployment, which of several
+audiences each tool call needed. An `obo` strategy existed through 0.19.0 and
+was removed in 0.20.0; `build_auth("obo", ...)` now raises.
 
 ### Common params
 
@@ -263,26 +269,6 @@ The same value is written to every name listed. An empty list is rejected.
 | `audience` | none | Audience parameter (e.g. Auth0) |
 | `extra` | `{}` | Extra form fields on the token request |
 
-**`obo`** — AgentCore On-Behalf-Of exchange, so a downstream resource sees the
-end user rather than the agent. Two exchanges happen, both inside AgentCore
-Identity: the inbound user token becomes a *workload access token*
-(`GetWorkloadAccessTokenForJWT`), which is then exchanged for a downstream token
-against the named credential provider (`GetResourceOauth2Token`). Downstream
-tokens are cached per workload token until shortly before expiry.
-
-| Param | Default | Purpose |
-|-------|---------|---------|
-| `provider` | required | AgentCore OAuth2 credential provider to exchange for |
-| `region` | `us-east-1` | AgentCore control-plane region |
-| `scopes` | `[]` | Scopes to request |
-| `workload_name` | none | Mint the workload token here. Leave unset when the runtime already supplies it on the request |
-| `workload_token` | none | Explicit workload token, bypassing the principal |
-| `custom_parameters` | `{}` | Provider-specific extras forwarded to the exchange |
-| `force_authentication` | `false` | Skip AgentCore's cached token |
-
-Provider differences belong in `custom_parameters` rather than in code — an
-Entra ID provider gets its `requested_token_use=on_behalf_of` that way.
-
 ### How it reaches the wire
 
 For `streamable-http`, the strategy is attached to a dedicated `httpx.AsyncClient`
@@ -328,7 +314,7 @@ A **server** is a process, so it belongs to the process that started it. A **cli
 - Serving one fixed config (`create_agui_app("config.yaml")`), clients are opened once and held for the process, so every run reuses them.
 - Serving runs that submit their own config (`session_config_key=`, see [Chapter 17](Chapter_17.md)), each run resolves its own clients and they are closed when its stream ends.
 
-Per-run clients cost a handshake per client per turn, which is small beside a model call, and they buy two things worth more than that. `MCPClientError: the client session is not running` stops being possible rather than being retried, because a session that cannot outlive its run cannot be found dead at the start of the next one. And `relay` / `obo` auth becomes reachable, because strands captures the ambient identity when a client *starts* — a client started at boot has no caller to relay.
+Per-run clients cost a handshake per client per turn, which is small beside a model call, and they buy two things worth more than that. `MCPClientError: the client session is not running` stops being possible rather than being retried, because a session that cannot outlive its run cannot be found dead at the start of the next one. And `relay` auth becomes reachable, because strands captures the ambient identity when a client *starts* — a client started at boot has no caller to relay.
 
 Servers are still shared either way, so a `server:` client declared by a run binds to the process's already-running server.
 

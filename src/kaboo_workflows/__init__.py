@@ -11,7 +11,6 @@ from ._context import (
 )
 from .auth import (
     M2MClientCredentialsAuth,
-    OBOTokenAuth,
     RelayTokenAuth,
     StaticTokenAuth,
     build_auth,
@@ -64,7 +63,6 @@ __all__ = [
     "M2MClientCredentialsAuth",
     "MCPLifecycle",
     "MaxToolCallsGuard",
-    "OBOTokenAuth",
     "OrchestrationBuilder",
     "Principal",
     "RelayTokenAuth",

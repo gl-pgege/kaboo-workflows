@@ -8,7 +8,7 @@ declaratively via the ``auth:`` field on an ``mcp_clients:`` entry.
 Two identity sources are supported per strategy:
 
 - **Per-request identity** — the inbound :class:`~kaboo_workflows._context.Principal`
-  bound by the AG-UI server (``relay`` / ``obo``). Because strands snapshots the
+  bound by the AG-UI server (``relay``). Because strands snapshots the
   context when an MCP client *starts* (``contextvars.copy_context()``), this is
   reliable only when the client is created/started inside the request's context
   (a per-request client), not for a long-lived shared client started at boot.
@@ -149,129 +149,6 @@ class StaticTokenAuth(_BearerAuth):
         return self._value
 
 
-class OBOTokenAuth(_BearerAuth):
-    """AgentCore On-Behalf-Of token exchange for a downstream resource.
-
-    Two exchanges happen, and both run inside AgentCore Identity:
-
-    1. The inbound end-user token is exchanged for a *workload access token*
-       (``GetWorkloadAccessTokenForJWT``), which is what binds this agent's
-       workload identity to that user. Set ``workload_name`` to perform it here;
-       leave it unset when the runtime already hands the workload token in on
-       the request, in which case it is read from the principal.
-    2. The workload access token is exchanged for a downstream access token
-       (``GetResourceOauth2Token``) against the named credential provider.
-
-    Downstream tokens are cached per workload token until shortly before expiry.
-
-    Provider differences belong in configuration, not in this class:
-    ``custom_parameters`` is passed through to the exchange, which is how an
-    Entra ID provider gets its ``requested_token_use=on_behalf_of``, and
-    ``header`` / ``scheme`` decide how the result is presented downstream.
-
-    Args:
-        provider: Name of the AgentCore OAuth2 credential provider (the
-            downstream resource) to exchange for.
-        region: AWS region of the AgentCore control plane.
-        scopes: OAuth2 scopes to request. The API requires the field, so an
-            empty list is sent when none are given.
-        workload_name: Workload identity to mint a workload access token for
-            from the inbound user token. Unset means the inbound request is
-            expected to carry the workload token already.
-        workload_token: Explicit workload token (bypasses the principal).
-        custom_parameters: Extra provider-specific parameters forwarded to the
-            token exchange.
-        force_authentication: Skip AgentCore's cached token for this identity.
-        header: Header to set, or several (default ``Authorization``).
-        scheme: Auth scheme prefix (default ``Bearer``).
-    """
-
-    def __init__(
-        self,
-        *,
-        provider: str,
-        region: str = "us-east-1",
-        scopes: list[str] | None = None,
-        workload_name: str | None = None,
-        workload_token: str | None = None,
-        custom_parameters: dict[str, str] | None = None,
-        force_authentication: bool = False,
-        header: str | Sequence[str] = "Authorization",
-        scheme: str = "Bearer",
-    ) -> None:
-        self._provider = provider
-        self._region = region
-        self._scopes = scopes or []
-        self._workload_name = workload_name
-        self._explicit_workload = workload_token
-        self._custom_parameters = custom_parameters or {}
-        self._force = force_authentication
-        self.header_names = _header_names(header)
-        self.scheme = scheme
-        self._client: Any = None
-        self._cache: dict[str, tuple[str, float]] = {}
-        self._workload_cache: dict[str, str] = {}
-        self._lock = threading.Lock()
-
-    def _boto(self) -> Any:
-        if self._client is None:
-            import boto3
-
-            self._client = boto3.client("bedrock-agentcore", region_name=self._region)
-        return self._client
-
-    def _workload_token(self) -> str | None:
-        if self._explicit_workload is not None:
-            return self._explicit_workload
-        principal = get_auth_context()
-        if principal is None:
-            return None
-        inbound = principal.token or principal.headers.get("WorkloadAccessToken")
-        if not inbound or not self._workload_name:
-            return inbound
-        cached = self._workload_cache.get(inbound)
-        if cached:
-            return cached
-        resp = self._boto().get_workload_access_token_for_jwt(
-            workloadName=self._workload_name, userToken=inbound
-        )
-        workload: str = resp["workloadAccessToken"]
-        self._workload_cache[inbound] = workload
-        return workload
-
-    def _token(self) -> str | None:
-        workload = self._workload_token()
-        if not workload:
-            return None
-        now = time.time()
-        cached = self._cache.get(workload)
-        if cached and cached[1] > now + _LEEWAY_SECONDS:
-            return cached[0]
-        with self._lock:
-            cached = self._cache.get(workload)
-            if cached and cached[1] > now + _LEEWAY_SECONDS:
-                return cached[0]
-            kwargs: dict[str, Any] = {
-                "workloadIdentityToken": workload,
-                "resourceCredentialProviderName": self._provider,
-                "oauth2Flow": "ON_BEHALF_OF_TOKEN_EXCHANGE",
-                "scopes": self._scopes,
-            }
-            if self._custom_parameters:
-                kwargs["customParameters"] = self._custom_parameters
-            if self._force:
-                kwargs["forceAuthentication"] = True
-            resp = self._boto().get_resource_oauth2_token(**kwargs)
-            token: str = resp["accessToken"]
-            expires_in = float(resp.get("expiresIn", 3600))
-            self._cache[workload] = (token, now + expires_in)
-            return token
-
-    async def _token_async(self) -> str | None:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._token)
-
-
 class M2MClientCredentialsAuth(_BearerAuth):
     """OAuth2 client-credentials (machine-to-machine) token for MCP calls.
 
@@ -351,7 +228,6 @@ class M2MClientCredentialsAuth(_BearerAuth):
 _STRATEGIES: dict[str, type[_BearerAuth]] = {
     "relay": RelayTokenAuth,
     "static": StaticTokenAuth,
-    "obo": OBOTokenAuth,
     "m2m": M2MClientCredentialsAuth,
 }
 
@@ -360,7 +236,7 @@ def build_auth(strategy: str, params: dict[str, Any] | None = None) -> httpx.Aut
     """Build an outbound MCP auth strategy from a name + params.
 
     Args:
-        strategy: One of ``relay``, ``static``, ``obo``, ``m2m``.
+        strategy: One of ``relay``, ``static``, ``m2m``.
         params: Constructor keyword arguments for the strategy.
 
     Returns:

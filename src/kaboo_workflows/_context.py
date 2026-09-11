@@ -301,7 +301,7 @@ class Principal:
 
     Produced by an inbound auth verifier (see
     :func:`~kaboo_workflows.adapters.agui.create_agui_app`) and bound to the
-    request context so outbound MCP auth strategies (relay / OBO) can derive a
+    request context so outbound MCP auth strategies (relay) can derive a
     downstream token from the same identity.
 
     Attributes:

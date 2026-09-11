@@ -9,9 +9,9 @@ Three inbound styles are shown; pick one with ``KABOO_AUTH_MODE``:
 
     relay  — verify the user JWT (signature/claims), then forward it to the MCP
              (``auth: relay`` in config.yaml).
-    obo    — read the AgentCore WorkloadAccessToken (already validated by the
-             Runtime authorizer) and carry it so the OBO strategy can exchange
-             it (switch config.yaml to ``auth: obo``).
+    workload — read the AgentCore WorkloadAccessToken (already validated by the
+             Runtime authorizer) and relay that instead of the raw user JWT.
+             Config stays on ``auth: relay``; only the principal differs.
     m2m    — validate the caller's M2M token; the outbound call uses the
              service's own machine identity (switch config.yaml to ``auth: m2m``).
 
@@ -19,8 +19,8 @@ Run:
     KABOO_AUTH_MODE=relay uv run uvicorn examples.agentcore.serve_agui:app --port 8080
 
 Note on deployment: ``create_agui_app`` starts one shared MCP client at boot and
-strands snapshots the context when that client starts. ``relay`` / ``obo`` carry
-*per-request* identity, so on a shared long-lived client they are reliable only
+strands snapshots the context when that client starts. ``relay`` carries
+*per-request* identity, so on a shared long-lived client it is reliable only
 when the process serves one user/session (e.g. AgentCore Runtime: one microVM
 per session). For a multi-tenant standalone process, use ``server_custom.py``
 which creates an isolated per-request MCP client. ``m2m`` / ``static`` are
@@ -59,7 +59,7 @@ def verify_jwt_relay(request: Request) -> Principal:
 
 
 def read_workload_token(request: Request) -> Principal:
-    """Read the AgentCore WorkloadAccessToken for an OBO exchange (``auth: obo``).
+    """Read the AgentCore WorkloadAccessToken and relay it (``auth: relay``).
 
     On AgentCore Runtime the token is already validated by the inbound
     authorizer and injected as a header, so we only extract it here.
@@ -97,7 +97,7 @@ def _decode_unverified(token: str) -> dict[str, object]:
 
 _VERIFIERS = {
     "relay": verify_jwt_relay,
-    "obo": read_workload_token,
+    "workload": read_workload_token,
     "m2m": verify_m2m,
 }
 

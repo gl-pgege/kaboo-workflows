@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from .strategies import (
     M2MClientCredentialsAuth,
-    OBOTokenAuth,
     RelayTokenAuth,
     StaticTokenAuth,
     apply_auth_to_transport_options,
@@ -18,7 +17,6 @@ from .strategies import (
 
 __all__ = [
     "M2MClientCredentialsAuth",
-    "OBOTokenAuth",
     "RelayTokenAuth",
     "StaticTokenAuth",
     "apply_auth_to_transport_options",

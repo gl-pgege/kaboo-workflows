@@ -16,7 +16,6 @@ mcp_clients:
   #
   # auth strategies (pick one):
   #   relay   — forward the inbound caller token (per-request identity)
-  #   obo     — AgentCore On-Behalf-Of exchange for a downstream resource
   #   m2m     — client-credentials machine token (request-independent)
   #   static  — a fixed API key / bearer
   gateway:
@@ -24,12 +23,9 @@ mcp_clients:
     transport: streamable-http
     auth: relay
 
-    # OBO variant — exchange the caller's WorkloadAccessToken for a downstream token:
-    # auth:
-    #   type: obo
-    #   params:
-    #     provider: ${OBO_PROVIDER_NAME}
-    #     region: us-east-1
+    # Token exchange is not a strategy here: a managed gateway exchanges the
+    # relayed token for a downstream one itself, against an authorization
+    # server that knows which audience the target expects.
 
     # M2M variant — the workflow service's own machine identity:
     # auth:
