@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## v0.21.0 (2026-09-20)
+
+### BREAKING CHANGE
+
+- a group's `timeline` tool entries carry `toolUseId` instead
+of an embedded `tool`, the `tokens` field is gone, and activity arrives as one
+`ACTIVITY_SNAPSHOT` per response followed by `ACTIVITY_DELTA` patches. Clients
+reading `timeline[].tool` or `tokens` need kaboo-react 0.9 or later, which
+resolves the reference and applies the patches. Pass `activity_deltas=False`
+to `create_agui_app` to keep sending snapshots.
+
+### Feat
+
+- **agui**: continue a run that outgrows one response
+- **agui**: stop re-sending the activity tree on every change
+
 ## v0.20.0 (2026-09-11)
 
 ### BREAKING CHANGE
