@@ -1,34 +1,32 @@
 # Releasing kaboo-workflows
 
 Releases are driven by [Conventional Commits](https://www.conventionalcommits.org/)
-and automated via [commitizen](https://commitizen-tools.github.io/commitizen/) +
-GitHub Actions. Publishing to PyPI uses **Trusted Publishing** (OIDC) — no API
-tokens are stored anywhere.
+and [commitizen](https://commitizen-tools.github.io/commitizen/), which picks the
+version and writes the CHANGELOG. **Publishing itself is a local `twine upload`.**
 
-> **DRY-RUN ONLY by default.** Pushing a version tag is the ONLY action that
-> publishes to PyPI, and it must wait for explicit maintainer approval. Everything
-> below up to and including step 3 of the release flow is safe and non-publishing.
+> **The upload is the only irreversible step.** Everything up to and including
+> `just release` is local and undoable; a version once on PyPI cannot be
+> replaced, only yanked.
 
 ---
 
-## 1. One-time PyPI Trusted Publisher setup (maintainer, cannot be automated)
+## 1. Credentials
 
-1. Log in to <https://pypi.org>. If the project `kaboo-workflows` does not exist
-   yet, use **Publishing → Add a pending publisher** (creates the project on first
-   publish). Otherwise open the project → **Manage → Publishing**.
-2. Add a **GitHub Actions** Trusted Publisher with:
-   - **PyPI Project Name**: `kaboo-workflows`
-   - **Owner**: `gl-pgege`
-   - **Repository name**: `kaboo-workflows`
-   - **Workflow name**: `publish.yml`
-   - **Environment name**: `release` (matches `environment: release` in
-     [`.github/workflows/publish.yml`](.github/workflows/publish.yml))
-3. In the GitHub repo, create the `release` environment (**Settings →
-   Environments**) and optionally add **required reviewers** so a human must
-   approve before the publish job runs.
-4. **(Recommended) TestPyPI dry run.** Repeat the pending-publisher setup on
-   <https://test.pypi.org>, then validate the flow with
-   `uv run just release-test-publish` before ever touching production PyPI.
+`twine` reads `TWINE_PASSWORD` from the environment — a PyPI API token, kept in
+your shell profile. No `TWINE_USERNAME` is needed: twine 7 resolves it to
+`__token__` by itself for uploads to PyPI. Run the upload from a login shell so
+the variable is present.
+
+To rehearse against the test registry instead, `uv run just release-test-publish`
+uploads to TestPyPI.
+
+### About `.github/workflows/publish.yml`
+
+That workflow publishes via PyPI Trusted Publishing on a `v*.*.*` tag push, and
+it is how releases up to `v0.11.0` were made. It has not run since, and
+`v0.12.0` onward were uploaded locally. It is still armed, so pushing a tag may
+start a run; if one does and the version is already uploaded, PyPI rejects the
+duplicate and the workflow simply fails. Nothing is at risk either way.
 
 ### Enable GitHub Pages (one-time)
 
@@ -75,13 +73,20 @@ uv run just release-dry
 # 2. bump version + CHANGELOG + create the vX.Y.Z tag (runs check + test first)
 uv run just release
 
-# 3. THE ONLY LIVE-PUBLISH ACTION — push main + tags to trigger publish.yml
+# 3. build the artifacts the tag describes, from a clean dist/
+uv run just release-build
+uv run python -m twine check dist/*
+
+# 4. THE LIVE PUBLISH
+uv run python -m twine upload dist/*
+
+# 5. share the tag and the CHANGELOG commit
 git push origin main --tags
 ```
 
-`publish.yml` triggers on tags matching `v[0-9]+.[0-9]+.[0-9]+` (plus `.post*` /
-`rc*`). It runs the CI gate, builds the wheel + sdist, publishes to PyPI via the
-Trusted Publisher, and creates a GitHub Release from the CHANGELOG.
+Step 4 is what puts the release on PyPI. Step 5 only shares it; do it after the
+upload succeeds, so a failed upload leaves no tag claiming a version that does
+not exist.
 
 ---
 
@@ -104,7 +109,8 @@ manually.
 
 ```bash
 uv run cz bump --prerelease rc
-git push origin main --tags   # (only after approval)
+uv run just release-build && uv run python -m twine upload dist/*
+git push origin main --tags
 ```
 
 ## Just commands
@@ -113,6 +119,7 @@ git push origin main --tags   # (only after approval)
 |---------|-------------|
 | `uv run just release-dry` | Preview next version + changelog |
 | `uv run just release` | Bump, CHANGELOG, tag (runs check + test) |
-| `uv run just release-build` | Build wheel + sdist locally |
+| `uv run just release-build` | Build wheel + sdist into a clean `dist/` |
+| `uv run python -m twine upload dist/*` | Publish to PyPI |
 | `uv run just release-test-publish` | Upload to TestPyPI (dry-run registry) |
 | `uv run just commit-files` | Interactive conventional commit |
