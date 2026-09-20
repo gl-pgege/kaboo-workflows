@@ -68,7 +68,11 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
 
     Maintains a ``timeline`` list that preserves the chronological order of
     text segments and tool calls as they arrive. Adjacent TOKEN events are
-    coalesced into a single text entry.
+    coalesced into a single text entry. Tool entries carry only a ``toolUseId``;
+    the tool itself lives once in the group's ``tools`` list, which the client
+    indexes by that id. The timeline is the only copy of a group's text: a flat
+    ``tokens`` duplicate of it used to ride along, which no consumer read and
+    which cost its full length in every snapshot and every delta.
 
     Returns:
         ``True`` if the state changed (and a fresh snapshot should be emitted),
@@ -102,7 +106,6 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
                 "inlineChatOwner": bool(event.data.get("inline_chat_owner", False)),
                 "status": "active",
                 "tools": [],
-                "tokens": "",
                 "timeline": [],
             }
             logger.info(
@@ -142,7 +145,10 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
                     "status": "running",
                 }
                 groups[group]["tools"].append(tool_entry)
-                groups[group]["timeline"].append({"type": "tool", "tool": tool_entry})
+                # By reference, not by value: ``tools`` owns the entry. Appending
+                # the object itself is free in memory but JSON has no references,
+                # so it serialised every input and result twice in every snapshot.
+                groups[group]["timeline"].append({"type": "tool", "toolUseId": tool_use_id})
     elif event.type == EventType.TOOL_END:
         if group in groups:
             tool_use_id = event.data.get("tool_use_id")
@@ -156,7 +162,6 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
     elif event.type == EventType.TOKEN:
         if group in groups:
             text = event.data.get("text", "")
-            groups[group]["tokens"] += text
             timeline = groups[group]["timeline"]
             if timeline and timeline[-1]["type"] == "text":
                 timeline[-1]["text"] += text

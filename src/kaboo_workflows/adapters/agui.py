@@ -30,7 +30,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
+import jsonpatch
 from ag_ui.core import (
+    ActivityDeltaEvent,
     ActivitySnapshotEvent,
     RunAgentInput,
     RunErrorEvent,
@@ -722,6 +724,7 @@ def _make_activity_pump(
     merged: asyncio.Queue[Any],
     *,
     entry_inline: bool = False,
+    deltas: bool = True,
 ) -> Any:
     """Build a task coroutine that folds queue events into the registry.
 
@@ -730,6 +733,19 @@ def _make_activity_pump(
     request task drained the shared queue. Whenever a folded event changes the
     state, a fresh ``ACTIVITY_SNAPSHOT`` is put onto *merged* so it interleaves
     live on the run's ``/invocations`` stream.
+
+    Each wakeup drains whatever else is already queued and folds the lot before
+    snapshotting, emitting one snapshot per thread the burst touched rather than
+    one per event. Snapshots carry ``replace=True``, so an intermediate one only
+    ever gets overwritten by the next; sending it cost a ``deepcopy`` of the tree
+    and its full serialisation for a state the UI never rendered.
+
+    With *deltas* (the default) only the first emission for a thread carries the
+    whole tree; each later one is an ``ACTIVITY_DELTA`` holding the JSON Patch
+    against what was last sent. The baseline lives in this closure, and the pump
+    is built per request, so every response opens with a full snapshot and no
+    client can be asked to patch a tree it never received. Set it false to send
+    snapshots throughout.
 
     The entry node's events are excluded from group rendering by default
     because its text is the chat reply (rendered by the host) and re-surfacing
@@ -740,7 +756,8 @@ def _make_activity_pump(
     ``inline_chat_owner`` so the UI never draws a duplicate card for it.
     """
 
-    def fold(event: Any) -> ActivitySnapshotEvent | None:
+    def fold(event: Any) -> str | None:
+        """Fold *event* into the registry; return its thread id if state changed."""
         if not isinstance(event, StreamEvent):
             return None
         thread_id = event.data.get("thread_id") or bridge.DEFAULT_THREAD
@@ -750,13 +767,37 @@ def _make_activity_pump(
             changed = registry.apply_usage(thread_id, event)
         else:
             changed = registry.apply(thread_id, event)
-        if not changed:
-            return None
+        return thread_id if changed else None
+
+    # What the client is believed to hold, per thread, for diffing against.
+    # Scoped to this pump, so it resets with every response.
+    sent: dict[str, dict[str, Any]] = {}
+
+    def snapshot_for(thread_id: str, content: dict[str, Any]) -> ActivitySnapshotEvent:
+        sent[thread_id] = content
         return ActivitySnapshotEvent(
             message_id=f"kaboo.activity.{thread_id}",
             activity_type="kaboo.activity",
-            content=registry.snapshot(thread_id),
+            content=content,
             replace=True,
+        )
+
+    def update_for(thread_id: str) -> ActivitySnapshotEvent | ActivityDeltaEvent | None:
+        """The event bringing the client up to date, or ``None`` if it already is."""
+        content = registry.snapshot(thread_id)
+        baseline = sent.get(thread_id) if deltas else None
+        if baseline is None:
+            return snapshot_for(thread_id, content)
+        patch = jsonpatch.make_patch(baseline, content).patch
+        if not patch:
+            # A fold can report a change that leaves the rendered tree identical
+            # (an event for a group that never started, say).
+            return None
+        sent[thread_id] = content
+        return ActivityDeltaEvent(
+            message_id=f"kaboo.activity.{thread_id}",
+            activity_type="kaboo.activity",
+            patch=patch,
         )
 
     async def pump_activity() -> None:
@@ -767,9 +808,28 @@ def _make_activity_pump(
                 continue
             if event is None:
                 break
-            snapshot = fold(event)
-            if snapshot is not None:
-                await merged.put(snapshot)
+            # Fold the whole burst before snapshotting. Token events arrive one
+            # per streamed chunk and each one used to re-send the entire tree,
+            # which is most of a long run's bytes on the wire.
+            changed: dict[str, None] = {}
+            closed = False
+            thread_id = fold(event)
+            if thread_id is not None:
+                changed[thread_id] = None
+            while not event_queue.empty():
+                queued = event_queue.get_nowait()
+                if queued is None:
+                    closed = True
+                    break
+                thread_id = fold(queued)
+                if thread_id is not None:
+                    changed[thread_id] = None
+            for thread_id in changed:
+                update = update_for(thread_id)
+                if update is not None:
+                    await merged.put(update)
+            if closed:
+                break
 
     def flush(thread_id: str) -> list[ActivitySnapshotEvent]:
         """Drain the queue and return one final snapshot for *thread_id*.
@@ -781,6 +841,10 @@ def _make_activity_pump(
         broken. Folding what is left and re-snapshotting the registry is
         deterministic either way: the final snapshot reflects everything folded,
         no matter which side got to the event first.
+
+        A snapshot rather than a delta even when deltas are on: this is the last
+        word on the run, and a whole tree cannot be misapplied the way a patch
+        against a disputed baseline can.
         """
         while True:
             event = event_queue.get_nowait()
@@ -790,14 +854,7 @@ def _make_activity_pump(
         content = registry.snapshot(thread_id)
         if not content.get("groups") and not content.get("usageByRun"):
             return []
-        return [
-            ActivitySnapshotEvent(
-                message_id=f"kaboo.activity.{thread_id}",
-                activity_type="kaboo.activity",
-                content=content,
-                replace=True,
-            )
-        ]
+        return [snapshot_for(thread_id, content)]
 
     return pump_activity, flush
 
@@ -910,12 +967,16 @@ def _add_kaboo_endpoint(
     path: str,
     *,
     auth: AuthVerifier | None = None,
+    activity_deltas: bool = True,
 ) -> None:
     """Register the AG-UI endpoint, resolving the session serving each request.
 
     ``resolve_session`` returns the :class:`AguiSession` for a request — one built
     at boot when the process serves a single fixed config, or one built for this
     run from the config it submitted. Only the activity registry spans requests.
+
+    ``activity_deltas`` sends activity as JSON Patches after the first snapshot
+    of each response; see :func:`_make_activity_pump`.
     """
 
     @app.post(path)
@@ -1011,7 +1072,12 @@ def _add_kaboo_endpoint(
 
         merged: asyncio.Queue[Any] = asyncio.Queue()
         activity_pump, _activity_flush = _make_activity_pump(
-            session.event_queue, registry, entry_name, merged, entry_inline=session.entry_inline
+            session.event_queue,
+            registry,
+            entry_name,
+            merged,
+            entry_inline=session.entry_inline,
+            deltas=activity_deltas,
         )
 
         def activity_flush() -> list[Any]:
@@ -1452,6 +1518,7 @@ def create_agui_app(
     auth: AuthVerifier | None = None,
     session_config_key: str | None = None,
     allowed_mcp_hosts: list[str] | None = None,
+    activity_deltas: bool = True,
 ) -> FastAPI:
     """Create a FastAPI app serving AG-UI SSE from a YAML config.
 
@@ -1494,6 +1561,9 @@ def create_agui_app(
         allowed_mcp_hosts: Hosts a submitted config's MCP client URL may point
             at. Set this whenever configs are authored anywhere but this
             repository: an arbitrary URL needs no code to exfiltrate.
+        activity_deltas: Send activity as ``ACTIVITY_DELTA`` JSON Patches after
+            the first snapshot of each response, instead of a full tree every
+            time. Set false to fall back to snapshots throughout.
 
     Returns:
         A FastAPI application with AG-UI SSE streaming.
@@ -1563,7 +1633,9 @@ def create_agui_app(
         allow_headers=["*"],
     )
 
-    _add_kaboo_endpoint(app, resolve_session, registry, endpoint, auth=auth)
+    _add_kaboo_endpoint(
+        app, resolve_session, registry, endpoint, auth=auth, activity_deltas=activity_deltas
+    )
     if ping_path is not None:
         add_ping(app, ping_path)
 

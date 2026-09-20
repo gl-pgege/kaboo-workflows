@@ -68,7 +68,7 @@ exposes it as an AG-UI SSE endpoint. A single run emits a well-formed event
 stream:
 
 ```text
-RUN_STARTED → TEXT_MESSAGE_* → TOOL_CALL_* → ACTIVITY_SNAPSHOT → RUN_FINISHED
+RUN_STARTED → TEXT_MESSAGE_* → TOOL_CALL_* → ACTIVITY_SNAPSHOT → ACTIVITY_DELTA* → RUN_FINISHED
 ```
 
 `ACTIVITY_SNAPSHOT` events carry the hierarchical activity tree that
@@ -77,6 +77,15 @@ RUN_STARTED → TEXT_MESSAGE_* → TOOL_CALL_* → ACTIVITY_SNAPSHOT → RUN_FIN
 replay the whole stream. Human-in-the-loop pauses surface as interrupts on
 `RUN_FINISHED` and resume cleanly — see
 [human-in-the-loop](workflows/human-in-the-loop.md).
+
+Each response carries one snapshot and then `ACTIVITY_DELTA` events holding a
+JSON Patch against it, so the tree crosses the wire once rather than in full on
+every change. The run's closing snapshot restates it whole. Pass
+`activity_deltas=False` to `create_agui_app` to send snapshots throughout.
+
+The tree keeps one copy of everything it describes: a group's `tools` own its
+tool calls and its `timeline` refers to them by `toolUseId`, and the timeline's
+text entries are the only copy of its streamed prose.
 
 ## References & attachments
 

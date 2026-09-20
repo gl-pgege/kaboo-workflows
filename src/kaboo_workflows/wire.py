@@ -144,6 +144,15 @@ class EventQueue:
         item = await self._queue.get()
         return None if item is _SENTINEL else item
 
+    def empty(self) -> bool:
+        """Return whether nothing is currently queued.
+
+        :meth:`get_nowait` collapses "empty" and "closed" into the same
+        ``None``, so a consumer that must tell them apart — draining a burst
+        without swallowing the sentinel — checks this first.
+        """
+        return self._queue.empty()
+
     def get_nowait(self) -> StreamEvent | None:
         """Return the next already-queued event without waiting.
 
