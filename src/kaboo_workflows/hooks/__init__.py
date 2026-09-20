@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .continuation_hook import CONTINUATION_TYPE, ContinuationHook
 from .event_publisher import EventPublisher
 from .forwarded_props_hook import ForwardedPropsHook
 from .history_hook import HistoryHook
@@ -18,6 +19,8 @@ from .stop_guard import MultiAgentStopGuard, StopGuard, stop_guard_from_event
 from .tool_name_sanitizer import ToolNameSanitizer
 
 __all__ = [
+    "CONTINUATION_TYPE",
+    "ContinuationHook",
     "EventPublisher",
     "ForwardedPropsHook",
     "HistoryHook",

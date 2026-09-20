@@ -40,7 +40,13 @@ def map_strands_interrupt_to_agui(interrupt: Any) -> dict[str, Any]:
 
     if isinstance(reason, dict):
         rtype = reason.get("type", "")
-        if rtype == "approval":
+        if rtype == "continuation":
+            # Not a question: the run filled its response budget and stopped at
+            # a tool boundary. The client resumes it immediately, with no
+            # prompt, so the turn carries on in the next response.
+            agui_interrupt["reason"] = "continuation"
+            agui_interrupt["message"] = reason.get("message", "Continuing")
+        elif rtype == "approval":
             agui_interrupt["reason"] = "tool_call"
             agui_interrupt["message"] = reason.get("message", "Approval required")
         elif rtype == "form":

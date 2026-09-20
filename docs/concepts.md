@@ -87,6 +87,23 @@ The tree keeps one copy of everything it describes: a group's `tools` own its
 tool calls and its `timeline` refers to them by `toolUseId`, and the timeline's
 text entries are the only copy of its streamed prose.
 
+### Runs larger than one response
+
+Some hosts cap how much a single HTTP response may carry — AWS AgentCore closes
+the socket at 100 MB, which reaches the browser as a dropped connection rather
+than an answer. Pass `response_budget=<bytes>` to `create_agui_app` and a run
+that fills its response stops at the next tool call instead: it pauses there,
+the response ends with a proper `RUN_FINISHED`, and the client resumes into a
+response with a fresh budget.
+
+The pause is an ordinary interrupt, which is what makes it cheap. The pending
+tool call and the agent's state are persisted and restored by the machinery
+that already serves approvals, so the tool runs exactly once and nothing is
+recomputed. It is marked `reason: "continuation"`, and clients resolve it
+immediately rather than prompting anyone; kaboo-react does this for you. The
+turn id is unchanged across the resume, so the two responses render as one
+turn. The default of `0` means no cap and no pausing.
+
 ## References & attachments
 
 Anything a user cites from the frontend with `@` — an uploaded file or a pointer

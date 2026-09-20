@@ -100,8 +100,22 @@ orchestration node agents, so a multi-agent entry still needs the process to sta
 up between question and answer. A plain agent, with or without delegates, is
 covered.
 
+## A pause nobody answers
+
+Not every interrupt is a question. When a host caps the size of one HTTP
+response, `create_agui_app(response_budget=...)` uses the same machinery to
+split a large turn across two: the run stops at the next tool call, the
+response closes properly, and the client resumes at once. The interrupt is
+marked `reason: "continuation"` so a client can tell it apart and resolve it
+without showing anyone a prompt. Everything above still applies — the tool runs
+once, the state travels on `kaboo_session`, a different replica can pick it up
+— and the turn id is unchanged, so the user sees one turn. See
+[concepts](../concepts.md#runs-larger-than-one-response).
+
 ## Proven by
 
+- `tests/e2e/test_cross_cutting.py::test_a_full_response_pauses_the_run_and_the_next_one_finishes_it`
+  (the budget pauses an ungated tool call and the resume completes it, once).
 - `tests/e2e/test_cross_cutting.py::test_ask_user_interrupt_then_resume`
   (plain / delegate / swarm / graph positions).
 - `tests/e2e/test_complex.py::test_parallel_interrupts_surface_together_and_resume`

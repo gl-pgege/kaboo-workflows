@@ -82,6 +82,57 @@ _current_session: contextvars.ContextVar[SessionExchange | None] = contextvars.C
 
 
 @dataclass
+class ResponseBudget:
+    """Request-scoped byte allowance for the response this run streams into.
+
+    Some hosts cap how much one HTTP response may carry — AWS AgentCore closes
+    the socket at 100 MB, which reaches the browser as a dropped connection
+    rather than an answer. The SSE writer adds each encoded frame to
+    :attr:`sent`; :class:`~kaboo_workflows.hooks.ContinuationHook` reads it at
+    the next tool boundary and pauses the run there, so the turn carries on in
+    a fresh response instead of dying in this one.
+
+    A ``limit`` of zero means no cap, which is the default: the pause only
+    happens where a host has asked for it.
+
+    One instance is created per request and shared by reference across the
+    request's tasks via :data:`_current_response_budget`, so the writer and the
+    hook — which run in different tasks — see the same counter.
+    """
+
+    limit: int = 0
+    sent: int = 0
+
+    def add(self, count: int) -> None:
+        """Record ``count`` bytes written to the response."""
+        self.sent += count
+
+    @property
+    def exhausted(self) -> bool:
+        """Whether the response has used up its allowance."""
+        return self.limit > 0 and self.sent >= self.limit
+
+
+_current_response_budget: contextvars.ContextVar[ResponseBudget | None] = contextvars.ContextVar(
+    "kaboo_response_budget", default=None
+)
+
+
+def set_response_budget(budget: ResponseBudget | None) -> None:
+    """Bind the current request's :class:`ResponseBudget`.
+
+    Call at the start of each request handler, before creating the run task, so
+    the run's hooks and the SSE writer share one counter.
+    """
+    _current_response_budget.set(budget)
+
+
+def get_response_budget() -> ResponseBudget | None:
+    """Return the current request's :class:`ResponseBudget` (or ``None``)."""
+    return _current_response_budget.get()
+
+
+@dataclass
 class Reference:
     """A single client-supplied reference for the current run.
 

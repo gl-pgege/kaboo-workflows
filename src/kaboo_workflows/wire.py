@@ -27,7 +27,7 @@ from strands import Agent
 from strands.multiagent import Swarm
 from strands.multiagent.graph import Graph
 
-from .hooks import EventPublisher, HistoryHook
+from .hooks import ContinuationHook, EventPublisher, HistoryHook
 from .types import EventType, SessionManifest, StreamEvent
 
 if TYPE_CHECKING:
@@ -299,6 +299,9 @@ def make_event_queue(
             is_chat_reply=(chat_reply is not None and name == chat_reply),
         )
         agent.hooks.add_hook(pub)
+        # Every agent can be the one holding the pen when the response fills
+        # up, delegates included, so each needs somewhere to pause.
+        agent.hooks.add_hook(ContinuationHook())
         agent.callback_handler = pub.as_callback_handler()
         # Stash the instance so the AG-UI adapter can forward it to the per-thread
         # clone ag-ui-strands executes for a plain-agent entry (that clone does not
@@ -332,6 +335,7 @@ def make_event_queue(
             stream_title=st,
         )
         orch.hooks.add_hook(orch_pub)
+        orch.hooks.add_hook(ContinuationHook())
         if isinstance(orch, Agent):
             orch.callback_handler = orch_pub.as_callback_handler()
             # Stash for the AG-UI adapter, same as declared agents above: the

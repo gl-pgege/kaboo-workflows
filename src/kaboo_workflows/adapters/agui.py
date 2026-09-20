@@ -56,6 +56,7 @@ from kaboo_workflows._context import (
     HistoryExchange,
     Principal,
     Reference,
+    ResponseBudget,
     SessionExchange,
     set_activity_context,
     set_auth_context,
@@ -63,6 +64,7 @@ from kaboo_workflows._context import (
     set_history_exchange,
     set_inline_requests,
     set_references,
+    set_response_budget,
     set_session_exchange,
 )
 from kaboo_workflows.config import (
@@ -80,6 +82,7 @@ from kaboo_workflows.config.resolvers import resolve_session_manager
 from kaboo_workflows.config.resolvers.agents import get_agent_hook_providers
 from kaboo_workflows.config.resolvers.config import _resolve_chat_output, _resolve_chat_owner
 from kaboo_workflows.hooks import (
+    ContinuationHook,
     ForwardedPropsHook,
     SessionStateHook,
     restore_session_state,
@@ -866,6 +869,7 @@ async def _sse_response(
     merged: asyncio.Queue[Any],
     cleanup: Callable[[], Awaitable[None]] | None = None,
     activity_flush: Callable[[], list[Any]] | None = None,
+    budget: ResponseBudget | None = None,
 ) -> AsyncIterator[str]:
     """Stream encoded AG-UI events; run the run + activity pumps concurrently.
 
@@ -877,6 +881,10 @@ async def _sse_response(
     ``cleanup`` runs once the stream is finished, cancelled or errored — the last
     moment the run owns anything. A per-run session's MCP clients are released
     here, which is why they cannot go stale between runs.
+
+    ``budget`` is credited with every frame written, which is what lets
+    :class:`~kaboo_workflows.hooks.ContinuationHook` see how full the response
+    is and pause the run before the host cuts it off.
     """
     run_task = asyncio.create_task(consume())
     activity_task = asyncio.create_task(activity_pump())
@@ -895,16 +903,21 @@ async def _sse_response(
                 # with the run's token usage) must be delivered first.
                 for snapshot in activity_flush():
                     try:
-                        yield encoder.encode(snapshot)
+                        frame = encoder.encode(snapshot)
                     except Exception:
                         logger.debug("failed to encode flushed snapshot", exc_info=True)
+                        continue
+                    if budget is not None:
+                        budget.add(len(frame.encode()))
+                    yield frame
             try:
-                if isinstance(item, _RawSSE):
-                    yield item.payload
-                else:
-                    yield encoder.encode(item)
+                frame = item.payload if isinstance(item, _RawSSE) else encoder.encode(item)
             except Exception:
                 logger.debug("failed to encode event: %s", type(item).__name__, exc_info=True)
+                continue
+            if budget is not None:
+                budget.add(len(frame.encode()))
+            yield frame
     finally:
         activity_task.cancel()
         try:
@@ -968,6 +981,7 @@ def _add_kaboo_endpoint(
     *,
     auth: AuthVerifier | None = None,
     activity_deltas: bool = True,
+    response_budget: int = 0,
 ) -> None:
     """Register the AG-UI endpoint, resolving the session serving each request.
 
@@ -977,6 +991,11 @@ def _add_kaboo_endpoint(
 
     ``activity_deltas`` sends activity as JSON Patches after the first snapshot
     of each response; see :func:`_make_activity_pump`.
+
+    ``response_budget`` caps how many bytes one response may carry before the
+    run pauses at the next tool boundary and continues in the next response;
+    zero, the default, means no cap. See
+    :class:`~kaboo_workflows.hooks.ContinuationHook`.
     """
 
     @app.post(path)
@@ -1016,6 +1035,12 @@ def _add_kaboo_endpoint(
         # restores it onto the executing agent; _enrich_session_snapshot writes
         # back what the run leaves behind.
         set_session_exchange(SessionExchange(inbound=_parse_session_state(input_data)))
+
+        # How much this response may carry. Bound before any task is created so
+        # the run's hooks and the SSE writer below share the one counter: the
+        # writer credits it, ContinuationHook spends it.
+        budget = ResponseBudget(limit=response_budget)
+        set_response_budget(budget)
 
         # Client-supplied references (file attachments on the message + custom
         # entities in state.kaboo_references). Parsed once per request and bound
@@ -1139,6 +1164,7 @@ def _add_kaboo_endpoint(
                     merged,
                     release,
                     activity_flush=activity_flush,
+                    budget=budget,
                 ),
                 media_type=encoder.get_content_type(),
             )
@@ -1201,6 +1227,7 @@ def _add_kaboo_endpoint(
                     merged,
                     release,
                     activity_flush=activity_flush,
+                    budget=budget,
                 ),
                 media_type=encoder.get_content_type(),
             )
@@ -1303,6 +1330,7 @@ def _add_kaboo_endpoint(
                 merged,
                 release,
                 activity_flush=activity_flush,
+                budget=budget,
             ),
             media_type=encoder.get_content_type(),
         )
@@ -1426,6 +1454,10 @@ def _build_session(
         if bool(getattr(runtime_def, "persist_session_state", True)):
             forwarded_hooks = [SessionStateHook(), *forwarded_hooks]
 
+        # Same reasoning: a continuation pause is an interrupt, so it has to be
+        # raised on the clone that actually executes. Inert without a budget.
+        forwarded_hooks = [ContinuationHook(), *forwarded_hooks]
+
         # A plain-agent entry (not a delegate) also forwards its EventPublisher so
         # its own tool calls land in the activity stream and enrich the inline tool
         # rows (labels, formatted results, error status) — otherwise those rows
@@ -1519,6 +1551,7 @@ def create_agui_app(
     session_config_key: str | None = None,
     allowed_mcp_hosts: list[str] | None = None,
     activity_deltas: bool = True,
+    response_budget: int = 0,
 ) -> FastAPI:
     """Create a FastAPI app serving AG-UI SSE from a YAML config.
 
@@ -1564,6 +1597,12 @@ def create_agui_app(
         activity_deltas: Send activity as ``ACTIVITY_DELTA`` JSON Patches after
             the first snapshot of each response, instead of a full tree every
             time. Set false to fall back to snapshots throughout.
+        response_budget: Bytes one response may carry before the run pauses at
+            the next tool boundary and continues in a fresh response, so a host
+            that caps response size cannot cut a long turn short. Zero, the
+            default, means no cap. Set it below the host's own limit, leaving
+            room for the events that close the response. See
+            :class:`~kaboo_workflows.hooks.ContinuationHook`.
 
     Returns:
         A FastAPI application with AG-UI SSE streaming.
@@ -1634,7 +1673,13 @@ def create_agui_app(
     )
 
     _add_kaboo_endpoint(
-        app, resolve_session, registry, endpoint, auth=auth, activity_deltas=activity_deltas
+        app,
+        resolve_session,
+        registry,
+        endpoint,
+        auth=auth,
+        activity_deltas=activity_deltas,
+        response_budget=response_budget,
     )
     if ping_path is not None:
         add_ping(app, ping_path)

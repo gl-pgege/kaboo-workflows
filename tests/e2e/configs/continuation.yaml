@@ -1,0 +1,16 @@
+# A plain entry agent calling one ordinary, UNGATED tool. Nothing here pauses
+# the run: the pause in the continuation tests comes from the response budget
+# alone, which is the point — any tool call is a place a full response can stop.
+agents:
+  assistant:
+    stream: {title: "Assistant"}
+    tools: ["tests.fakes.gated_tools:submit_report"]
+    model:
+      provider: tests.fakes.scripted_model:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - {tool: submit_report, input: {title: "Q3 draft"}}
+        final_text: "Filed the report."
+
+entry: assistant

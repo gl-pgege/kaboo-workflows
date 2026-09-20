@@ -628,6 +628,23 @@ The tree keeps one copy of everything it describes: a group's `tools` own its
 tool calls and its `timeline` refers to them by `toolUseId`, and the timeline's
 text entries are the only copy of its streamed prose.
 
+### Runs larger than one response
+
+Some hosts cap how much a single HTTP response may carry — AWS AgentCore closes
+the socket at 100 MB, which reaches the browser as a dropped connection rather
+than an answer. Pass `response_budget=<bytes>` to `create_agui_app` and a run
+that fills its response stops at the next tool call instead: it pauses there,
+the response ends with a proper `RUN_FINISHED`, and the client resumes into a
+response with a fresh budget.
+
+The pause is an ordinary interrupt, which is what makes it cheap. The pending
+tool call and the agent's state are persisted and restored by the machinery
+that already serves approvals, so the tool runs exactly once and nothing is
+recomputed. It is marked `reason: "continuation"`, and clients resolve it
+immediately rather than prompting anyone; kaboo-react does this for you. The
+turn id is unchanged across the resume, so the two responses render as one
+turn. The default of `0` means no cap and no pausing.
+
 ## References & attachments
 
 Anything a user cites from the frontend with `@` — an uploaded file or a pointer
@@ -4593,8 +4610,22 @@ orchestration node agents, so a multi-agent entry still needs the process to sta
 up between question and answer. A plain agent, with or without delegates, is
 covered.
 
+## A pause nobody answers
+
+Not every interrupt is a question. When a host caps the size of one HTTP
+response, `create_agui_app(response_budget=...)` uses the same machinery to
+split a large turn across two: the run stops at the next tool call, the
+response closes properly, and the client resumes at once. The interrupt is
+marked `reason: "continuation"` so a client can tell it apart and resolve it
+without showing anyone a prompt. Everything above still applies — the tool runs
+once, the state travels on `kaboo_session`, a different replica can pick it up
+— and the turn id is unchanged, so the user sees one turn. See
+[concepts](../concepts.md#runs-larger-than-one-response).
+
 ## Proven by
 
+- `tests/e2e/test_cross_cutting.py::test_a_full_response_pauses_the_run_and_the_next_one_finishes_it`
+  (the budget pauses an ungated tool call and the resume completes it, once).
 - `tests/e2e/test_cross_cutting.py::test_ask_user_interrupt_then_resume`
   (plain / delegate / swarm / graph positions).
 - `tests/e2e/test_complex.py::test_parallel_interrupts_surface_together_and_resume`

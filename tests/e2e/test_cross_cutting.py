@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 from ag_ui.core import EventType as AGUIEventType
 
+from kaboo_workflows._context import ResponseBudget, set_response_budget
+
 from .harness import Pipeline, run_pipeline
 
 CONFIGS = Path(__file__).parent / "configs"
@@ -259,6 +261,74 @@ async def test_swarm_tool_gate_pauses_then_executes_the_edited_call() -> None:
     assert not r2.errored() and r2.finished()
     assert CALLS == [{"title": "Q3 final"}]
     assert "Final swarm report after the gated write." in r2.text()
+
+
+# --- response continuation ------------------------------------------------
+
+
+async def test_a_full_response_pauses_the_run_and_the_next_one_finishes_it() -> None:
+    """A turn too large for one response is split, not lost.
+
+    This is the whole feature end to end, and the assertion that matters is
+    that the tool runs exactly once: the pause has to be free. It stops the run
+    before an ungated tool, with no gate in the config — the budget is the only
+    thing that interrupts.
+
+    It also pins down the part that is easy to get wrong. The hook's condition
+    is true in the first response and false in the second, so the resumed run
+    reaches the same tool call and does *not* interrupt again; strands must
+    still clear the pause and carry on.
+    """
+    from tests.fakes.gated_tools import CALLS
+
+    CALLS.clear()
+    pipe = Pipeline(str(CONFIGS / "continuation.yaml"))
+
+    # A budget already spent: the first tool call the agent makes stops it.
+    set_response_budget(ResponseBudget(limit=1, sent=1))
+    r1 = await pipe.turn("file the report", thread_id="k1", run_id="r1")
+
+    outcome = r1.run_outcome()
+    assert outcome is not None and getattr(outcome, "type", None) == "interrupt"
+    pause = list(outcome.interrupts)[0]
+    assert pause.reason == "continuation", "the client must not prompt anyone for this"
+    assert CALLS == [], "the run must pause before the tool, not after"
+    assert r1.text() == ""
+    # Written to the state channel, so the continuation survives landing on a
+    # different replica — the same property that makes approvals restartable.
+    assert r1.state()["kaboo_session"]["interrupt_state"]["activated"] is True
+
+    # The next response has its own budget, so the run proceeds.
+    set_response_budget(ResponseBudget(limit=0))
+    r2 = await pipe.turn(
+        "(continue)",
+        thread_id="k1",
+        run_id="r2",
+        resume=[{"interruptId": pause.id, "status": "resolved", "payload": {"status": "continue"}}],
+    )
+
+    assert not r2.errored() and r2.finished()
+    assert CALLS == [{"title": "Q3 draft"}], "the paused tool must run once, not twice"
+    assert "Filed the report." in r2.text()
+    # The pause is spent, not replayed: the finished run leaves no session
+    # state behind for a later turn to trip over.
+    assert "kaboo_session" not in r2.state()
+
+
+async def test_a_run_inside_its_budget_is_never_paused() -> None:
+    """The cap must be invisible until it is reached."""
+    from tests.fakes.gated_tools import CALLS
+
+    CALLS.clear()
+    pipe = Pipeline(str(CONFIGS / "continuation.yaml"))
+
+    set_response_budget(ResponseBudget(limit=50_000_000))
+    r = await pipe.turn("file the report", thread_id="k2", run_id="r1")
+
+    assert not r.errored() and r.finished()
+    assert getattr(r.run_outcome(), "type", None) != "interrupt"
+    assert CALLS == [{"title": "Q3 draft"}]
+    assert "Filed the report." in r.text()
 
 
 # --- multi-turn history round-trip ----------------------------------------
