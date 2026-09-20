@@ -59,7 +59,7 @@ def test_parallel_tasks_have_isolated_stacks() -> None:
         return pop_cost_box()
 
     async def main() -> list[float]:
-        return await asyncio.gather(invocation(0.01), invocation(0.10))
+        return list(await asyncio.gather(invocation(0.01), invocation(0.10)))
 
     totals = asyncio.run(main())
     assert abs(totals[0] - 0.02) < 1e-9

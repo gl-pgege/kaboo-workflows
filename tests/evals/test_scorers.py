@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from kaboo_workflows.evals.capture import RunCapture, ToolInvocation
@@ -13,7 +15,7 @@ ITEM = EvalItem(id="i1", input="question")
 
 
 def capture(**overrides) -> RunCapture:
-    defaults = dict(item_id="i1", text="Total revenue was $1,234 in Q3.")
+    defaults: dict[str, Any] = dict(item_id="i1", text="Total revenue was $1,234 in Q3.")
     defaults.update(overrides)
     return RunCapture(**defaults)
 

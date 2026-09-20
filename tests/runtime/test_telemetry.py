@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from opentelemetry import trace as trace_api
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
 
 from kaboo_workflows import telemetry
@@ -108,7 +111,7 @@ def test_context_processor_stamps_conversation_attributes():
         provider = _provider_with_processor(static_attributes={"deployment": "test"})
         tracer = provider.get_tracer("test")
         span = tracer.start_span("probe")
-        attrs = dict(span.attributes or {})
+        attrs = dict(cast(ReadableSpan, span).attributes or {})
         span.end()
         assert attrs["session.id"] == "thread-1"
         assert attrs["kaboo.run.id"] == "run-1"
@@ -126,7 +129,7 @@ def test_context_processor_omits_unbound_context():
     provider = _provider_with_processor()
     tracer = provider.get_tracer("test")
     span = tracer.start_span("probe")
-    attrs = dict(span.attributes or {})
+    attrs = dict(cast(ReadableSpan, span).attributes or {})
     span.end()
     assert "session.id" not in attrs
     assert "user.id" not in attrs

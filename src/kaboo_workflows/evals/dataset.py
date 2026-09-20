@@ -66,6 +66,7 @@ def _parse_item(raw: dict[str, Any], index: int) -> EvalItem:
     if not isinstance(expect, list):
         raise ValueError(f"dataset item '{item_id}': 'expect' must be a list of scorer configs")
     timeout = raw.get("timeout_s")
+    metadata = raw.get("metadata")
     return EvalItem(
         id=item_id,
         input=text,
@@ -75,7 +76,7 @@ def _parse_item(raw: dict[str, Any], index: int) -> EvalItem:
             raw.get("forwarded_props") if isinstance(raw.get("forwarded_props"), dict) else None
         ),
         timeout_s=float(timeout) if timeout is not None else None,
-        metadata=raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {},
+        metadata=metadata if isinstance(metadata, dict) else {},
     )
 
 
