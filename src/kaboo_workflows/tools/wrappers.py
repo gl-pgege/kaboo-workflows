@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from strands import Agent
 from strands.agent.agent_result import AgentResult
+from strands.multiagent.base import MultiAgentResult
 from strands.tools.decorator import DecoratedFunctionTool, tool
-from strands.types.content import Message
 from strands.types.tools import ToolContext
 
 from .._context import delegation_context
@@ -40,7 +40,8 @@ def _resolve_tool_name(node: Node, name: str | None) -> str:
     return getattr(node, "id", "sub_orchestration")
 
 
-def _message_to_tool_result(message: Message) -> dict[str, Any]:
+def _result_to_tool_result(result: AgentResult | MultiAgentResult) -> dict[str, Any]:
+    message = extract_last_message(result)
     content: list[dict[str, Any]] = []
     for block in message.get("content", []):
         source_block = cast(dict[str, Any], block)
@@ -52,6 +53,10 @@ def _message_to_tool_result(message: Message) -> dict[str, Any]:
 
     if content:
         return {"status": "success", "content": content}
+
+    structured = result.structured_output if isinstance(result, AgentResult) else None
+    if structured is not None:
+        return {"status": "success", "content": [{"text": structured.model_dump_json()}]}
 
     return {"status": "success", "content": [{"text": extract_text(message)}]}
 
@@ -117,7 +122,7 @@ def _node_as_tool(
                 ):
                     responses = _interrupt_responses_from_result(result, tool_context)
                     result = await node.invoke_async(cast(Any, responses))
-                return _message_to_tool_result(extract_last_message(result))
+                return _result_to_tool_result(result)
 
     else:
 
@@ -133,7 +138,7 @@ def _node_as_tool(
                 ):
                     responses = _interrupt_responses_from_result(result, tool_context)
                     result = node(cast(Any, responses))
-                return _message_to_tool_result(extract_last_message(result))
+                return _result_to_tool_result(result)
 
     return delegate
 
