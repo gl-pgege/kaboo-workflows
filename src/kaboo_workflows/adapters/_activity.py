@@ -63,6 +63,22 @@ def _fold_run_usage(state: dict[str, Any], event: StreamEvent) -> bool:
     return True
 
 
+def _archive_group(groups: dict[str, Any], group: str, tool_call_id: str) -> None:
+    archived = f"{group}@{tool_call_id}"
+
+    def rename(path: str) -> str:
+        if path == group or path.startswith(f"{group}."):
+            return archived + path[len(group) :]
+        return path
+
+    entries = list(groups.items())
+    groups.clear()
+    for key, value in entries:
+        if value.get("parentGroup"):
+            value["parentGroup"] = rename(value["parentGroup"])
+        groups[rename(key)] = value
+
+
 def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
     """Mutate *state* based on an incoming kaboo StreamEvent.
 
@@ -89,6 +105,11 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
 
     if event.type == EventType.STREAM_GROUP_START:
         existing = groups.get(group)
+        tool_call_id = event.data.get("tool_call_id")
+        previous_call_id = existing.get("toolCallId") if existing is not None else None
+        if previous_call_id and tool_call_id and previous_call_id != tool_call_id:
+            _archive_group(groups, group, previous_call_id)
+            existing = None
         if existing is not None:
             existing["status"] = "active"
             existing.pop("interrupt", None)
