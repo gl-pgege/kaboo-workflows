@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## v0.21.1 (2026-10-02)
+
+### Fix
+
+- **tools**: hand a structured delegate's output back to its parent — a delegate with an `output_schema` whose final message holds only the forced structured-output tool call now returns that output as JSON text instead of an empty result
+- **agui**: give a later delegation to the same group its own activity group — a start whose `toolCallId` differs from the existing group's moves that group, and every group nested under it, to `<group>@<toolCallId>` and opens the group afresh, so the new inline card binds instead of staying on "Loading…"; a resume of the same delegation still reuses its group
+
 ## v0.21.0 (2026-09-20)
 
 ### BREAKING CHANGE
