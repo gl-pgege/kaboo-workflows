@@ -19,11 +19,6 @@ DEFAULT_MIN_CHARS = 1500
 SUMMARY_BRIEF = "Summary of your earlier work in this conversation"
 SEEDED_MESSAGES = "kaboo_seeded_messages"
 
-_REMEMBER = re.compile(
-    r"^[ \t]*(?:(#{1,6})[ \t]+)?(?:\*\*|__)?to remember\b", re.IGNORECASE | re.MULTILINE
-)
-_HEADING = re.compile(r"^[ \t]*(#{1,6})[ \t]+\S", re.MULTILINE)
-
 _DELEGATE_INPUT_CHARS = 2000
 _MCP_INPUT_CHARS = 500
 _RESULT_EXCERPT_CHARS = 500
@@ -31,6 +26,10 @@ _CLEARED_PREFIX = "Result cleared ("
 _CLEARED_SUFFIX = "): call it again to see it."
 _ID_SUFFIXES = ("id", "Id", "ID")
 _MAX_IDS = 10
+_REMEMBER = re.compile(
+    r"^[ \t]*(?:(#{1,6})[ \t]+)?(?:\*\*|__)?to remember\b", re.IGNORECASE | re.MULTILINE
+)
+_HEADING = re.compile(r"^[ \t]*(#{1,6})[ \t]+\S", re.MULTILINE)
 
 
 def is_mcp_tool(name: str) -> bool:
@@ -48,6 +47,108 @@ def estimate_tokens(messages: list[dict[str, Any]], system_prompt: Any = None) -
             else json.dumps(system_prompt, ensure_ascii=False, default=str)
         )
     return len(text) // 4
+
+
+def result_text(result: dict[str, Any]) -> str:
+    """Render a ``toolResult``'s content as text, ``json`` blocks as JSON."""
+    parts: list[str] = []
+    for block in result.get("content") or []:
+        if "text" in block:
+            parts.append(str(block["text"]))
+        elif "json" in block:
+            parts.append(json.dumps(block["json"], ensure_ascii=False, default=str))
+        else:
+            parts.append(f"[{next(iter(block), 'content')}]")
+    return "\n".join(parts)
+
+
+def foreign_calls_to_notes(
+    messages: list[dict[str, Any]], tools: Collection[str]
+) -> list[dict[str, Any]]:
+    """Replace calls to tools outside ``tools`` with text notes.
+
+    Each such ``toolUse`` becomes a text block in its assistant message —
+    ``Earlier step (<name>, a tool you don't have): asked <input>; returned
+    <result>`` — and its ``toolResult`` is dropped. A delegate (a name without
+    ``___``) keeps up to 2,000 characters of input and its whole result; an MCP
+    tool keeps 500 characters of input and a 500-character excerpt of its
+    result. Notes go before the message's remaining ``toolUse`` blocks, a user
+    message left empty is dropped, and the assistant messages it separated are
+    joined, so the result still alternates and pairs every call with its result.
+
+    Args:
+        messages: The conversation, oldest first.
+        tools: Names of the tools the agent about to run has.
+
+    Returns:
+        The rewritten conversation, or ``messages`` itself when no call is foreign.
+    """
+    foreign: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+        for block in message.get("content") or []:
+            use = block.get("toolUse")
+            if use is not None and use.get("name") not in tools:
+                foreign[use.get("toolUseId")] = use
+    if not foreign:
+        return messages
+
+    results: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        for block in message.get("content") or []:
+            result = block.get("toolResult")
+            if result is not None and result.get("toolUseId") in foreign:
+                results[result["toolUseId"]] = result
+
+    rewritten: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content") or []
+        if message.get("role") == "assistant" and any(_calls(block, foreign) for block in content):
+            leading = [
+                {"text": _note(block["toolUse"], results.get(block["toolUse"].get("toolUseId")))}
+                if _calls(block, foreign)
+                else block
+                for block in content
+                if "toolUse" not in block or _calls(block, foreign)
+            ]
+            own_calls = [b for b in content if "toolUse" in b and not _calls(b, foreign)]
+            rewritten.append({**message, "content": [*leading, *own_calls]})
+        elif any(_answers(block, foreign) for block in content):
+            rewritten.append(
+                {**message, "content": [b for b in content if not _answers(b, foreign)]}
+            )
+        else:
+            rewritten.append(message)
+    return _join_turns(rewritten)
+
+
+def _calls(block: dict[str, Any], uses: dict[str, Any]) -> bool:
+    return "toolUse" in block and block["toolUse"].get("toolUseId") in uses
+
+
+def _answers(block: dict[str, Any], uses: dict[str, Any]) -> bool:
+    return "toolResult" in block and block["toolResult"].get("toolUseId") in uses
+
+
+def _note(use: dict[str, Any], result: dict[str, Any] | None) -> str:
+    name = str(use.get("name") or "tool")
+    mcp = is_mcp_tool(name)
+    asked = _cut(
+        json.dumps(use.get("input", {}), ensure_ascii=False, default=str),
+        _MCP_INPUT_CHARS if mcp else _DELEGATE_INPUT_CHARS,
+    )
+    if result is None:
+        returned = "no result"
+    else:
+        returned = result_text(result)
+        if mcp and len(returned) > _RESULT_EXCERPT_CHARS:
+            returned = f"{returned[:_RESULT_EXCERPT_CHARS]}… [{len(returned):,} characters in full]"
+    return f"Earlier step ({name}, a tool you don't have): asked {asked}; returned {returned}"
+
+
+def _cut(text: str, limit: int) -> str:
+    return text if len(text) <= limit else f"{text[:limit]}…"
 
 
 def clear_tool_results(
@@ -103,6 +204,90 @@ def clear_tool_results(
     return cleared
 
 
+def cleared_text(name: str, result: dict[str, Any]) -> str:
+    """The placeholder that replaces a cleared result of tool ``name``."""
+    label = ", ".join([name or "tool", *_result_ids(result)])
+    return f"{_CLEARED_PREFIX}{label}{_CLEARED_SUFFIX}"
+
+
+def _is_cleared(result: dict[str, Any]) -> bool:
+    content = result.get("content") or []
+    text = content[0].get("text") if len(content) == 1 else None
+    return (
+        isinstance(text, str)
+        and text.startswith(_CLEARED_PREFIX)
+        and text.endswith(_CLEARED_SUFFIX)
+    )
+
+
+def _never_cleared(name: str, kept: Collection[str], tools: Collection[str]) -> bool:
+    return name in kept or (name not in tools and not is_mcp_tool(name))
+
+
+def _tool_names(messages: list[dict[str, Any]]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+        for block in message.get("content") or []:
+            use = block.get("toolUse")
+            if use is not None:
+                names[use.get("toolUseId")] = str(use.get("name") or "")
+    return names
+
+
+def _result_chars(result: dict[str, Any]) -> int:
+    total = 0
+    for block in result.get("content") or []:
+        if "text" in block:
+            total += len(str(block["text"]))
+        elif "json" in block:
+            total += len(json.dumps(block["json"], ensure_ascii=False, default=str))
+        else:
+            total += len(str(block))
+    return total
+
+
+def _result_ids(result: dict[str, Any]) -> list[str]:
+    pairs: list[str] = []
+    for block in result.get("content") or []:
+        if "json" in block:
+            _collect_ids(block["json"], pairs)
+        elif isinstance(block.get("text"), str):
+            try:
+                _collect_ids(json.loads(block["text"]), pairs)
+            except ValueError:
+                continue
+    return pairs[:_MAX_IDS]
+
+
+def _collect_ids(value: Any, pairs: list[str]) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _collect_ids(item, pairs)
+        return
+    if not isinstance(value, dict):
+        return
+    for key, item in value.items():
+        if len(pairs) >= _MAX_IDS:
+            return
+        if _is_id(key, item):
+            pair = f"{key}={item}"
+            if pair not in pairs:
+                pairs.append(pair)
+        else:
+            _collect_ids(item, pairs)
+
+
+def _is_id(key: Any, value: Any) -> bool:
+    return (
+        isinstance(key, str)
+        and key.endswith(_ID_SUFFIXES)
+        and isinstance(value, str | int | float)
+        and not isinstance(value, bool)
+    )
+
+
 def mask_transcript(
     messages: list[dict[str, Any]],
     *,
@@ -138,6 +323,33 @@ def mask_transcript(
             for m in cleared
         )
     return _join_turns(masked)
+
+
+def split_calls(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Split a transcript into calls, each opened by a user message with text and no result."""
+    calls: list[list[dict[str, Any]]] = []
+    for message in messages:
+        if not calls or _opens_call(message):
+            calls.append([message])
+        else:
+            calls[-1].append(message)
+    return calls
+
+
+def _opens_call(message: dict[str, Any]) -> bool:
+    content = message.get("content") or []
+    return (
+        message.get("role") == "user"
+        and any("text" in block for block in content)
+        and not any("toolResult" in block for block in content)
+    )
+
+
+def _is_open(call: list[dict[str, Any]]) -> bool:
+    blocks = [block for message in call for block in message.get("content") or []]
+    asked = {b["toolUse"].get("toolUseId") for b in blocks if "toolUse" in b}
+    answered = {b["toolResult"].get("toolUseId") for b in blocks if "toolResult" in b}
+    return not asked <= answered
 
 
 def split_for_summary(
@@ -246,130 +458,6 @@ def _report(call: list[dict[str, Any]]) -> str:
     return ""
 
 
-def split_calls(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Split a transcript into calls, each opened by a user message with text and no result."""
-    calls: list[list[dict[str, Any]]] = []
-    for message in messages:
-        if not calls or _opens_call(message):
-            calls.append([message])
-        else:
-            calls[-1].append(message)
-    return calls
-
-
-def _opens_call(message: dict[str, Any]) -> bool:
-    content = message.get("content") or []
-    return (
-        message.get("role") == "user"
-        and any("text" in block for block in content)
-        and not any("toolResult" in block for block in content)
-    )
-
-
-def _is_open(call: list[dict[str, Any]]) -> bool:
-    blocks = [block for message in call for block in message.get("content") or []]
-    asked = {b["toolUse"].get("toolUseId") for b in blocks if "toolUse" in b}
-    answered = {b["toolResult"].get("toolUseId") for b in blocks if "toolResult" in b}
-    return not asked <= answered
-
-
-def cleared_text(name: str, result: dict[str, Any]) -> str:
-    """The placeholder that replaces a cleared result of tool ``name``."""
-    label = ", ".join([name or "tool", *_result_ids(result)])
-    return f"{_CLEARED_PREFIX}{label}{_CLEARED_SUFFIX}"
-
-
-def _is_cleared(result: dict[str, Any]) -> bool:
-    content = result.get("content") or []
-    text = content[0].get("text") if len(content) == 1 else None
-    return (
-        isinstance(text, str)
-        and text.startswith(_CLEARED_PREFIX)
-        and text.endswith(_CLEARED_SUFFIX)
-    )
-
-
-def _never_cleared(name: str, kept: Collection[str], tools: Collection[str]) -> bool:
-    return name in kept or (name not in tools and not is_mcp_tool(name))
-
-
-def _tool_names(messages: list[dict[str, Any]]) -> dict[str, str]:
-    names: dict[str, str] = {}
-    for message in messages:
-        if message.get("role") != "assistant":
-            continue
-        for block in message.get("content") or []:
-            use = block.get("toolUse")
-            if use is not None:
-                names[use.get("toolUseId")] = str(use.get("name") or "")
-    return names
-
-
-def _result_chars(result: dict[str, Any]) -> int:
-    total = 0
-    for block in result.get("content") or []:
-        if "text" in block:
-            total += len(str(block["text"]))
-        elif "json" in block:
-            total += len(json.dumps(block["json"], ensure_ascii=False, default=str))
-        else:
-            total += len(str(block))
-    return total
-
-
-def _result_ids(result: dict[str, Any]) -> list[str]:
-    pairs: list[str] = []
-    for block in result.get("content") or []:
-        if "json" in block:
-            _collect_ids(block["json"], pairs)
-        elif isinstance(block.get("text"), str):
-            try:
-                _collect_ids(json.loads(block["text"]), pairs)
-            except ValueError:
-                continue
-    return pairs[:_MAX_IDS]
-
-
-def _collect_ids(value: Any, pairs: list[str]) -> None:
-    if isinstance(value, list):
-        for item in value:
-            _collect_ids(item, pairs)
-        return
-    if not isinstance(value, dict):
-        return
-    for key, item in value.items():
-        if len(pairs) >= _MAX_IDS:
-            return
-        if _is_id(key, item):
-            pair = f"{key}={item}"
-            if pair not in pairs:
-                pairs.append(pair)
-        else:
-            _collect_ids(item, pairs)
-
-
-def _is_id(key: Any, value: Any) -> bool:
-    return (
-        isinstance(key, str)
-        and key.endswith(_ID_SUFFIXES)
-        and isinstance(value, str | int | float)
-        and not isinstance(value, bool)
-    )
-
-
-def result_text(result: dict[str, Any]) -> str:
-    """Render a ``toolResult``'s content as text, ``json`` blocks as JSON."""
-    parts: list[str] = []
-    for block in result.get("content") or []:
-        if "text" in block:
-            parts.append(str(block["text"]))
-        elif "json" in block:
-            parts.append(json.dumps(block["json"], ensure_ascii=False, default=str))
-        else:
-            parts.append(f"[{next(iter(block), 'content')}]")
-    return "\n".join(parts)
-
-
 def strip_cache_points(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop every ``cachePoint`` block, and any message that leaves empty."""
     if not any("cachePoint" in b for m in messages for b in m.get("content") or []):
@@ -379,95 +467,6 @@ def strip_cache_points(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for m in messages
     ]
     return [m for m in stripped if m["content"]]
-
-
-def foreign_calls_to_notes(
-    messages: list[dict[str, Any]], tools: Collection[str]
-) -> list[dict[str, Any]]:
-    """Replace calls to tools outside ``tools`` with text notes.
-
-    Each such ``toolUse`` becomes a text block in its assistant message —
-    ``Earlier step (<name>, a tool you don't have): asked <input>; returned
-    <result>`` — and its ``toolResult`` is dropped. A delegate (a name without
-    ``___``) keeps up to 2,000 characters of input and its whole result; an MCP
-    tool keeps 500 characters of input and a 500-character excerpt of its
-    result. Notes go before the message's remaining ``toolUse`` blocks, a user
-    message left empty is dropped, and the assistant messages it separated are
-    joined, so the result still alternates and pairs every call with its result.
-
-    Args:
-        messages: The conversation, oldest first.
-        tools: Names of the tools the agent about to run has.
-
-    Returns:
-        The rewritten conversation, or ``messages`` itself when no call is foreign.
-    """
-    foreign: dict[str, dict[str, Any]] = {}
-    for message in messages:
-        if message.get("role") != "assistant":
-            continue
-        for block in message.get("content") or []:
-            use = block.get("toolUse")
-            if use is not None and use.get("name") not in tools:
-                foreign[use.get("toolUseId")] = use
-    if not foreign:
-        return messages
-
-    results: dict[str, dict[str, Any]] = {}
-    for message in messages:
-        for block in message.get("content") or []:
-            result = block.get("toolResult")
-            if result is not None and result.get("toolUseId") in foreign:
-                results[result["toolUseId"]] = result
-
-    rewritten: list[dict[str, Any]] = []
-    for message in messages:
-        content = message.get("content") or []
-        if message.get("role") == "assistant" and any(_calls(block, foreign) for block in content):
-            leading = [
-                {"text": _note(block["toolUse"], results.get(block["toolUse"].get("toolUseId")))}
-                if _calls(block, foreign)
-                else block
-                for block in content
-                if "toolUse" not in block or _calls(block, foreign)
-            ]
-            own_calls = [b for b in content if "toolUse" in b and not _calls(b, foreign)]
-            rewritten.append({**message, "content": [*leading, *own_calls]})
-        elif any(_answers(block, foreign) for block in content):
-            rewritten.append(
-                {**message, "content": [b for b in content if not _answers(b, foreign)]}
-            )
-        else:
-            rewritten.append(message)
-    return _join_turns(rewritten)
-
-
-def _calls(block: dict[str, Any], uses: dict[str, Any]) -> bool:
-    return "toolUse" in block and block["toolUse"].get("toolUseId") in uses
-
-
-def _answers(block: dict[str, Any], uses: dict[str, Any]) -> bool:
-    return "toolResult" in block and block["toolResult"].get("toolUseId") in uses
-
-
-def _note(use: dict[str, Any], result: dict[str, Any] | None) -> str:
-    name = str(use.get("name") or "tool")
-    mcp = is_mcp_tool(name)
-    asked = _cut(
-        json.dumps(use.get("input", {}), ensure_ascii=False, default=str),
-        _MCP_INPUT_CHARS if mcp else _DELEGATE_INPUT_CHARS,
-    )
-    if result is None:
-        returned = "no result"
-    else:
-        returned = result_text(result)
-        if mcp and len(returned) > _RESULT_EXCERPT_CHARS:
-            returned = f"{returned[:_RESULT_EXCERPT_CHARS]}… [{len(returned):,} characters in full]"
-    return f"Earlier step ({name}, a tool you don't have): asked {asked}; returned {returned}"
-
-
-def _cut(text: str, limit: int) -> str:
-    return text if len(text) <= limit else f"{text[:limit]}…"
 
 
 def _join_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
