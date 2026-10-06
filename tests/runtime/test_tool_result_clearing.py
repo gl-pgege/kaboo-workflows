@@ -16,7 +16,7 @@ from strands import Agent, tool
 
 from kaboo_workflows.config.resolvers.agents import build_agent_from_def
 from kaboo_workflows.hooks import ContextHook
-from kaboo_workflows.hooks._transcript import clear_tool_results
+from kaboo_workflows.hooks._transcript import clear_tool_results, estimate_tokens
 from kaboo_workflows.tools import node_as_async_tool
 from tests.factories import agent_def
 from tests.fakes import ScriptedModel
@@ -133,6 +133,53 @@ def test_a_batch_of_parallel_results_stays_or_goes_as_one_turn() -> None:
 
     # The nine results the model is about to read arrive whole.
     assert _results(cleared) == [_placeholder("athena___run_query")] * 5 + [BIG] * 9
+
+
+def _with_structured(messages: list[Any], data: dict[str, Any]) -> list[Any]:
+    """The transcript as strands stores MCP results: ``structuredContent`` beside ``content``."""
+    out = copy.deepcopy(messages)
+    for message in out:
+        for block in message["content"]:
+            if "toolResult" in block:
+                block["toolResult"]["structuredContent"] = data
+    return out
+
+
+def _structured(messages: list[Any]) -> list[bool]:
+    return [
+        "structuredContent" in block["toolResult"]
+        for message in messages
+        for block in message["content"]
+        if "toolResult" in block
+    ]
+
+
+def test_a_cleared_result_drops_the_structured_copy_strands_keeps() -> None:
+    messages = _with_structured(_transcript(*[("athena___run_query", BIG)] * 3), {"rows": BIG})
+
+    cleared = _clear(messages, keep_last=1)
+
+    assert _results(cleared) == [_placeholder("athena___run_query")] * 2 + [BIG]
+    assert _structured(cleared) == [False, False, True]
+
+
+def test_a_result_cleared_before_loses_its_structured_copy_too() -> None:
+    placeholder = _placeholder("athena___run_query")
+    messages = _with_structured(
+        _transcript(("athena___run_query", placeholder), ("athena___run_query", BIG)),
+        {"rows": BIG},
+    )
+
+    cleared = _clear(messages, keep_last=1)
+
+    assert _results(cleared) == [placeholder, BIG]
+    assert _structured(cleared) == [False, True]
+
+
+def test_the_estimate_leaves_out_what_no_model_is_sent() -> None:
+    messages = _transcript(("athena___run_query", "3 rows"))
+
+    assert estimate_tokens(_with_structured(messages, {"rows": BIG})) == estimate_tokens(messages)
 
 
 def test_keep_last_below_one_is_rejected() -> None:

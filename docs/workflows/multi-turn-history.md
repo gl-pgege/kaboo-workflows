@@ -70,7 +70,8 @@ agents:
 ```
 
 Each finished call keeps its brief, its text, its tool calls and its final
-report; it loses its reasoning, and each tool result becomes
+report; it loses its reasoning and the `structuredContent` copy strands keeps of
+an MCP tool's result, and each tool result becomes
 `Result cleared (<tool>[, <id>=<value>…]): call it again to see it.` A result
 survives when it is shorter than the agent's `context.clear_tool_results.min_chars`
 (1500 without one), when its tool is in that block's `keep_tools`, or when it is

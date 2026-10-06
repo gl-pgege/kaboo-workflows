@@ -38,8 +38,12 @@ def is_mcp_tool(name: str) -> bool:
 
 
 def estimate_tokens(messages: list[dict[str, Any]], system_prompt: Any = None) -> int:
-    """Estimate the tokens of ``messages`` and ``system_prompt`` at four characters each."""
-    text = json.dumps(messages, ensure_ascii=False, default=str)
+    """Estimate the tokens of ``messages`` and ``system_prompt`` at four characters each.
+
+    A tool result's ``structuredContent`` is not counted: strands keeps it beside
+    the ``content`` of an MCP tool's result, and no model is sent it.
+    """
+    text = json.dumps(_as_sent(messages), ensure_ascii=False, default=str)
     if system_prompt:
         text += (
             system_prompt
@@ -47,6 +51,27 @@ def estimate_tokens(messages: list[dict[str, Any]], system_prompt: Any = None) -
             else json.dumps(system_prompt, ensure_ascii=False, default=str)
         )
     return len(text) // 4
+
+
+def _as_sent(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {**m, "content": [_without_structured(b) for b in m["content"]]}
+        if any(_has_structured(b) for b in m.get("content") or [])
+        else m
+        for m in messages
+    ]
+
+
+def _has_structured(block: dict[str, Any]) -> bool:
+    return "structuredContent" in (block.get("toolResult") or {})
+
+
+def _without_structured(block: dict[str, Any]) -> dict[str, Any]:
+    """``block`` without its tool result's ``structuredContent``."""
+    if not _has_structured(block):
+        return block
+    result = {k: v for k, v in block["toolResult"].items() if k != "structuredContent"}
+    return {**block, "toolResult": result}
 
 
 def result_text(result: dict[str, Any]) -> str:
@@ -166,13 +191,14 @@ def clear_tool_results(
     at one or more the newest batch, which the model has not read yet, arrives
     whole. The placeholder reads ``Result cleared (<tool>[, <key>=<value>…]):
     call it again to see it.``, carrying up to ten pairs from the result's JSON
-    whose key ends in ``id``/``Id``/``ID``. A result is left alone when it is
-    shorter than ``min_chars`` characters, already a placeholder, or never
-    cleared — its tool is in ``kept``, or is a delegate missing from ``tools``.
-    The ``toolUse`` blocks are kept, so the model can make the call again. The
-    output depends on nothing but the input, and clearing it again changes
-    nothing, so a result reads the same on every later call once it has been
-    cleared.
+    whose key ends in ``id``/``Id``/``ID``. A cleared result also loses the
+    ``structuredContent`` copy strands keeps of an MCP result. A result is left
+    alone when it is shorter than ``min_chars`` characters, already a
+    placeholder, or never cleared — its tool is in ``kept``, or is a delegate
+    missing from ``tools``. The ``toolUse`` blocks are kept, so the model can
+    make the call again. The output depends on nothing but the input, and
+    clearing it again changes nothing, so a result reads the same on every later
+    call once it has been cleared.
 
     Args:
         messages: The conversation, oldest first.
@@ -198,16 +224,22 @@ def clear_tool_results(
     for i, j in places:
         if i in recent:
             continue
-        result = cleared[i]["content"][j]["toolResult"]
+        block = cleared[i]["content"][j]
+        result = block["toolResult"]
         name = names.get(result.get("toolUseId"), "")
-        if (
-            _never_cleared(name, kept, tools)
-            or _is_cleared(result)
-            or _result_chars(result) < min_chars
-        ):
+        if _is_cleared(result):
+            if not _has_structured(block):
+                continue
+            replacement = _without_structured(block)
+        elif _never_cleared(name, kept, tools) or _result_chars(result) < min_chars:
             continue
+        else:
+            placeholder = {
+                "toolResult": {**result, "content": [{"text": cleared_text(name, result)}]}
+            }
+            replacement = _without_structured(placeholder)
         content = list(cleared[i]["content"])
-        content[j] = {"toolResult": {**result, "content": [{"text": cleared_text(name, result)}]}}
+        content[j] = replacement
         cleared[i] = {**cleared[i], "content": content}
     return cleared
 
@@ -306,8 +338,9 @@ def mask_transcript(
     """Mask every finished call of a sub-agent's transcript.
 
     A finished call keeps its brief, its text and ``toolUse`` blocks — its final
-    report among them — and loses its ``reasoningContent``; each of its tool
-    results is cleared as :func:`clear_tool_results` would with ``keep_last=0``.
+    report among them — and loses its ``reasoningContent`` and every result's
+    ``structuredContent``; each of its tool results is cleared as
+    :func:`clear_tool_results` would with ``keep_last=0``.
     A call with an unanswered ``toolUse``, such as one paused on an interrupt,
     is kept whole. Masking a masked transcript changes nothing.
 
@@ -327,7 +360,14 @@ def mask_transcript(
             continue
         cleared = clear_tool_results(call, keep_last=0, min_chars=min_chars, kept=kept, tools=tools)
         masked.extend(
-            {**m, "content": [b for b in m.get("content") or [] if "reasoningContent" not in b]}
+            {
+                **m,
+                "content": [
+                    _without_structured(b)
+                    for b in m.get("content") or []
+                    if "reasoningContent" not in b
+                ],
+            }
             for m in cleared
         )
     return _join_turns(masked)

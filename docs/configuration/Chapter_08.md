@@ -86,7 +86,7 @@ agents:
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `trigger` | *(required)* | Estimated input tokens (system prompt plus messages, four characters a token) above which results are cleared before a model call. |
+| `trigger` | *(required)* | Estimated input tokens (system prompt plus messages, four characters a token) above which results are cleared before a model call. The `structuredContent` strands keeps beside an MCP tool's result isn't counted, since no model is sent it. |
 | `keep_last` | `3` | How many of the most recent turns keep their results; at least 1. A turn is every result of one model response, so a batch of parallel calls stays or goes together, and the newest batch, which the model has not read yet, is always sent whole. |
 | `min_chars` | `1500` | Results shorter than this many characters always stay. |
 | `keep_tools` | `[]` | Tools whose results always stay. |
@@ -99,8 +99,9 @@ Result cleared (warehouse___run_query, queryExecutionId=8f3c, tableId=sales): ca
 
 It names the tool and up to ten `key=value` pairs found in the result's JSON for
 keys ending in `id`, `Id` or `ID`, so the model can call again for the data it
-needs. A delegate's result, another agent's report, is never cleared: it cannot
-be fetched again without rerunning that agent. The rewrite depends on nothing but
+needs. A cleared result also loses its `structuredContent`. A delegate's
+result, another agent's report, is never cleared: it cannot be fetched again
+without rerunning that agent. The rewrite depends on nothing but
 the messages and leaves a cleared result as it is, so the result reads the same
 on every later call and a cached prompt prefix survives.
 

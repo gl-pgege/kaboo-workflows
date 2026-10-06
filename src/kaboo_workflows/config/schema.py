@@ -248,7 +248,8 @@ class HistoryDef(BaseModel):
       When omitted, the agent's stable dot-path is used as its key.
     - ``keep`` — ``"full"`` writes the transcript back as captured.
       ``"masked"`` writes back a copy in which every finished call keeps its
-      brief, its text, its tool calls and its final report, drops reasoning,
+      brief, its text, its tool calls and its final report, drops reasoning
+      and the ``structuredContent`` strands keeps beside an MCP tool's result,
       and has each tool result replaced by a ``Result cleared (…)`` placeholder
       unless the result is shorter than the agent's
       ``context.clear_tool_results.min_chars`` (1500 without one), its tool is

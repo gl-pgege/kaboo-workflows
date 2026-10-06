@@ -111,6 +111,18 @@ def test_some_results_survive_masking(call: list[Any], overrides: dict[str, Any]
     assert _result_texts(_mask(call, **overrides)) == _result_texts(call)
 
 
+def test_masking_drops_the_structured_copy_of_every_result() -> None:
+    call = _call(1, result="3 rows")
+    call[2]["content"][0]["toolResult"]["structuredContent"] = {"rows": 3}
+
+    masked = _mask(call)
+
+    assert _result_texts(masked) == ["3 rows"]
+    assert all(
+        "structuredContent" not in b.get("toolResult", {}) for m in masked for b in m["content"]
+    )
+
+
 def test_a_call_paused_on_an_interrupt_is_kept_whole() -> None:
     assert _mask([*_call(1), *_paused_call(2)]) == [*_masked_call(1), *_paused_call(2)]
 
