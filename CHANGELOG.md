@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## v0.21.2 (2026-10-05)
+
+### Feat
+
+- **history**: let a Bedrock sub-agent read its memory from the cache — an agent seeded with memory on a `BedrockModel` without `cache_config` sends its model a `cachePoint` after the last loaded message, so every later turn of the call reads the memory from the prompt cache; cache points are never written back, and run usage (`usageByRun`) gains `cacheHitRate` for a run that used the cache
+- **history**: summarise a masked memory that outgrows its budget — `history.summarize_over` (tokens) with `summarize_model` folds the oldest calls into one leading pair, "Summary of your earlier work in this conversation", keeping the newest calls that fit and copying `To remember` blocks verbatim; a failed summary writes back the masked memory
+- **history**: write back a masked copy of a sub-agent's memory — `history.keep: masked` writes back each finished call with its brief, text, tool calls and report but without its tool results or reasoning, keeps a call paused on an interrupt whole, masks a memory stored in full when it loads, and leaves the run's own transcript whole
+- **context**: clear old tool results once a call's input grows — `context.clear_tool_results` (`trigger`, `keep_last`, `min_chars`, `keep_tools`) replaces older results in the copy sent to the model with `Result cleared (<tool>, <ids>): call it again to see it.`, never a delegate's report, and the same way on every later call
+- **context**: show a model the calls it cannot make as notes — a `toolUse` for a tool the running agent lacks, in the chat or in loaded memory, reaches its model as `Earlier step (<tool>, a tool you don't have): asked …; returned …`; the chat, `MESSAGES_SNAPSHOT` and written-back history keep the original calls. Requires strands-agents 1.44 or later
+- **models**: give a bedrock model's client its configured timeouts — `params.client_config` (`read_timeout`, `connect_timeout`, `retries: {max_attempts, mode}`) becomes the model's `boto_client_config`, checked when the config loads; an unset `read_timeout` keeps strands' 120 seconds
+
+### Fix
+
+- **history**: give a forked delegate entry its entry agent's memory — a delegate orchestration's fork, such as `analyze_sql` forking `sql_analyst` with `history: {group: sql}`, now reads and writes the transcript its entry agent's `history:` names
+
+### Refactor
+
+- **hooks**: group the transcript transforms by what they do
+
 ## v0.21.1 (2026-10-02)
 
 ### Fix
