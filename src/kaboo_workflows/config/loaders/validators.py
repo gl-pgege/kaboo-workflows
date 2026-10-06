@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from ...exceptions import UnresolvedReferenceError
+from ...exceptions import ConfigurationError, UnresolvedReferenceError
 from ..schema import (
+    AgentDef,
     AppConfig,
     DelegateOrchestrationDef,
     GraphOrchestrationDef,
@@ -17,6 +18,7 @@ def validate_references(config: AppConfig) -> None:
     Checks:
     - Agent model references (``model``, ``history.summarize_model``) exist in
       config.models
+    - An agent's ``thinking`` has a Bedrock model to apply to
     - Agent MCP client references exist in config.mcp_clients
     - MCP client server references exist in config.mcp_servers
     - Orchestration node references exist in agents or orchestrations
@@ -38,6 +40,7 @@ def validate_references(config: AppConfig) -> None:
                 f"which is not defined.\n"
                 f"Available models: {list(config.models)}"
             )
+        _validate_agent_thinking(agent_name, agent_def, config)
         history = agent_def.history
         summarize_model = getattr(history, "summarize_model", None)
         if summarize_model is not None and summarize_model not in config.models:
@@ -64,6 +67,22 @@ def validate_references(config: AppConfig) -> None:
 
     for orch_name, orch_def in config.orchestrations.items():
         validate_orchestration_refs(orch_def, all_node_names, orch_name=orch_name)
+
+
+def _validate_agent_thinking(agent_name: str, agent_def: AgentDef, config: AppConfig) -> None:
+    """Check that an agent's ``thinking`` has a Bedrock model to apply to."""
+    if agent_def.thinking is None:
+        return
+    if agent_def.model is None:
+        raise ConfigurationError(
+            f"Agent '{agent_name}' sets thinking but no model: to apply it to."
+        )
+    target = config.models[agent_def.model] if isinstance(agent_def.model, str) else agent_def.model
+    if target.provider.lower() != "bedrock":
+        raise ConfigurationError(
+            f"Agent '{agent_name}' sets thinking, which bedrock models support, "
+            f"but its model uses provider '{target.provider}'."
+        )
 
 
 def validate_orchestration_refs(

@@ -36,6 +36,8 @@ models:
     params: {}        # Provider-specific kwargs. For bedrock, client_config:
                       # {read_timeout, connect_timeout, retries: {max_attempts, mode}}
                       # sets the boto client (Chapter 2)
+    thinking: null    # bedrock only: false | true | {effort, display}, the
+                      # default for every agent on this model (Chapter 2)
 ```
 
 ## AgentDef
@@ -46,6 +48,8 @@ agents:
     type: null                     # Custom factory: module.path:factory_func
     agent_kwargs: {}               # Extra kwargs for Agent() or custom factory
     model: "model_name"            # String ref to models: or inline ModelDef
+    thinking: null                 # false | true | {effort, display}, laid over
+                                   # the model's thinking: (Chapter 2)
     system_prompt: "..."           # System prompt string
     description: "..."             # Agent description (used in orchestration tools)
     tools: []                      # List of tool spec strings

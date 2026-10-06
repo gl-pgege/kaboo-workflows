@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from strands.models import Model
@@ -44,12 +45,51 @@ def _bedrock_client_config(client_config: dict[str, Any]) -> BotocoreConfig:
     return Config(**{"read_timeout": DEFAULT_READ_TIMEOUT, **client_config})
 
 
-def create_model(provider: str, model_id: str, **params: Any) -> Model:
+def _bedrock_thinking_fields(thinking: bool | Mapping[str, Any]) -> dict[str, Any]:
+    """Return the ``additional_request_fields`` that carry a thinking setting to Bedrock."""
+    if thinking is False:
+        return {"thinking": {"type": "disabled"}}
+    settings = {} if thinking is True else dict(thinking)
+    block: dict[str, Any] = {"type": "adaptive"}
+    if settings.get("display"):
+        block["display"] = settings["display"]
+    fields: dict[str, Any] = {"thinking": block}
+    if settings.get("effort"):
+        fields["output_config"] = {"effort": settings["effort"]}
+    return fields
+
+
+def _with_bedrock_thinking(
+    params: dict[str, Any], thinking: bool | Mapping[str, Any]
+) -> dict[str, Any]:
+    """Return ``params`` with the thinking setting merged into ``additional_request_fields``."""
+    extra = dict(params.get("additional_request_fields") or {})
+    if "thinking" in extra:
+        raise ValueError(
+            "A bedrock model takes thinking or additional_request_fields.thinking, not both."
+        )
+    fields = _bedrock_thinking_fields(thinking)
+    if "output_config" in fields:
+        fields["output_config"] = {**(extra.get("output_config") or {}), **fields["output_config"]}
+    return {**params, "additional_request_fields": {**extra, **fields}}
+
+
+def create_model(
+    provider: str,
+    model_id: str,
+    *,
+    thinking: bool | Mapping[str, Any] | None = None,
+    **params: Any,
+) -> Model:
     """Dispatch to the appropriate model factory by provider name.
 
     Args:
         provider: ``"ollama"`` or ``"bedrock"`` or ``"openai"`` or ``"gemini"``.
         model_id: Model identifier.
+        thinking: ``False`` to turn thinking off, ``True`` or a mapping of
+            ``effort`` and ``display`` to turn adaptive thinking on, ``None`` to
+            send nothing. Bedrock only: it becomes the model's
+            ``additional_request_fields``.
         **params: Provider-specific keyword arguments. For ``"bedrock"``, a
             ``client_config`` mapping (``read_timeout``, ``connect_timeout``,
             ``retries``) becomes the model's ``boto_client_config``.
@@ -58,10 +98,14 @@ def create_model(provider: str, model_id: str, **params: Any) -> Model:
         Strands model instance.
 
     Raises:
-        ValueError: If the provider is unknown, or a Bedrock model is given both
-            ``client_config`` and ``boto_client_config``.
+        ValueError: If the provider is unknown, a non-Bedrock model is given a
+            ``thinking`` setting, or a Bedrock model is given both
+            ``client_config`` and ``boto_client_config``, or both ``thinking``
+            and ``additional_request_fields.thinking``.
         ImportError: If a required optional provider package is not installed.
     """
+    if thinking is not None and provider.lower() != "bedrock":
+        raise ValueError(f"thinking is supported on bedrock models only, not '{provider}'.")
     match provider.lower():
         case "bedrock":
             from strands.models.bedrock import BedrockModel
@@ -73,6 +117,8 @@ def create_model(provider: str, model_id: str, **params: Any) -> Model:
                         "A bedrock model takes client_config or boto_client_config, not both."
                     )
                 params["boto_client_config"] = _bedrock_client_config(client_config)
+            if thinking is not None:
+                params = _with_bedrock_thinking(params, thinking)
             return BedrockModel(model_id=model_id, **params)
 
         case "ollama":

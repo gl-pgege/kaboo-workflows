@@ -145,6 +145,56 @@ models:
         retries: {max_attempts: 4, mode: adaptive}
 ```
 
+## Thinking
+
+Claude models on Bedrock can think before they answer. `thinking:` says whether
+they do: on a model, as the default for every agent that uses it, and on an
+agent, as an override of its model's.
+
+```yaml
+models:
+  sonnet:
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-5
+    thinking: {effort: high, display: summarized}
+
+agents:
+  planner:
+    model: sonnet              # thinks, as its model does
+  worker:
+    model: sonnet
+    thinking: false            # answers without thinking
+  checker:
+    model: sonnet
+    thinking: {effort: low}    # thinks less, with the model's display
+```
+
+| Value | Sent to Bedrock |
+|-------|-----------------|
+| `false` (or `off`) | `thinking: {type: disabled}` |
+| `true` | `thinking: {type: adaptive}` |
+| `{effort, display}` | `thinking: {type: adaptive, display}` and `output_config: {effort}`, each only when set |
+| unset | nothing, so the model's own default applies |
+
+- `effort` is `low`, `medium`, `high`, `xhigh` or `max`.
+- `display: summarized` returns a readable summary of the thinking, which streams as
+  `REASONING` events; `omitted` returns none of it. Thinking is billed the same
+  either way.
+
+An agent's `false` wins over its model's setting, a mapping replaces only the
+fields it sets, and `true` takes the model's settings. The fields reach strands'
+`BedrockModel` as `additional_request_fields`, so a model takes `thinking:` or
+`params.additional_request_fields.thinking`, not both. Other providers reject
+`thinking:` when the config loads.
+
+Agents whose setting differs from their named model's run on a variant of it, one
+per setting, built for the first such agent and reused by every agent and session
+after it.
+
+Which settings a model accepts is the provider's business: some Claude models
+think by default, some reject `type: disabled`, and older ones have no adaptive
+thinking. Check the model's documentation.
+
 > **Tips & Tricks**
 >
 > - When combined with `vars`, you can swap models at runtime: `MODEL=gpt-4o python main.py`. See [Chapter 3](Chapter_03.md).

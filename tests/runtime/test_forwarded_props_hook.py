@@ -95,6 +95,18 @@ def test_accepts_camel_case_keys():
     assert agent.model.get_config()["model_id"] == "model-c"
 
 
+def test_a_model_swap_keeps_the_thinking_setting():
+    from kaboo_workflows.models import create_model
+
+    set_forwarded_props({"agent_config": {"model_id": "model-b"}})
+    agent = _agent()
+    agent.model = create_model("bedrock", "model-a", region_name="us-east-1", thinking=False)
+    ForwardedPropsHook(apply_agent_config=True)._on_before_invocation(_event(agent))
+    config = agent.model.get_config()
+    assert config["model_id"] == "model-b"
+    assert config["additional_request_fields"] == {"thinking": {"type": "disabled"}}
+
+
 def test_same_model_id_keeps_instance():
     set_forwarded_props({"agent_config": {"model_id": "model-a"}})
     agent = _agent()

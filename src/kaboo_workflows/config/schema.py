@@ -41,12 +41,50 @@ class BedrockClientConfigDef(BaseModel):
     retries: BedrockRetriesDef | None = None
 
 
+class ThinkingDef(BaseModel):
+    """Adaptive thinking settings: a model's default, or an agent's override of it.
+
+    For a Bedrock model they become ``additionalModelRequestFields``:
+    ``thinking: {type: adaptive, display}`` and ``output_config: {effort}``. A field
+    left unset is not sent, so the model's own default applies to it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    display: Literal["summarized", "omitted"] | None = None
+
+
 class ModelDef(BaseModel):
     """LLM model configuration."""
 
     provider: str
     model_id: str
     params: dict[str, Any] = Field(default_factory=dict)
+    thinking: ThinkingDef | bool | None = None
+    """Whether the model thinks before it answers, for every agent that uses it.
+
+    ``false`` turns thinking off and ``true`` turns adaptive thinking on; a mapping
+    turns it on with an ``effort`` and a ``display``. Unset sends nothing, so the
+    provider's default applies. An agent's own ``thinking:`` is laid over this one.
+    Bedrock models only.
+    """
+
+    @model_validator(mode="after")
+    def _validate_thinking(self) -> ModelDef:
+        """Accept ``thinking`` on Bedrock models only, and only once per model."""
+        if self.thinking is None:
+            return self
+        if self.provider.lower() != "bedrock":
+            raise ValueError(
+                f"thinking is supported on bedrock models only, not provider '{self.provider}'."
+            )
+        if "thinking" in (self.params.get("additional_request_fields") or {}):
+            raise ValueError(
+                "A bedrock model takes thinking or params.additional_request_fields.thinking, "
+                "not both."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_bedrock_client_config(self) -> ModelDef:
@@ -477,6 +515,13 @@ class AgentDef(BaseModel):
     key will raise TypeError at construction time.
     """
     model: str | ModelDef | None = None
+    thinking: ThinkingDef | bool | None = None
+    """This agent's thinking, laid over its model's ``thinking:``.
+
+    ``false`` wins outright; a mapping overrides only the fields it sets, so
+    ``{effort: low}`` keeps the model's ``display``; ``true`` takes the model's
+    settings. Unset, the agent thinks as its model does.
+    """
     system_prompt: str | None = None
     description: str | None = None
     tools: list[str] = Field(default_factory=list)

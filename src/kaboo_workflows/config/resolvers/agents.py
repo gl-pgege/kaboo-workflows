@@ -17,7 +17,7 @@ from ...utils import load_object
 from .conversation_manager import resolve_conversation_manager
 from .hooks import resolve_hook_entry
 from .mcp import resolve_tools
-from .models import resolve_model
+from .models import resolve_model, with_thinking
 from .session_manager import resolve_leaf_session_manager
 
 if TYPE_CHECKING:
@@ -81,13 +81,15 @@ def build_agent_from_def(
         ConfigurationError: If a swarm or graph agent has a session manager.
         TypeError: If a custom factory doesn't return an Agent.
     """
-    # 1. Resolve model — inline ModelDef or global name ref
+    # 1. Resolve model — inline ModelDef or global name ref, with the agent's thinking
     model: Model | None = None
     if agent_def.model is not None:
         if isinstance(agent_def.model, str):
             model = models[agent_def.model]
+            if agent_def.thinking is not None:
+                model = with_thinking(model, agent_def.thinking)
         else:
-            model = resolve_model(agent_def.model)
+            model = resolve_model(agent_def.model, agent_def.thinking)
 
     # 2. Resolve tool specs
     tools = resolve_tools(agent_def.tools)
