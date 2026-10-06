@@ -118,6 +118,33 @@ models:
         max_retries: 1
 ```
 
+### Bedrock client settings: `client_config`
+
+For the `bedrock` provider, `params.client_config` sets the timeouts and retry
+policy of the boto client the model reaches Bedrock through. kaboo turns it into
+a botocore `Config` and passes it to strands' `BedrockModel` as
+`boto_client_config`. Only these keys are accepted; a misspelt one fails when the
+config loads rather than being ignored.
+
+| Key | Value | Meaning |
+|-----|-------|---------|
+| `read_timeout` | seconds, > 0 | How long to wait for data on the response stream. Unset, it stays at strands' Bedrock default of 120 (botocore's own is 60). |
+| `connect_timeout` | seconds, > 0 | How long to wait for a connection. Unset, botocore's 60. |
+| `retries.max_attempts` | integer, ≥ 0 | Retries after the first attempt. |
+| `retries.mode` | `legacy` \| `standard` \| `adaptive` | botocore's retry mode. |
+
+```yaml
+models:
+  claude:
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-4-6-v1:0
+    params:
+      client_config:
+        read_timeout: 840        # long generations on a slow stream
+        connect_timeout: 10
+        retries: {max_attempts: 4, mode: adaptive}
+```
+
 > **Tips & Tricks**
 >
 > - When combined with `vars`, you can swap models at runtime: `MODEL=gpt-4o python main.py`. See [Chapter 3](Chapter_03.md).

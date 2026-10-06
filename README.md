@@ -274,7 +274,7 @@ Public subpackages (import directly for the rest of the surface):
 |-------------|-----------|
 | `kaboo_workflows.adapters` | `create_agui_app` — the primary serving entrypoint |
 | `kaboo_workflows.config` | `load`, `load_config`, `load_session`, schema models (`AgentDef`, `AppConfig`, …) |
-| `kaboo_workflows.hooks` | `EventPublisher`, `HistoryHook`, `InterruptHook`, guards, `ToolNameSanitizer` |
+| `kaboo_workflows.hooks` | `EventPublisher`, `ContextHook`, `HistoryHook`, `InterruptHook`, guards, `ToolNameSanitizer` |
 | `kaboo_workflows.mcp` | `MCPClient`, `MCPServer`, `MCPLifecycle`, transports |
 | `kaboo_workflows.tools` | `ask_user`, tool loaders, `node_as_tool` |
 | `kaboo_workflows.converters` | `StreamConverter`, `OpenAIStreamConverter`, `RawStreamConverter` |

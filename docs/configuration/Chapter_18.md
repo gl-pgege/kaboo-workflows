@@ -33,7 +33,9 @@ models:
   name:
     provider: bedrock | openai | ollama | gemini | module.path:CustomModel
     model_id: "model-identifier"
-    params: {}        # Provider-specific kwargs
+    params: {}        # Provider-specific kwargs. For bedrock, client_config:
+                      # {read_timeout, connect_timeout, retries: {max_attempts, mode}}
+                      # sets the boto client (Chapter 2)
 ```
 
 ## AgentDef
@@ -57,11 +59,43 @@ agents:
                                    # labelled in the event stream (Chapter 15)
     interrupt: null                # InterruptDef, or true for defaults (Chapter 6):
                                    # {tools: [], ask_user: true, ttl_seconds: null}
-    history: null                  # true/false, or {enabled, group}; falls back to
-                                   # the root history: default
+    history: null                  # true/false, or a HistoryDef (below); falls back
+                                   # to the root history: default
+    context: null                  # ContextDef (below): what the model is sent
     attachments: null              # none | reference | inline | bool | {enabled, inline}
     output_schema: null            # Import path to a Pydantic model the agent must
                                    # return (module.path:Model)
+```
+
+## HistoryDef
+
+```yaml
+agents:
+  name:
+    history:
+      enabled: true                # Remember across turns of the conversation
+      group: null                  # Shared transcript bucket (default: the agent's path)
+      keep: full                   # full | masked — masked writes back each finished
+                                   # call without its tool results or reasoning
+      summarize_over: null         # Tokens; with keep: masked, summarise the oldest
+                                   # calls once the written-back memory passes this
+      summarize_model: null        # A name under models:; required with summarize_over
+```
+
+A delegate orchestration's forked agent remembers exactly as its `entry_name`
+agent's `history:` says. See [Multi-turn history](../workflows/multi-turn-history.md).
+
+## ContextDef
+
+```yaml
+agents:
+  name:
+    context:
+      clear_tool_results:          # Off when absent (Chapter 8)
+        trigger: 60000             # Required: estimated input tokens
+        keep_last: 3               # Most recent results that always stay
+        min_chars: 1500            # Shorter results always stay
+        keep_tools: []             # Tools whose results always stay
 ```
 
 ## AttachmentsDef

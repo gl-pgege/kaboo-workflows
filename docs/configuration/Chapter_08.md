@@ -60,6 +60,67 @@ conversation_manager:
     strategy: semantic_relevance
 ```
 
+## What the Model Is Sent: `context:`
+
+A conversation manager decides what an agent keeps. `context:` shapes only the
+copy of that conversation each model call is sent: the agent's own messages, the
+chat a client stores and the history written back for it stay exactly as they
+were.
+
+### Clearing old tool results
+
+An agent working through many tool calls resends every earlier result on every
+model turn. `clear_tool_results` replaces the older ones once the input grows:
+
+```yaml
+agents:
+  analyst:
+    mcp: [warehouse]
+    context:
+      clear_tool_results:
+        trigger: 60000            # estimated input tokens before anything is cleared
+        keep_last: 3              # the most recent results always stay
+        min_chars: 1500           # shorter results always stay
+        keep_tools: [warehouse___get_schema]
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `trigger` | *(required)* | Estimated input tokens (system prompt plus messages, four characters a token) above which results are cleared before a model call. |
+| `keep_last` | `3` | How many of the most recent tool results always stay. |
+| `min_chars` | `1500` | Results shorter than this many characters always stay. |
+| `keep_tools` | `[]` | Tools whose results always stay. |
+
+A cleared result keeps its call and reads:
+
+```text
+Result cleared (warehouse___run_query, queryExecutionId=8f3c, tableId=sales): call it again to see it.
+```
+
+It names the tool and up to ten `key=value` pairs found in the result's JSON for
+keys ending in `id`, `Id` or `ID`, so the model can call again for the data it
+needs. A delegate's result, another agent's report, is never cleared: it cannot
+be fetched again without rerunning that agent. The rewrite depends on nothing but
+the messages and leaves a cleared result as it is, so the result reads the same
+on every later call and a cached prompt prefix survives.
+
+### Calls to tools an agent does not have
+
+Every agent, with or without `context:`, turns a `toolUse` for a tool it does not
+have into a text note on the copy its model is sent:
+
+```text
+Earlier step (analyze_sql, a tool you don't have): asked {"input": "revenue in 2024"}; returned Revenue in 2024 was $42M.
+```
+
+Such calls reach an agent through a transcript it did not write: the chat, when
+the workflow changed between turns, or a `history.group` shared with an agent
+whose tools differ. A model shown a call it cannot make tends to make it anyway.
+A delegate (a name without `___`) keeps up to 2,000 characters of input and its
+whole result; an MCP tool (`<target>___<tool>`) keeps 500 characters of input
+and a 500-character excerpt of its result, with its full length noted. Calls to
+tools the agent has are left alone.
+
 > **Tips & Tricks**
 >
 > - Conversation managers are per-agent. Different agents in the same config can use different strategies.
