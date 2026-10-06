@@ -18,6 +18,7 @@ MCP_TOOL_SEPARATOR = "___"
 DEFAULT_MIN_CHARS = 1500
 SUMMARY_BRIEF = "Summary of your earlier work in this conversation"
 SEEDED_MESSAGES = "kaboo_seeded_messages"
+INHERITED_MESSAGES = "kaboo_inherited_messages"
 
 _DELEGATE_INPUT_CHARS = 2000
 _MCP_INPUT_CHARS = 500
@@ -88,9 +89,18 @@ def result_text(result: dict[str, Any]) -> str:
 
 
 def foreign_calls_to_notes(
-    messages: list[dict[str, Any]], tools: Collection[str]
+    messages: list[dict[str, Any]],
+    tools: Collection[str],
+    *,
+    inherited: int | None = None,
 ) -> list[dict[str, Any]]:
     """Replace calls to tools outside ``tools`` with text notes.
+
+    Only calls the agent inherited are rewritten: those in the first
+    ``inherited`` messages (every message when it is ``None``), and never one
+    answered in the last message. A call the agent made itself keeps its result,
+    so a mistyped tool name reaches the model as the error it is, and the
+    conversation still ends with the user turn the model answers.
 
     Each such ``toolUse`` becomes a text block in its assistant message —
     ``Earlier step (<name>, a tool you don't have): asked <input>; returned
@@ -104,17 +114,29 @@ def foreign_calls_to_notes(
     Args:
         messages: The conversation, oldest first.
         tools: Names of the tools the agent about to run has.
+        inherited: How many leading messages the agent did not write in this
+            invocation.
 
     Returns:
         The rewritten conversation, or ``messages`` itself when no call is foreign.
     """
+    scope = messages if inherited is None else messages[:inherited]
+    answering = {
+        block["toolResult"].get("toolUseId")
+        for block in (messages[-1].get("content") or [] if messages else [])
+        if "toolResult" in block
+    }
     foreign: dict[str, dict[str, Any]] = {}
-    for message in messages:
+    for message in scope:
         if message.get("role") != "assistant":
             continue
         for block in message.get("content") or []:
             use = block.get("toolUse")
-            if use is not None and use.get("name") not in tools:
+            if (
+                use is not None
+                and use.get("name") not in tools
+                and use.get("toolUseId") not in answering
+            ):
                 foreign[use.get("toolUseId")] = use
     if not foreign:
         return messages
@@ -504,6 +526,26 @@ def _report(call: list[dict[str, Any]]) -> str:
         if texts:
             return "\n".join(texts)
     return ""
+
+
+def settle_cache_points(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Move a ``cachePoint`` that opens a message to the end of the message before it.
+
+    Rewriting a conversation can strip the content a cache point followed, and
+    Bedrock rejects a cache point with nothing before it. One that opens the
+    first message has nowhere to go and is dropped.
+    """
+    if not any("cachePoint" in b for m in messages for b in m.get("content") or []):
+        return messages
+    settled: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content") or []
+        lead = next((i for i, b in enumerate(content) if "cachePoint" not in b), len(content))
+        if lead and settled and "cachePoint" not in settled[-1]["content"][-1]:
+            settled[-1] = {**settled[-1], "content": [*settled[-1]["content"], content[0]]}
+        if lead < len(content):
+            settled.append({**message, "content": content[lead:]} if lead else message)
+    return _join_turns(settled)
 
 
 def strip_cache_points(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

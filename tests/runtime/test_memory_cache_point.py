@@ -16,6 +16,7 @@ from strands.models import CacheConfig
 
 from kaboo_workflows._context import HistoryExchange, set_history_exchange
 from kaboo_workflows.hooks import ContextHook, HistoryHook
+from kaboo_workflows.hooks._transcript import settle_cache_points
 from tests.fakes import LocalBedrockModel, ScriptedModel
 
 MEMORY: list[Any] = [
@@ -97,6 +98,40 @@ async def test_no_cache_point_is_added_where_it_would_not_reach_bedrock(model: A
     await agent.invoke_async("and 2022?")
 
     assert _cache_points(model.calls[-1]) == []
+
+
+async def test_a_cache_point_never_opens_a_message() -> None:
+    use = {"toolUseId": "m1", "name": "code-workbench___update_query", "input": {}}
+    result = {"toolUseId": "m1", "status": "error", "content": [{"text": "Unknown tool"}]}
+    memory: list[Any] = [
+        {"role": "user", "content": [{"text": "update the query"}]},
+        {"role": "assistant", "content": [{"toolUse": use}]},
+        {"role": "user", "content": [{"toolResult": result}]},
+    ]
+    model = LocalBedrockModel()
+    agent, _ = _remembering_agent(model, memory)
+
+    await agent.invoke_async("try again")
+
+    sent = model.calls[-1]
+    assert [m["role"] for m in sent] == ["user", "assistant", "user"]
+    assert _cache_points(sent) == [1]
+    assert all("cachePoint" not in m["content"][0] for m in sent)
+
+
+def test_a_cache_point_that_opens_a_message_moves_back_or_goes() -> None:
+    point = {"cachePoint": {"type": "default"}}
+    messages = [
+        {"role": "user", "content": [point, {"text": "a"}]},
+        {"role": "assistant", "content": [{"text": "b"}]},
+        {"role": "user", "content": [point, {"text": "c"}]},
+    ]
+
+    assert settle_cache_points(messages) == [
+        {"role": "user", "content": [{"text": "a"}]},
+        {"role": "assistant", "content": [{"text": "b"}, point]},
+        {"role": "user", "content": [{"text": "c"}]},
+    ]
 
 
 async def test_no_cache_point_is_added_without_loaded_memory() -> None:

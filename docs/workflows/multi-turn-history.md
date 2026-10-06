@@ -131,9 +131,11 @@ name a model under `models:`; both are checked when the config loads.
 
 When a remembering agent on a Bedrock model is seeded with memory, the copy its
 model is sent ends the last loaded message with a `cachePoint`, so every later
-model turn of the call reads the memory from Bedrock's prompt cache. A model with
-its own `cache_config` is left alone, since strands then places its cache points
-itself. Cache points are never written back.
+model turn of the call reads the memory from Bedrock's prompt cache. If turning
+foreign calls into notes leaves the cache point opening a message, it moves to
+the end of the message before, since Bedrock rejects a cache point with nothing
+before it. A model with its own `cache_config` is left alone, since strands then
+places its cache points itself. Cache points are never written back.
 
 The run's usage in the activity stream (`usageByRun`) carries `cacheHitRate`,
 the share of the prompt read from the cache, for any run that read or wrote it:

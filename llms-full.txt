@@ -1871,7 +1871,10 @@ whose tools differ. A model shown a call it cannot make tends to make it anyway.
 A delegate (a name without `___`) keeps up to 2,000 characters of input and its
 whole result; an MCP tool (`<target>___<tool>`) keeps 500 characters of input
 and a 500-character excerpt of its result, with its full length noted. Calls to
-tools the agent has are left alone.
+tools the agent has are left alone, and so is every call the agent makes itself
+during the invocation: only the messages it held at its first model call are
+rewritten. A tool name it gets wrong therefore reaches its model as the call
+and its error, which is what lets it correct the name.
 
 > **Tips & Tricks**
 >
@@ -4893,9 +4896,11 @@ name a model under `models:`; both are checked when the config loads.
 
 When a remembering agent on a Bedrock model is seeded with memory, the copy its
 model is sent ends the last loaded message with a `cachePoint`, so every later
-model turn of the call reads the memory from Bedrock's prompt cache. A model with
-its own `cache_config` is left alone, since strands then places its cache points
-itself. Cache points are never written back.
+model turn of the call reads the memory from Bedrock's prompt cache. If turning
+foreign calls into notes leaves the cache point opening a message, it moves to
+the end of the message before, since Bedrock rejects a cache point with nothing
+before it. A model with its own `cache_config` is left alone, since strands then
+places its cache points itself. Cache points are never written back.
 
 The run's usage in the activity stream (`usageByRun`) carries `cacheHitRate`,
 the share of the prompt read from the cache, for any run that read or wrote it:

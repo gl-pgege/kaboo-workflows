@@ -15,7 +15,7 @@ from strands import Agent, tool
 
 from kaboo_workflows.hooks import ContextHook
 from kaboo_workflows.hooks._transcript import foreign_calls_to_notes
-from tests.fakes import ScriptedModel
+from tests.fakes import LocalBedrockModel, ScriptedModel
 
 
 def _user(text: str) -> dict[str, Any]:
@@ -156,6 +156,38 @@ def test_a_foreign_call_left_without_a_result_still_becomes_a_note() -> None:
     _assert_bedrock_valid(notes)
 
 
+def test_a_call_answered_in_the_last_message_is_left_alone() -> None:
+    transcript = [
+        _user("q"),
+        _assistant(_use("t1", "code-workbench___update_query", {"query_id": "q1"})),
+        {"role": "user", "content": [_result("t1", "Error: unknown tool")]},
+    ]
+
+    assert foreign_calls_to_notes(transcript, tools={"query"}) == transcript
+
+
+def test_only_the_calls_the_agent_inherited_become_notes() -> None:
+    transcript = [
+        _user("how much revenue?"),
+        _assistant(_use("t1", "analyze_sql", {"input": "2024"})),
+        {"role": "user", "content": [_result("t1", "Revenue in 2024 was $42M.")]},
+        _assistant({"text": "Revenue was $42M."}),
+        _user("and in 2023?"),
+        _assistant(_use("t2", "athena___run_query", {"sql": "s"})),
+        {"role": "user", "content": [_result("t2", "Error: unknown tool")]},
+        _assistant({"text": "Trying the right tool."}),
+        _user("go on"),
+    ]
+
+    notes = foreign_calls_to_notes(transcript, tools={"query"}, inherited=5)
+
+    assert notes[1]["content"][0] == _note(
+        "analyze_sql", '{"input": "2024"}', "Revenue in 2024 was $42M."
+    )
+    assert notes[3] == _assistant(_use("t2", "athena___run_query", {"sql": "s"}))
+    _assert_bedrock_valid(notes)
+
+
 def test_the_transcript_passed_in_is_not_changed() -> None:
     transcript = [
         _user("q"),
@@ -200,3 +232,16 @@ async def test_the_model_is_sent_notes_while_the_agent_keeps_the_original_calls(
         _note("analyze_sql", '{"input": "2024"}', "Revenue in 2024 was $42M.") in sent[1]["content"]
     )
     assert _turns(agent.messages[: len(history)]) == history
+
+
+async def test_a_mistyped_tool_reaches_the_model_as_the_call_and_its_error() -> None:
+    model = LocalBedrockModel(tool="code-workbench___update_query")
+    agent = Agent(model=model, tools=[query], hooks=[ContextHook()], callback_handler=None)
+
+    await agent.invoke_async("update the query")
+
+    sent = model.calls[-1]
+    assert [m["role"] for m in sent] == ["user", "assistant", "user"]
+    assert sent[1]["content"][-1]["toolUse"]["name"] == "code-workbench___update_query"
+    assert sent[2]["content"][0]["toolResult"]["status"] == "error"
+    _assert_bedrock_valid(sent)

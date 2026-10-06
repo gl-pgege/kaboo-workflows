@@ -11,6 +11,9 @@ On every call it turns a ``toolUse`` for a tool the agent does not have into a
 text note. Such calls reach an agent through a transcript it did not write: the
 chat, when the workflow changed between turns, or a ``history.group`` shared
 with another agent. A model shown a call it cannot make tends to make it anyway.
+Only what the agent inherited is rewritten: the messages it held at the first
+model call of the invocation. A call it makes itself, even to a tool name it got
+wrong, reaches its model as the call and its error.
 
 With a ``clear_trigger`` it also clears old tool results once the estimated
 input grows past it (``context.clear_tool_results`` on an agent).
@@ -19,6 +22,8 @@ When a :class:`~kaboo_workflows.hooks.HistoryHook` seeded the agent with memory
 and the model is a ``BedrockModel`` that does not manage its own cache points
 (no ``cache_config``), it ends the last loaded message with a ``cachePoint``, so
 every later model turn of the call reads the memory from Bedrock's prompt cache.
+If rewriting leaves that cache point opening a message, it moves to the end of
+the message before.
 
 DEPENDS ON strands internals: ``Agent._middleware_registry`` and
 ``strands._middleware.stages.InvokeModelStage`` (strands 1.44 or later). strands'
@@ -48,10 +53,12 @@ else:
 from ..tools.wrappers import delegate_tool_names
 from ._transcript import (
     DEFAULT_MIN_CHARS,
+    INHERITED_MESSAGES,
     SEEDED_MESSAGES,
     clear_tool_results,
     estimate_tokens,
     foreign_calls_to_notes,
+    settle_cache_points,
 )
 
 logger = logging.getLogger(__name__)
@@ -100,6 +107,7 @@ class ContextHook(HookProvider):
         registry = context.agent.tool_registry
         tools = {*registry.registry, *registry.dynamic_tools}
         original = cast("list[dict[str, Any]]", context.messages)
+        inherited = context.invocation_state.setdefault(INHERITED_MESSAGES, len(original))
         seeded = context.invocation_state.get(SEEDED_MESSAGES)
         if (
             isinstance(seeded, int)
@@ -107,7 +115,7 @@ class ContextHook(HookProvider):
             and _manual_bedrock_cache(context.agent.model)
         ):
             original[seeded - 1]["content"].append({"cachePoint": {"type": "default"}})
-        messages = foreign_calls_to_notes(original, tools)
+        messages = foreign_calls_to_notes(original, tools, inherited=inherited)
         if messages is not original:
             logger.debug(
                 "agent=<%s> | sent the model notes for calls to tools it does not have",
@@ -124,7 +132,7 @@ class ContextHook(HookProvider):
                 kept=self._keep_tools | delegate_tool_names(context.agent),
                 tools=tools,
             )
-        return replace(context, messages=cast("Messages", messages))
+        return replace(context, messages=cast("Messages", settle_cache_points(messages)))
 
 
 def _manual_bedrock_cache(model: Model) -> bool:

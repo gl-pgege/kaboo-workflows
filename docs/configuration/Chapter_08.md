@@ -120,7 +120,10 @@ whose tools differ. A model shown a call it cannot make tends to make it anyway.
 A delegate (a name without `___`) keeps up to 2,000 characters of input and its
 whole result; an MCP tool (`<target>___<tool>`) keeps 500 characters of input
 and a 500-character excerpt of its result, with its full length noted. Calls to
-tools the agent has are left alone.
+tools the agent has are left alone, and so is every call the agent makes itself
+during the invocation: only the messages it held at its first model call are
+rewritten. A tool name it gets wrong therefore reaches its model as the call
+and its error, which is what lets it correct the name.
 
 > **Tips & Tricks**
 >
