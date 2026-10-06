@@ -1,0 +1,31 @@
+# A remembering sub-agent on a Bedrock model. Its loaded memory ends with a
+# cache point on what the model is sent, and never in what is written back.
+# LocalBedrockModel is a BedrockModel that answers without calling AWS.
+models:
+  claude:
+    provider: tests.fakes.strands:LocalBedrockModel
+    model_id: us.anthropic.claude-sonnet-4-6-v1:0
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model:
+      provider: tests.fakes.scripted_model:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - {tool: finance_notes, input: "and 2022?"}
+        final_text: "Coordinator done."
+  finance_notes:
+    stream: {title: "Finance notes"}
+    history: {group: finance}
+    model: claude
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: finance_notes, description: "Keeps the finance figures"}
+
+entry: team

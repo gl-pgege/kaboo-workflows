@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 from .scripted_model import ScriptedModel
-from .strands import BoomModel, FakeMCPClient, FakeMCPServer, FakeModel, ToolThenTextModel
+from .strands import (
+    BoomModel,
+    FakeMCPClient,
+    FakeMCPServer,
+    FakeModel,
+    LocalBedrockModel,
+    ToolThenTextModel,
+)
 
 __all__ = [
     "BoomModel",
     "FakeMCPClient",
     "FakeMCPServer",
     "FakeModel",
+    "LocalBedrockModel",
     "ScriptedModel",
     "ToolThenTextModel",
 ]

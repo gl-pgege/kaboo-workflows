@@ -40,6 +40,18 @@ def _accumulate_usage(target: dict[str, Any], key: str, usage: dict[str, Any]) -
         bucket[camel] = bucket.get(camel, cast(0)) + cast(usage.get(snake, 0) or 0)
 
 
+def _set_cache_hit_rate(bucket: dict[str, Any]) -> None:
+    """Derive ``cacheHitRate`` = cacheRead / (input + cacheRead) for a run that used the cache.
+
+    A run that neither read nor wrote the prompt cache gets no rate, rather
+    than a zero that would read as a cache that kept missing.
+    """
+    cache_read = bucket.get("cacheReadInputTokens", 0)
+    prompt = bucket.get("inputTokens", 0) + cache_read
+    if prompt and (cache_read or bucket.get("cacheWriteInputTokens", 0)):
+        bucket["cacheHitRate"] = round(cache_read / prompt, 4)
+
+
 def _fold_run_usage(state: dict[str, Any], event: StreamEvent) -> bool:
     """Fold an ``AGENT_COMPLETE`` event's usage into the per-run rollup.
 
@@ -54,7 +66,9 @@ def _fold_run_usage(state: dict[str, Any], event: StreamEvent) -> bool:
     run_id = event.data.get("run_id")
     if not isinstance(usage, dict) or not run_id:
         return False
-    _accumulate_usage(state.setdefault("usageByRun", {}), str(run_id), usage)
+    runs = state.setdefault("usageByRun", {})
+    _accumulate_usage(runs, str(run_id), usage)
+    _set_cache_hit_rate(runs[str(run_id)])
     trace_id = event.data.get("trace_id")
     if trace_id:
         # First trace id wins: nested agents share the entry invocation's

@@ -17,6 +17,7 @@ from typing import Any
 MCP_TOOL_SEPARATOR = "___"
 DEFAULT_MIN_CHARS = 1500
 SUMMARY_BRIEF = "Summary of your earlier work in this conversation"
+SEEDED_MESSAGES = "kaboo_seeded_messages"
 
 _REMEMBER = re.compile(
     r"^[ \t]*(?:(#{1,6})[ \t]+)?(?:\*\*|__)?to remember\b", re.IGNORECASE | re.MULTILINE
@@ -367,6 +368,17 @@ def result_text(result: dict[str, Any]) -> str:
         else:
             parts.append(f"[{next(iter(block), 'content')}]")
     return "\n".join(parts)
+
+
+def strip_cache_points(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop every ``cachePoint`` block, and any message that leaves empty."""
+    if not any("cachePoint" in b for m in messages for b in m.get("content") or []):
+        return messages
+    stripped = [
+        {**m, "content": [b for b in m.get("content") or [] if "cachePoint" not in b]}
+        for m in messages
+    ]
+    return [m for m in stripped if m["content"]]
 
 
 def foreign_calls_to_notes(

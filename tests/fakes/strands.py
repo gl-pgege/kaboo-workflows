@@ -9,9 +9,11 @@ agent around one of these models instead.
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from strands.models import Model
+from strands.models.bedrock import BedrockModel
 
 from kaboo_workflows.mcp.server import MCPServer
 
@@ -136,6 +138,54 @@ class BoomModel(Model):
         """Raise a provider-style error mid-call."""
         raise RuntimeError(self._message)
         yield  # pragma: no cover — makes this an async generator
+
+
+class LocalBedrockModel(BedrockModel):
+    """A ``BedrockModel`` that answers locally and records what it was sent.
+
+    Skips ``BedrockModel.__init__``, so no boto client is created and nothing
+    reaches AWS, while code that checks for a Bedrock model still sees one.
+    With ``tool`` it calls that tool on its first turn, so one invocation makes
+    two model calls.
+    """
+
+    def __init__(
+        self,
+        model_id: str = "us.anthropic.claude-sonnet-4-6-v1:0",
+        *,
+        tool: str | None = None,
+        cache_config: Any = None,
+    ) -> None:
+        """Store the reported config and the optional first-turn tool."""
+        self.config = {"model_id": model_id}
+        if cache_config is not None:
+            self.config["cache_config"] = cache_config
+        self._tool = tool
+        self.calls: list[list[dict[str, Any]]] = []
+
+    async def stream(
+        self, messages: Any, tool_specs: Any = None, system_prompt: Any = None, **kwargs: Any
+    ):
+        """Record the messages, then call ``tool`` once or answer with text."""
+        self.calls.append(copy.deepcopy(messages))
+        yield {"messageStart": {"role": "assistant"}}
+        if self._tool is not None and len(self.calls) == 1:
+            start = {"toolUse": {"name": self._tool, "toolUseId": "bedrock-call-1"}}
+            yield {"contentBlockStart": {"start": start}}
+            yield {"contentBlockDelta": {"delta": {"toolUse": {"input": '{"key": "k"}'}}}}
+            yield {"contentBlockStop": {}}
+            yield {"messageStop": {"stopReason": "tool_use"}}
+        else:
+            yield {"contentBlockStart": {"start": {}}}
+            yield {"contentBlockDelta": {"delta": {"text": "Done."}}}
+            yield {"contentBlockStop": {}}
+            yield {"messageStop": {"stopReason": "end_turn"}}
+        yield {
+            "metadata": {
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+                "metrics": {"latencyMs": 1},
+            }
+        }
 
 
 class FakeMCPServer(MCPServer):

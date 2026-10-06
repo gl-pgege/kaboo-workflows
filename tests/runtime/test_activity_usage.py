@@ -156,6 +156,42 @@ def test_cache_and_cost_fields_accumulate() -> None:
     assert abs(run["cost"] - 0.015) < 1e-9
 
 
+def test_a_run_that_used_the_prompt_cache_reports_its_hit_rate() -> None:
+    reg = ActivityRegistry()
+    reg.apply("t1", _start("g1"))
+    reg.apply(
+        "t1",
+        _complete(
+            "g1",
+            usage={
+                "input_tokens": 100,
+                "cache_read_input_tokens": 300,
+                "cache_write_input_tokens": 50,
+            },
+        ),
+    )
+    reg.apply("t1", _complete("g1", usage={"input_tokens": 100, "cache_read_input_tokens": 500}))
+
+    run = reg.snapshot("t1")["usageByRun"]["r1"]
+    assert run["cacheHitRate"] == 0.8
+
+
+def test_a_run_that_only_wrote_the_cache_reports_a_zero_hit_rate() -> None:
+    reg = ActivityRegistry()
+    reg.apply("t1", _start("g1"))
+    reg.apply("t1", _complete("g1", usage={"input_tokens": 100, "cache_write_input_tokens": 400}))
+
+    assert reg.snapshot("t1")["usageByRun"]["r1"]["cacheHitRate"] == 0.0
+
+
+def test_a_run_that_never_touched_the_cache_reports_no_hit_rate() -> None:
+    reg = ActivityRegistry()
+    reg.apply("t1", _start("g1"))
+    reg.apply("t1", _complete("g1", usage={"input_tokens": 100, "output_tokens": 20}))
+
+    assert "cacheHitRate" not in reg.snapshot("t1")["usageByRun"]["r1"]
+
+
 def test_groupless_usage_still_counts_toward_the_run() -> None:
     reg = ActivityRegistry()
     event = StreamEvent(

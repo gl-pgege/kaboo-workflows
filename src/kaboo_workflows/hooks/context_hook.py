@@ -15,6 +15,11 @@ with another agent. A model shown a call it cannot make tends to make it anyway.
 With a ``clear_trigger`` it also clears old tool results once the estimated
 input grows past it (``context.clear_tool_results`` on an agent).
 
+When a :class:`~kaboo_workflows.hooks.HistoryHook` seeded the agent with memory
+and the model is a ``BedrockModel`` that does not manage its own cache points
+(no ``cache_config``), it ends the last loaded message with a ``cachePoint``, so
+every later model turn of the call reads the memory from Bedrock's prompt cache.
+
 DEPENDS ON strands internals: ``Agent._middleware_registry`` and
 ``strands._middleware.stages.InvokeModelStage`` (strands 1.44 or later). strands'
 own ``ContextInjector`` plugin uses the same seam.
@@ -31,6 +36,8 @@ from typing import Any, cast
 from strands._middleware.stages import InvokeModelContext, InvokeModelStage
 from strands.hooks import HookProvider, HookRegistry
 from strands.hooks.events import AgentInitializedEvent
+from strands.models import Model
+from strands.models.bedrock import BedrockModel
 from strands.types.content import Messages
 
 if sys.version_info >= (3, 12):
@@ -41,6 +48,7 @@ else:
 from ..tools.wrappers import delegate_tool_names
 from ._transcript import (
     DEFAULT_MIN_CHARS,
+    SEEDED_MESSAGES,
     clear_tool_results,
     estimate_tokens,
     foreign_calls_to_notes,
@@ -91,6 +99,13 @@ class ContextHook(HookProvider):
         registry = context.agent.tool_registry
         tools = {*registry.registry, *registry.dynamic_tools}
         original = cast("list[dict[str, Any]]", context.messages)
+        seeded = context.invocation_state.get(SEEDED_MESSAGES)
+        if (
+            isinstance(seeded, int)
+            and 0 < seeded <= len(original)
+            and _manual_bedrock_cache(context.agent.model)
+        ):
+            original[seeded - 1]["content"].append({"cachePoint": {"type": "default"}})
         messages = foreign_calls_to_notes(original, tools)
         if messages is not original:
             logger.debug(
@@ -109,3 +124,12 @@ class ContextHook(HookProvider):
                 tools=tools,
             )
         return replace(context, messages=cast("Messages", messages))
+
+
+def _manual_bedrock_cache(model: Model) -> bool:
+    """Whether a cache point placed by hand reaches Bedrock.
+
+    A ``cache_config`` makes ``BedrockModel`` strip every cache point it is
+    given and place its own.
+    """
+    return isinstance(model, BedrockModel) and not model.config.get("cache_config")

@@ -42,11 +42,13 @@ from .._context import get_history_exchange, get_run_id, get_thread_id
 from ..tools.wrappers import delegate_tool_names
 from ._transcript import (
     DEFAULT_MIN_CHARS,
+    SEEDED_MESSAGES,
     estimate_tokens,
     mask_transcript,
     remembered_blocks,
     render_calls,
     split_for_summary,
+    strip_cache_points,
     summary_pair,
 )
 
@@ -131,7 +133,9 @@ class HistoryHook(HookProvider):
         grouped sibling (seed from the group's latest output). With history
         disabled, reset to an empty transcript so the agent runs fresh. A masked
         agent masks what the client sent before seeding from it, in case it was
-        stored in full.
+        stored in full. How many messages were seeded is left in the
+        invocation state, where :class:`~kaboo_workflows.hooks.ContextHook`
+        reads it to mark the end of the loaded memory as cacheable.
 
         ``BeforeInvocationEvent`` re-fires on every resume iteration, so if the
         agent is mid-interrupt we must not touch ``messages`` — seeding or
@@ -174,7 +178,9 @@ class HistoryHook(HookProvider):
             seed = exchange.inbound.get(self._key)
             if seed and self._policy.keep == "masked":
                 seed = self._mask(seed, event.agent)
-        event.agent.messages = copy.deepcopy(seed) if seed else []
+        event.agent.messages = copy.deepcopy(strip_cache_points(seed)) if seed else []
+        if event.agent.messages:
+            event.invocation_state[SEEDED_MESSAGES] = len(event.agent.messages)
         logger.debug(
             "key=<%s>, thread=<%s>, run=<%s>, source=<%s>, seeded_messages=<%d> | seeded history",
             self._key,
@@ -190,14 +196,16 @@ class HistoryHook(HookProvider):
         Runs after the agent's ``conversation_manager`` has applied any
         sliding-window trim or summarization, so the reduced transcript is what
         persists to the client. A masked agent also records the masked copy the
-        client is sent instead. No-op when history is disabled.
+        client is sent instead. Cache points never persist. No-op when history
+        is disabled.
         """
         if not self._enabled:
             return
         exchange = get_history_exchange()
         if exchange is None:
             return
-        exchange.outbound[self._key] = list(event.agent.messages)
+        captured: list[Any] = list(event.agent.messages)
+        exchange.outbound[self._key] = strip_cache_points(captured)
         if self._policy.keep == "masked":
             exchange.persisted[self._key] = self._mask(exchange.outbound[self._key], event.agent)
         else:
