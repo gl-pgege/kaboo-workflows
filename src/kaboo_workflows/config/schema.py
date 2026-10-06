@@ -252,6 +252,30 @@ class HistoryDef(BaseModel):
     group: str | None = None
 
 
+class ClearToolResultsDef(BaseModel):
+    """Clear old tool results from what an agent's model is sent.
+
+    Before each model call, once the estimated input (system prompt plus
+    messages, at four characters a token) exceeds ``trigger`` tokens, every tool
+    result older than the last ``keep_last`` is replaced by ``Result cleared
+    (<tool>[, <id>=<value>…]): call it again to see it.``, carrying up to ten
+    ids found in the result. Results under ``min_chars`` characters, results of
+    tools in ``keep_tools`` and results of delegates are never cleared, and the
+    calls themselves always stay. Only the copy sent to the model changes.
+    """
+
+    trigger: int = Field(gt=0)
+    keep_last: int = Field(default=3, ge=0)
+    min_chars: int = Field(default=1500, ge=0)
+    keep_tools: list[str] = Field(default_factory=list)
+
+
+class ContextDef(BaseModel):
+    """What an agent's model is sent on each call (``context:`` on an agent)."""
+
+    clear_tool_results: ClearToolResultsDef | None = None
+
+
 class AttachmentsDef(BaseModel):
     """Global reference/attachment behavior.
 
@@ -427,6 +451,7 @@ class AgentDef(BaseModel):
     stream: StreamDef | None = None
     interrupt: InterruptDef | bool | None = None
     history: HistoryDef | bool | None = None
+    context: ContextDef | None = None
     attachments: AgentAttachmentsDef | str | bool | None = None
     output_schema: str | None = None
 

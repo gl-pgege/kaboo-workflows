@@ -18,11 +18,164 @@ MCP_TOOL_SEPARATOR = "___"
 _DELEGATE_INPUT_CHARS = 2000
 _MCP_INPUT_CHARS = 500
 _RESULT_EXCERPT_CHARS = 500
+_CLEARED_PREFIX = "Result cleared ("
+_CLEARED_SUFFIX = "): call it again to see it."
+_ID_SUFFIXES = ("id", "Id", "ID")
+_MAX_IDS = 10
 
 
 def is_mcp_tool(name: str) -> bool:
     """Whether ``name`` is an MCP tool (``<target>___<tool>``) rather than a delegate."""
     return MCP_TOOL_SEPARATOR in name
+
+
+def estimate_tokens(messages: list[dict[str, Any]], system_prompt: Any = None) -> int:
+    """Estimate the tokens of ``messages`` and ``system_prompt`` at four characters each."""
+    text = json.dumps(messages, ensure_ascii=False, default=str)
+    if system_prompt:
+        text += (
+            system_prompt
+            if isinstance(system_prompt, str)
+            else json.dumps(system_prompt, ensure_ascii=False, default=str)
+        )
+    return len(text) // 4
+
+
+def clear_tool_results(
+    messages: list[dict[str, Any]],
+    *,
+    keep_last: int,
+    min_chars: int,
+    kept: Collection[str],
+    tools: Collection[str],
+) -> list[dict[str, Any]]:
+    """Replace every ``toolResult`` but the last ``keep_last`` with a placeholder.
+
+    The placeholder reads ``Result cleared (<tool>[, <key>=<value>…]): call it
+    again to see it.``, carrying up to ten pairs from the result's JSON whose key
+    ends in ``id``/``Id``/``ID``. A result is left alone when it is shorter than
+    ``min_chars`` characters, already a placeholder, or never cleared — its tool
+    is in ``kept``, or is a delegate missing from ``tools``. The ``toolUse``
+    blocks are kept, so the model can make the call again. The output depends on
+    nothing but the input, and clearing it again changes nothing, so a result
+    reads the same on every later call once it has been cleared.
+
+    Args:
+        messages: The conversation, oldest first.
+        keep_last: How many of the most recent results are always kept.
+        min_chars: Results shorter than this are always kept.
+        kept: Tools whose results are never cleared (``keep_tools`` plus the
+            agent's delegates).
+        tools: Names of the tools the agent has.
+
+    Returns:
+        The conversation with the older results cleared.
+    """
+    names = _tool_names(messages)
+    places = [
+        (i, j)
+        for i, message in enumerate(messages)
+        for j, block in enumerate(message.get("content") or [])
+        if "toolResult" in block
+    ]
+    cleared = list(messages)
+    for i, j in places[: max(len(places) - keep_last, 0)]:
+        result = cleared[i]["content"][j]["toolResult"]
+        name = names.get(result.get("toolUseId"), "")
+        if (
+            _never_cleared(name, kept, tools)
+            or _is_cleared(result)
+            or _result_chars(result) < min_chars
+        ):
+            continue
+        content = list(cleared[i]["content"])
+        content[j] = {"toolResult": {**result, "content": [{"text": cleared_text(name, result)}]}}
+        cleared[i] = {**cleared[i], "content": content}
+    return cleared
+
+
+def cleared_text(name: str, result: dict[str, Any]) -> str:
+    """The placeholder that replaces a cleared result of tool ``name``."""
+    label = ", ".join([name or "tool", *_result_ids(result)])
+    return f"{_CLEARED_PREFIX}{label}{_CLEARED_SUFFIX}"
+
+
+def _is_cleared(result: dict[str, Any]) -> bool:
+    content = result.get("content") or []
+    text = content[0].get("text") if len(content) == 1 else None
+    return (
+        isinstance(text, str)
+        and text.startswith(_CLEARED_PREFIX)
+        and text.endswith(_CLEARED_SUFFIX)
+    )
+
+
+def _never_cleared(name: str, kept: Collection[str], tools: Collection[str]) -> bool:
+    return name in kept or (name not in tools and not is_mcp_tool(name))
+
+
+def _tool_names(messages: list[dict[str, Any]]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+        for block in message.get("content") or []:
+            use = block.get("toolUse")
+            if use is not None:
+                names[use.get("toolUseId")] = str(use.get("name") or "")
+    return names
+
+
+def _result_chars(result: dict[str, Any]) -> int:
+    total = 0
+    for block in result.get("content") or []:
+        if "text" in block:
+            total += len(str(block["text"]))
+        elif "json" in block:
+            total += len(json.dumps(block["json"], ensure_ascii=False, default=str))
+        else:
+            total += len(str(block))
+    return total
+
+
+def _result_ids(result: dict[str, Any]) -> list[str]:
+    pairs: list[str] = []
+    for block in result.get("content") or []:
+        if "json" in block:
+            _collect_ids(block["json"], pairs)
+        elif isinstance(block.get("text"), str):
+            try:
+                _collect_ids(json.loads(block["text"]), pairs)
+            except ValueError:
+                continue
+    return pairs[:_MAX_IDS]
+
+
+def _collect_ids(value: Any, pairs: list[str]) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _collect_ids(item, pairs)
+        return
+    if not isinstance(value, dict):
+        return
+    for key, item in value.items():
+        if len(pairs) >= _MAX_IDS:
+            return
+        if _is_id(key, item):
+            pair = f"{key}={item}"
+            if pair not in pairs:
+                pairs.append(pair)
+        else:
+            _collect_ids(item, pairs)
+
+
+def _is_id(key: Any, value: Any) -> bool:
+    return (
+        isinstance(key, str)
+        and key.endswith(_ID_SUFFIXES)
+        and isinstance(value, str | int | float)
+        and not isinstance(value, bool)
+    )
 
 
 def result_text(result: dict[str, Any]) -> str:

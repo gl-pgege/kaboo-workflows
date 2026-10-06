@@ -168,7 +168,18 @@ def build_agent_from_def(
 
     # 6bbb. Attached at build time for the same reason as the ReferenceHook: it
     # must reach the per-thread clone the AG-UI adapter runs for the entry.
-    hooks.append(ContextHook())
+    clearing = agent_def.context.clear_tool_results if agent_def.context is not None else None
+    if clearing is None:
+        hooks.append(ContextHook())
+    else:
+        hooks.append(
+            ContextHook(
+                clear_trigger=clearing.trigger,
+                keep_last=clearing.keep_last,
+                min_chars=clearing.min_chars,
+                keep_tools=clearing.keep_tools,
+            )
+        )
 
     # 6c. Resolve output_schema
     if agent_def.output_schema is not None:

@@ -30,6 +30,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TOOL_RESULT_CONTENT_KEYS = ("document", "image", "json", "text")
+_DELEGATE_ATTR = "_kaboo_delegate"
+
+
+def is_delegate_tool(tool: Any) -> bool:
+    """Whether ``tool`` runs another node.
+
+    True for the tools :func:`node_as_tool` and :func:`node_as_async_tool` make.
+    """
+    return bool(getattr(tool, _DELEGATE_ATTR, False))
 
 
 def _resolve_tool_name(node: Node, name: str | None) -> str:
@@ -140,6 +149,7 @@ def _node_as_tool(
                     result = node(cast(Any, responses))
                 return _result_to_tool_result(result)
 
+    setattr(delegate, _DELEGATE_ATTR, True)
     return delegate
 
 
