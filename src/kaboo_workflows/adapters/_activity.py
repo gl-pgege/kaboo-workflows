@@ -41,14 +41,17 @@ def _accumulate_usage(target: dict[str, Any], key: str, usage: dict[str, Any]) -
 
 
 def _set_cache_hit_rate(bucket: dict[str, Any]) -> None:
-    """Derive ``cacheHitRate`` = cacheRead / (input + cacheRead) for a run that used the cache.
+    """Derive ``cacheHitRate`` = cacheRead / (input + cacheRead + cacheWrite) for a run that used the cache.
 
-    A run that neither read nor wrote the prompt cache gets no rate, rather
-    than a zero that would read as a cache that kept missing.
+    Bedrock counts uncached input, cache reads and cache writes separately, so
+    their sum is the whole prompt and the rate is the share of it read from the
+    cache. A run that neither read nor wrote the prompt cache gets no rate,
+    rather than a zero that would read as a cache that kept missing.
     """
     cache_read = bucket.get("cacheReadInputTokens", 0)
-    prompt = bucket.get("inputTokens", 0) + cache_read
-    if prompt and (cache_read or bucket.get("cacheWriteInputTokens", 0)):
+    cache_write = bucket.get("cacheWriteInputTokens", 0)
+    prompt = bucket.get("inputTokens", 0) + cache_read + cache_write
+    if prompt and (cache_read or cache_write):
         bucket["cacheHitRate"] = round(cache_read / prompt, 4)
 
 

@@ -136,8 +136,10 @@ its own `cache_config` is left alone, since strands then places its cache points
 itself. Cache points are never written back.
 
 The run's usage in the activity stream (`usageByRun`) carries `cacheHitRate`,
-`cacheReadInputTokens / (inputTokens + cacheReadInputTokens)`, for any run that
-read or wrote the prompt cache.
+the share of the prompt read from the cache, for any run that read or wrote it:
+`cacheReadInputTokens / (inputTokens + cacheReadInputTokens + cacheWriteInputTokens)`.
+Bedrock counts the three separately, so `inputTokens` alone is only the
+uncached part.
 
 ## What the model is sent is not what is stored
 

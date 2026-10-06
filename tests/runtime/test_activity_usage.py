@@ -173,7 +173,7 @@ def test_a_run_that_used_the_prompt_cache_reports_its_hit_rate() -> None:
     reg.apply("t1", _complete("g1", usage={"input_tokens": 100, "cache_read_input_tokens": 500}))
 
     run = reg.snapshot("t1")["usageByRun"]["r1"]
-    assert run["cacheHitRate"] == 0.8
+    assert run["cacheHitRate"] == 0.7619
 
 
 def test_a_run_that_only_wrote_the_cache_reports_a_zero_hit_rate() -> None:
