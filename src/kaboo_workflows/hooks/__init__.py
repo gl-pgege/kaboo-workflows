@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .context_hook import ContextHook
 from .continuation_hook import CONTINUATION_TYPE, ContinuationHook
 from .event_publisher import EventPublisher
 from .forwarded_props_hook import ForwardedPropsHook
@@ -20,6 +21,7 @@ from .tool_name_sanitizer import ToolNameSanitizer
 
 __all__ = [
     "CONTINUATION_TYPE",
+    "ContextHook",
     "ContinuationHook",
     "EventPublisher",
     "ForwardedPropsHook",

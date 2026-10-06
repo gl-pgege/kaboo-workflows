@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from strands import Agent
 
 from ...exceptions import ConfigurationError
+from ...hooks.context_hook import ContextHook
 from ...hooks.interrupt_hook import InterruptHook
 from ...hooks.reference_hook import ReferenceHook
 from ...tools.ask_user import ask_user
@@ -164,6 +165,10 @@ def build_agent_from_def(
         hooks.append(ReferenceHook(enabled=True, inline=ref_inline, tool_enabled=ref_tool))
         if ref_tool:
             tools.extend([list_references, fetch_attachment])
+
+    # 6bbb. Attached at build time for the same reason as the ReferenceHook: it
+    # must reach the per-thread clone the AG-UI adapter runs for the entry.
+    hooks.append(ContextHook())
 
     # 6c. Resolve output_schema
     if agent_def.output_schema is not None:

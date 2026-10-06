@@ -1,0 +1,36 @@
+# Transcripts holding calls to tools the running agent does not have. The
+# coordinator's chat may carry a step from an earlier workflow, and the
+# `finance` history group may carry a step another agent took.
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+models:
+  chat:
+    provider: *m
+    model_id: scripted
+    params:
+      script:
+        - {tool: finance_notes, input: "and in 2023?"}
+      final_text: "In 2023 it was $40M."
+  keeper:
+    provider: *m
+    model_id: scripted
+    params: {final_text: "2023 revenue was $40M."}
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model: chat
+    tools: ["tests.fakes.gated_tools:submit_report"]
+  finance_notes:
+    stream: {title: "Finance notes"}
+    history: {group: finance}
+    model: keeper
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: finance_notes, description: "Keeps the finance figures"}
+
+entry: team
