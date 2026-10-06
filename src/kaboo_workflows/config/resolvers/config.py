@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from ...exceptions import ConfigurationError
 from ...hooks._transcript import DEFAULT_MIN_CHARS
 from ...hooks.history_hook import HistoryPolicy
 from ...manifest import build_manifest
@@ -43,6 +44,7 @@ class ResolvedConfig:
     entry: Node
     mcp_lifecycle: MCPLifecycle = field(default_factory=MCPLifecycle)
     app_config: AppConfig | None = None
+    models: dict[str, Model] = field(default_factory=dict)
 
     def wire_event_queue(
         self,
@@ -88,7 +90,7 @@ class ResolvedConfig:
         manifest = build_manifest(self.agents, self.orchestrators, self.entry)
         stream_groups = _auto_resolve_stream_groups(self.app_config)
         history = _resolve_history(self.app_config)
-        history_policies = _resolve_history_policies(self.app_config)
+        history_policies = _resolve_history_policies(self.app_config, self.models)
         chat_owner = _resolve_chat_owner(self.app_config)
         chat_reply = chat_owner or _resolve_chat_output(self.app_config)
         merged_labels = _collect_tool_labels(self.app_config)
@@ -310,13 +312,20 @@ def _resolve_history(
     return history
 
 
-def _resolve_history_policies(app_config: AppConfig | None) -> dict[str, HistoryPolicy]:
+def _resolve_history_policies(
+    app_config: AppConfig | None, models: dict[str, Model]
+) -> dict[str, HistoryPolicy]:
     """Resolve how each agent's written-back history is shaped.
 
     Only agents with ``history.keep: masked`` appear. Masking spares the tool
     results that ``context.clear_tool_results`` would spare: those under its
-    ``min_chars`` (1500 without one) and those of its ``keep_tools``. A delegate
-    orchestration takes its entry agent's policy, as in :func:`_resolve_history`.
+    ``min_chars`` (1500 without one) and those of its ``keep_tools``. The
+    summarizer is looked up in *models* by ``history.summarize_model``. A
+    delegate orchestration takes its entry agent's policy, as in
+    :func:`_resolve_history`.
+
+    Raises:
+        ConfigurationError: If a ``summarize_model`` is not among *models*.
     """
     from ..schema import DelegateOrchestrationDef
 
@@ -328,11 +337,22 @@ def _resolve_history_policies(app_config: AppConfig | None) -> dict[str, History
         history = agent_def.history
         if history is None or isinstance(history, bool) or history.keep == "full":
             continue
+        summarizer = None
+        if history.summarize_model is not None:
+            summarizer = models.get(history.summarize_model)
+            if summarizer is None:
+                raise ConfigurationError(
+                    f"Agent '{name}' summarizes its history with model "
+                    f"'{history.summarize_model}', which this session did not resolve.\n"
+                    f"Available models: {sorted(models)}"
+                )
         clearing = agent_def.context.clear_tool_results if agent_def.context is not None else None
         policies[name] = HistoryPolicy(
             keep=history.keep,
             min_chars=clearing.min_chars if clearing is not None else DEFAULT_MIN_CHARS,
             keep_tools=frozenset(clearing.keep_tools if clearing is not None else ()),
+            summarize_over=history.summarize_over,
+            summarizer=summarizer,
         )
     for name, orch_def in app_config.orchestrations.items():
         if isinstance(orch_def, DelegateOrchestrationDef) and orch_def.entry_name in policies:

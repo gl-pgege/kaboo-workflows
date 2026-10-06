@@ -19,6 +19,7 @@ from kaboo_workflows.config.resolvers.config import (
     _resolve_history,
     _resolve_history_policies,
 )
+from kaboo_workflows.exceptions import ConfigurationError
 from kaboo_workflows.hooks import HistoryPolicy
 from kaboo_workflows.wire import make_event_queue
 from tests.factories import agent_def, app_config, delegate_orchestration
@@ -111,7 +112,7 @@ def test_a_masked_history_spares_what_the_agents_clearing_spares() -> None:
         entry="full",
     )
 
-    policies = _resolve_history_policies(cfg)
+    policies = _resolve_history_policies(cfg, {})
 
     assert "full" not in policies
     assert policies["tuned"] == HistoryPolicy(
@@ -119,6 +120,25 @@ def test_a_masked_history_spares_what_the_agents_clearing_spares() -> None:
     )
     assert policies["plain"] == HistoryPolicy(keep="masked")
     assert policies["team"] == policies["tuned"]
+
+
+def test_a_summarizing_history_is_given_its_model() -> None:
+    summarizer = FakeModel()
+    history = {"keep": "masked", "summarize_over": 5000, "summarize_model": "cheap"}
+    cfg = app_config(agents={"a": agent_def(history=history)}, entry="a")
+
+    policies = _resolve_history_policies(cfg, {"cheap": summarizer})
+
+    assert policies["a"].summarize_over == 5000
+    assert policies["a"].summarizer is summarizer
+
+
+def test_a_summarize_model_the_session_lacks_raises() -> None:
+    history = {"keep": "masked", "summarize_over": 5000, "summarize_model": "cheap"}
+    cfg = app_config(agents={"a": agent_def(history=history)}, entry="a")
+
+    with pytest.raises(ConfigurationError, match="cheap"):
+        _resolve_history_policies(cfg, {})
 
 
 # ── _resolve_chat_owner ──────────────────────────────────────────────────────

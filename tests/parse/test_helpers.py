@@ -49,6 +49,16 @@ def test_sanitize_collection_keys_updates_model_and_mcp_references():
     assert raw["mcp_clients"]["db_client"]["server"] == "db_server"
 
 
+def test_sanitize_collection_keys_updates_the_summarize_model_reference():
+    raw = {
+        "models": {"cheap model": {"provider": "bedrock", "model_id": "m"}},
+        "agents": {"a": {"history": {"keep": "masked", "summarize_model": "cheap model"}}},
+        "entry": "a",
+    }
+    sanitize_collection_keys(raw)
+    assert raw["agents"]["a"]["history"]["summarize_model"] == "cheap_model"
+
+
 def test_sanitize_collection_keys_updates_orchestration_references():
     raw: dict = {
         "agents": {"the writer": {"system_prompt": "w"}},

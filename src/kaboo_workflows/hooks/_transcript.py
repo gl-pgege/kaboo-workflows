@@ -10,11 +10,18 @@ were.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Collection
 from typing import Any
 
 MCP_TOOL_SEPARATOR = "___"
 DEFAULT_MIN_CHARS = 1500
+SUMMARY_BRIEF = "Summary of your earlier work in this conversation"
+
+_REMEMBER = re.compile(
+    r"^[ \t]*(?:(#{1,6})[ \t]+)?(?:\*\*|__)?to remember\b", re.IGNORECASE | re.MULTILINE
+)
+_HEADING = re.compile(r"^[ \t]*(#{1,6})[ \t]+\S", re.MULTILINE)
 
 _DELEGATE_INPUT_CHARS = 2000
 _MCP_INPUT_CHARS = 500
@@ -130,6 +137,112 @@ def mask_transcript(
             for m in cleared
         )
     return _join_turns(masked)
+
+
+def split_for_summary(
+    messages: list[dict[str, Any]], budget: int
+) -> tuple[list[list[dict[str, Any]]], list[list[dict[str, Any]]]]:
+    """Split a transcript's calls into the oldest, to summarise, and the newest, to keep.
+
+    The kept calls are the newest whose estimated tokens fit ``budget``, and
+    always include the newest call.
+    """
+    calls = split_calls(messages)
+    kept = calls[-1:]
+    size = sum(estimate_tokens(call) for call in kept)
+    for call in reversed(calls[:-1]):
+        size += estimate_tokens(call)
+        if size > budget:
+            break
+        kept.insert(0, call)
+    return calls[: len(calls) - len(kept)], kept
+
+
+def remembered_blocks(calls: list[list[dict[str, Any]]]) -> list[str]:
+    """Collect the ``To remember`` blocks of the reports in ``calls``, once each, in order.
+
+    A summary pair contributes the blocks it already carries.
+    """
+    blocks: list[str] = []
+    for call in calls:
+        if _is_summary(call):
+            carried = call[1].get("content", [])[1:] if len(call) > 1 else []
+            blocks.extend(str(block["text"]) for block in carried if "text" in block)
+        else:
+            blocks.extend(to_remember_blocks(_report(call)))
+    return list(dict.fromkeys(blocks))
+
+
+def to_remember_blocks(text: str) -> list[str]:
+    """Return the blocks of ``text`` that open with a ``To remember`` heading or line.
+
+    A block opened by a heading runs to the next heading of the same or a higher
+    level; one opened by a plain line runs to the next heading of any level;
+    either may run to the end of the text. Blocks are returned verbatim.
+    """
+    blocks: list[str] = []
+    end = 0
+    for match in _REMEMBER.finditer(text):
+        if match.start() < end:
+            continue
+        level = len(match.group(1)) if match.group(1) else 7
+        end = len(text)
+        line_end = text.find("\n", match.end())
+        if line_end != -1:
+            for heading in _HEADING.finditer(text, line_end + 1):
+                if len(heading.group(1)) <= level:
+                    end = heading.start()
+                    break
+        blocks.append(text[match.start() : end].rstrip())
+    return blocks
+
+
+def render_calls(calls: list[list[dict[str, Any]]]) -> str:
+    """Render calls as plain text for a model to summarise."""
+    sections: list[str] = []
+    for call in calls:
+        lines: list[str] = []
+        for message in call:
+            speaker = "Brief" if message.get("role") == "user" else "Agent"
+            for block in message.get("content") or []:
+                if "text" in block:
+                    lines.append(f"{speaker}: {block['text']}")
+                elif "toolUse" in block:
+                    use = block["toolUse"]
+                    tool_input = json.dumps(use.get("input", {}), ensure_ascii=False, default=str)
+                    lines.append(f"Called {use.get('name')} with {tool_input}")
+                elif "toolResult" in block:
+                    lines.append(f"Result: {result_text(block['toolResult'])}")
+        sections.append("\n".join(lines))
+    return "\n\n---\n\n".join(sections)
+
+
+def summary_pair(summary: str, remembered: list[str]) -> list[dict[str, Any]]:
+    """The leading user/assistant pair that stands in for summarised calls."""
+    return [
+        {"role": "user", "content": [{"text": SUMMARY_BRIEF}]},
+        {
+            "role": "assistant",
+            "content": [{"text": summary}, *({"text": block} for block in remembered)],
+        },
+    ]
+
+
+def _is_summary(call: list[dict[str, Any]]) -> bool:
+    if not call:
+        return False
+    content = call[0].get("content") or []
+    return len(content) == 1 and content[0].get("text") == SUMMARY_BRIEF
+
+
+def _report(call: list[dict[str, Any]]) -> str:
+    for message in reversed(call):
+        if message.get("role") != "assistant":
+            continue
+        texts = [str(b["text"]) for b in message.get("content") or [] if "text" in b]
+        if texts:
+            return "\n".join(texts)
+    return ""
 
 
 def split_calls(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:

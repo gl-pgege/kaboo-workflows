@@ -11,7 +11,9 @@ process-wide singleton. This makes every non-entry agent uniformly:
   conversation's messages).
 
 An agent whose :class:`HistoryPolicy` keeps a masked history writes a masked
-copy back to the client, while the run keeps the whole transcript.
+copy back to the client, while the run keeps the whole transcript. With a
+``summarize_over`` budget, a masked copy that still exceeds it has its oldest
+calls summarised by the policy's ``summarizer`` model.
 
 The entry agent is exempt: its transcript is the CopilotKit chat, seeded by
 ag-ui-strands from ``RunAgentInput.messages`` (see the adapter). This hook is
@@ -26,8 +28,10 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from strands import Agent
 from strands.hooks import HookProvider, HookRegistry
 from strands.hooks.events import AfterInvocationEvent, BeforeInvocationEvent
+from strands.models import Model
 
 if sys.version_info >= (3, 12):
     from typing import override
@@ -36,9 +40,24 @@ else:
 
 from .._context import get_history_exchange, get_run_id, get_thread_id
 from ..tools.wrappers import delegate_tool_names
-from ._transcript import DEFAULT_MIN_CHARS, mask_transcript
+from ._transcript import (
+    DEFAULT_MIN_CHARS,
+    estimate_tokens,
+    mask_transcript,
+    remembered_blocks,
+    render_calls,
+    split_for_summary,
+    summary_pair,
+)
 
 logger = logging.getLogger(__name__)
+
+_SUMMARY_INSTRUCTIONS = (
+    "You condense an agent's earlier work in a conversation into a summary the agent "
+    "reads in place of that work on later turns. Keep every ID, name, decision, exact "
+    "figure and open issue, writing IDs and figures exactly as they appear. Leave out "
+    "greetings, repetition and reasoning that led nowhere. Reply with the summary alone."
+)
 
 
 @dataclass(frozen=True)
@@ -51,11 +70,16 @@ class HistoryPolicy:
             full when the agent loads it (``history.keep``).
         min_chars: Tool results shorter than this survive masking.
         keep_tools: Tools whose results survive masking. A delegate's always do.
+        summarize_over: Estimated tokens a masked copy may reach before its
+            oldest calls are summarised. ``None`` never summarises.
+        summarizer: The model that writes the summary.
     """
 
     keep: Literal["full", "masked"] = "full"
     min_chars: int = DEFAULT_MIN_CHARS
     keep_tools: frozenset[str] = frozenset()
+    summarize_over: int | None = None
+    summarizer: Model | None = None
 
 
 class HistoryHook(HookProvider):
@@ -85,9 +109,16 @@ class HistoryHook(HookProvider):
 
     @override
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
-        """Register seed (before) and capture (after) invocation callbacks."""
+        """Register seed (before) and capture (after) invocation callbacks.
+
+        The capture is asynchronous only for a policy that summarises, since
+        only then does it call a model.
+        """
         registry.add_callback(BeforeInvocationEvent, self._on_before)
-        registry.add_callback(AfterInvocationEvent, self._on_after)
+        if self._policy.keep == "masked" and self._policy.summarize_over is not None:
+            registry.add_callback(AfterInvocationEvent, self._on_after_summarizing)
+        else:
+            registry.add_callback(AfterInvocationEvent, self._on_after)
 
     def _on_before(self, event: BeforeInvocationEvent) -> None:
         """Seed ``agent.messages`` for this invocation.
@@ -179,6 +210,65 @@ class HistoryHook(HookProvider):
             len(exchange.outbound[self._key]),
             self._policy.keep,
         )
+
+    async def _on_after_summarizing(self, event: AfterInvocationEvent) -> None:
+        """Capture, then summarise the oldest calls of a masked copy over budget."""
+        self._on_after(event)
+        exchange = get_history_exchange()
+        if not self._enabled or exchange is None or self._key not in exchange.persisted:
+            return
+        exchange.persisted[self._key] = await self._summarize(exchange.persisted[self._key])
+
+    async def _summarize(self, memory: list[Any]) -> list[Any]:
+        """Fold the oldest calls of ``memory`` into one summary pair, if it is over budget.
+
+        The newest calls that fit three quarters of the budget are kept, leaving
+        the rest for the summary. Any failure keeps ``memory`` as it is.
+        """
+        budget = self._policy.summarize_over
+        summarizer = self._policy.summarizer
+        if budget is None or summarizer is None or estimate_tokens(memory) <= budget:
+            return memory
+        older, newer = split_for_summary(memory, budget - budget // 4)
+        if not older:
+            return memory
+        try:
+            result = await Agent(
+                model=summarizer,
+                name="history_summarizer",
+                system_prompt=_SUMMARY_INSTRUCTIONS,
+                callback_handler=None,
+            ).invoke_async(f"The earlier work to summarise:\n\n{render_calls(older)}")
+            summary = str(result).strip()
+        except Exception:
+            logger.warning(
+                "key=<%s>, thread=<%s>, run=<%s> | summarising earlier calls failed; "
+                "writing back the masked memory",
+                self._key,
+                get_thread_id(),
+                get_run_id(),
+                exc_info=True,
+            )
+            return memory
+        if not summary:
+            logger.warning(
+                "key=<%s>, thread=<%s>, run=<%s> | summary came back empty; "
+                "writing back the masked memory",
+                self._key,
+                get_thread_id(),
+                get_run_id(),
+            )
+            return memory
+        logger.info(
+            "key=<%s>, summarised_calls=<%d>, kept_calls=<%d> | summarised a masked history",
+            self._key,
+            len(older),
+            len(newer),
+        )
+        return [
+            *summary_pair(summary, remembered_blocks(older)),
+            *(message for call in newer for message in call),
+        ]
 
     def _mask(self, messages: list[Any], agent: Any) -> list[Any]:
         registry = agent.tool_registry

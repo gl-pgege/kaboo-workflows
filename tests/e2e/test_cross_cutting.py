@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -414,6 +415,41 @@ async def test_a_masked_sub_agent_writes_back_a_paused_call_whole_and_a_finished
     assert _texts(finished)[0] == "revenue by region"
     assert _texts(finished)[-1] == "Revenue by region is ready."
     assert any("region-199" in text for text in _result_texts(r2.exchange.outbound["sql"]))
+
+
+def _analyst_call(n: int, report: str) -> list[dict]:
+    rows = json.dumps({"queryExecutionId": f"q-{n}", "padding": "x" * 2000})
+    use = {"toolUseId": f"c{n}", "name": "athena___run_query", "input": {"n": n}}
+    result = {"toolUseId": f"c{n}", "status": "success", "content": [{"text": rows}]}
+    return [
+        {"role": "user", "content": [{"text": f"question {n}"}]},
+        {"role": "assistant", "content": [{"toolUse": use}]},
+        {"role": "user", "content": [{"toolResult": result}]},
+        {"role": "assistant", "content": [{"text": report}]},
+    ]
+
+
+async def test_a_memory_over_summarize_over_is_written_back_with_its_oldest_calls_summarised():
+    remember = "## To remember\n- revenue is stored in cents"
+    stored = [
+        *_analyst_call(1, f"Revenue is $42M.\n\n{remember}"),
+        *_analyst_call(2, "Region data is in sales_by_region."),
+        *_analyst_call(3, "Returns are 3%."),
+    ]
+    pipe = Pipeline(str(CONFIGS / "history_summary.yaml"))
+
+    r = await pipe.turn(
+        "and by region?", thread_id="s1", run_id="r1", state={"kaboo_history": {"sql": stored}}
+    )
+
+    assert not r.errored()
+    memory = r.state()["kaboo_history"]["sql"]
+    assert _texts(memory[:2]) == [
+        "Summary of your earlier work in this conversation",
+        "Earlier, queries q-1 and q-2 found $42M of revenue.",
+        remember,
+    ]
+    assert _texts(memory)[-2:] == ["and by region?", "By region it is ready."]
 
 
 async def test_history_disabled_sub_agent_does_not_persist() -> None:

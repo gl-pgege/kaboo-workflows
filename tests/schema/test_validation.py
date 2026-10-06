@@ -86,6 +86,33 @@ def test_graph_edge_accepts_from_to_aliases():
     assert (edge.from_agent, edge.to_agent) == ("a", "b")
 
 
+# ── HistoryDef: the summary backstop ───────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("history", "missing"),
+    [
+        pytest.param({"keep": "masked", "summarize_over": 5000}, "summarize_model", id="no-model"),
+        pytest.param(
+            {"summarize_over": 5000, "summarize_model": "cheap"}, "keep", id="full-history"
+        ),
+    ],
+)
+def test_summarize_over_needs_a_masked_history_and_a_model(history, missing):
+    from kaboo_workflows.config.schema import HistoryDef
+
+    with pytest.raises(ValidationError, match=missing):
+        HistoryDef(**history)
+
+
+def test_a_masked_history_with_a_summary_validates():
+    from kaboo_workflows.config.schema import HistoryDef
+
+    history = HistoryDef(keep="masked", summarize_over=5000, summarize_model="cheap")
+
+    assert (history.keep, history.summarize_over) == ("masked", 5000)
+
+
 # ── ModelDef: a bedrock model's client_config ──────────────────────────────
 
 

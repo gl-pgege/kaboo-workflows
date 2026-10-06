@@ -256,11 +256,34 @@ class HistoryDef(BaseModel):
       paused on an interrupt is written back whole. Only the written-back copy
       is masked: a second call in the same run still sees everything. A
       transcript stored in full is masked when the agent loads it.
+    - ``summarize_over`` — with ``keep: masked``, a token estimate (four
+      characters a token) the written-back memory may not exceed. Past it, the
+      oldest calls are summarised by ``summarize_model`` into one leading pair,
+      keeping the newest calls that fit. Blocks of a report that open with a
+      ``To remember`` heading or line are copied into the summary verbatim. If
+      summarising fails, the masked memory is written back as it is.
+    - ``summarize_model`` — the name of a model under ``models:``; required with
+      ``summarize_over``.
     """
 
     enabled: bool = True
     group: str | None = None
     keep: Literal["full", "masked"] = "full"
+    summarize_over: int | None = Field(default=None, gt=0)
+    summarize_model: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_summary(self) -> HistoryDef:
+        """Require ``keep: masked`` and a ``summarize_model`` for ``summarize_over``."""
+        if self.summarize_over is None:
+            return self
+        if self.keep != "masked":
+            raise ValueError("history.summarize_over needs keep: masked.")
+        if self.summarize_model is None:
+            raise ValueError(
+                "history.summarize_over needs summarize_model, the name of a model under models:."
+            )
+        return self
 
 
 class ClearToolResultsDef(BaseModel):

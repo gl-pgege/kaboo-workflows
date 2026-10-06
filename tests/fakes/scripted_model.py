@@ -28,8 +28,9 @@ stay deterministic. Each step is one of:
 
 When the script is exhausted the model emits ``final_text`` and stops.
 
-Every call's messages are kept on ``calls``, so a test can assert exactly what
-the model was sent — which is not always what the agent holds.
+Every call's messages are kept on ``calls`` and its system prompt on
+``system_prompts``, so a test can assert exactly what the model was sent — which
+is not always what the agent holds.
 """
 
 from __future__ import annotations
@@ -87,6 +88,7 @@ class ScriptedModel(Model):
         self._final_text = final_text
         self._step = 0
         self.calls: list[list[dict[str, Any]]] = []
+        self.system_prompts: list[Any] = []
 
     def update_config(self, **model_config: Any) -> None:
         self._config.update(model_config)
@@ -101,6 +103,7 @@ class ScriptedModel(Model):
         self, messages: Any, tool_specs: Any = None, system_prompt: Any = None, **kwargs: Any
     ):
         self.calls.append(copy.deepcopy(messages))
+        self.system_prompts.append(system_prompt)
         _validate_tool_pairing(messages)
         if _is_fresh_human_turn(messages):
             self._step = 0

@@ -15,7 +15,8 @@ def validate_references(config: AppConfig) -> None:
     """Validate that all cross-references in the config are resolvable.
 
     Checks:
-    - Agent model references exist in config.models
+    - Agent model references (``model``, ``history.summarize_model``) exist in
+      config.models
     - Agent MCP client references exist in config.mcp_clients
     - MCP client server references exist in config.mcp_servers
     - Orchestration node references exist in agents or orchestrations
@@ -35,6 +36,14 @@ def validate_references(config: AppConfig) -> None:
             raise UnresolvedReferenceError(
                 f"Agent '{agent_name}' references model '{agent_def.model}' "
                 f"which is not defined.\n"
+                f"Available models: {list(config.models)}"
+            )
+        history = agent_def.history
+        summarize_model = getattr(history, "summarize_model", None)
+        if summarize_model is not None and summarize_model not in config.models:
+            raise UnresolvedReferenceError(
+                f"Agent '{agent_name}' summarizes its history with model "
+                f"'{summarize_model}' which is not defined.\n"
                 f"Available models: {list(config.models)}"
             )
         for mcp_name in agent_def.mcp:

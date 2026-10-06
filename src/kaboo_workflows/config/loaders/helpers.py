@@ -101,7 +101,7 @@ def update_references(raw: dict, rename_map: dict[str, str]) -> None:
     if isinstance(raw.get("entry"), str):
         raw["entry"] = _rename(raw["entry"])
 
-    # Agent definitions — model and mcp refs
+    # Agent definitions — model, mcp and history.summarize_model refs
     agents = raw.get("agents", {})
     if isinstance(agents, dict):
         for agent_def in agents.values():
@@ -111,6 +111,9 @@ def update_references(raw: dict, rename_map: dict[str, str]) -> None:
                 agent_def["model"] = _rename(agent_def["model"])
             if isinstance(agent_def.get("mcp"), list):
                 agent_def["mcp"] = [_rename(m) for m in agent_def["mcp"]]
+            history = agent_def.get("history")
+            if isinstance(history, dict) and isinstance(history.get("summarize_model"), str):
+                history["summarize_model"] = _rename(history["summarize_model"])
 
     # MCP client server references
     clients = raw.get("mcp_clients", {})

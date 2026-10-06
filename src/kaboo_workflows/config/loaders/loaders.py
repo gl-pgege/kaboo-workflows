@@ -371,4 +371,5 @@ def load_session(
         entry=entry,
         mcp_lifecycle=infra.mcp_lifecycle,
         app_config=config,
+        models=infra.models,
     )

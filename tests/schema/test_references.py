@@ -35,6 +35,13 @@ def test_missing_model_reference_raises():
         validate_references(config)
 
 
+def test_missing_summarize_model_reference_raises():
+    history = {"keep": "masked", "summarize_over": 5000, "summarize_model": "ghost"}
+    config = app_config(agents={"a": agent_def(history=history)}, entry="a")
+    with pytest.raises(UnresolvedReferenceError, match="ghost"):
+        validate_references(config)
+
+
 def test_missing_mcp_client_reference_raises():
     config = app_config(agents={"a": agent_def(mcp=["nope"])}, entry="a")
     with pytest.raises(UnresolvedReferenceError, match="nope"):
