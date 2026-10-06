@@ -14,7 +14,31 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, cast
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+
+class BedrockRetriesDef(BaseModel):
+    """botocore retry settings for a Bedrock model's client."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_attempts: int | None = Field(default=None, ge=0)
+    mode: Literal["legacy", "standard", "adaptive"] | None = None
+
+
+class BedrockClientConfigDef(BaseModel):
+    """The ``params.client_config`` a Bedrock model may carry.
+
+    Converted to a botocore ``Config`` and passed to strands ``BedrockModel`` as
+    ``boto_client_config``. Timeouts are in seconds. A ``read_timeout`` left
+    unset keeps strands' Bedrock default (120) rather than botocore's (60).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    read_timeout: float | None = Field(default=None, gt=0)
+    connect_timeout: float | None = Field(default=None, gt=0)
+    retries: BedrockRetriesDef | None = None
 
 
 class ModelDef(BaseModel):
@@ -23,6 +47,20 @@ class ModelDef(BaseModel):
     provider: str
     model_id: str
     params: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_bedrock_client_config(self) -> ModelDef:
+        """Check a Bedrock model's ``params.client_config`` against the keys it may set."""
+        if self.provider.lower() != "bedrock" or "client_config" not in self.params:
+            return self
+        try:
+            client_config = BedrockClientConfigDef.model_validate(self.params["client_config"])
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            where = ".".join(str(part) for part in ("client_config", *first["loc"]))
+            raise ValueError(f"params.{where}: {first['msg']}") from None
+        self.params["client_config"] = client_config.model_dump(exclude_none=True)
+        return self
 
 
 class HookDef(BaseModel):

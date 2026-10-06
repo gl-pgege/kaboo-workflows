@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from strands.models import Model
+
+if TYPE_CHECKING:
+    from botocore.config import Config as BotocoreConfig
 
 PROVIDERS = ("bedrock", "ollama", "openai", "gemini")
 
@@ -28,25 +31,48 @@ def _with_openai_client_defaults(params: dict[str, Any]) -> dict[str, Any]:
     return {**params, "client_args": client_args}
 
 
+def _bedrock_client_config(client_config: dict[str, Any]) -> BotocoreConfig:
+    """Return the botocore ``Config`` a Bedrock model's client is created with.
+
+    strands only applies its own read timeout when it builds the ``Config``
+    itself, so it is filled in here; naming just ``retries`` would otherwise
+    shorten the timeout to botocore's default.
+    """
+    from botocore.config import Config
+    from strands.models.bedrock import DEFAULT_READ_TIMEOUT
+
+    return Config(**{"read_timeout": DEFAULT_READ_TIMEOUT, **client_config})
+
+
 def create_model(provider: str, model_id: str, **params: Any) -> Model:
     """Dispatch to the appropriate model factory by provider name.
 
     Args:
         provider: ``"ollama"`` or ``"bedrock"`` or ``"openai"`` or ``"gemini"``.
         model_id: Model identifier.
-        **params: Provider-specific keyword arguments.
+        **params: Provider-specific keyword arguments. For ``"bedrock"``, a
+            ``client_config`` mapping (``read_timeout``, ``connect_timeout``,
+            ``retries``) becomes the model's ``boto_client_config``.
 
     Returns:
         Strands model instance.
 
     Raises:
-        ValueError: If the provider is unknown.
+        ValueError: If the provider is unknown, or a Bedrock model is given both
+            ``client_config`` and ``boto_client_config``.
         ImportError: If a required optional provider package is not installed.
     """
     match provider.lower():
         case "bedrock":
             from strands.models.bedrock import BedrockModel
 
+            client_config = params.pop("client_config", None)
+            if client_config is not None:
+                if "boto_client_config" in params:
+                    raise ValueError(
+                        "A bedrock model takes client_config or boto_client_config, not both."
+                    )
+                params["boto_client_config"] = _bedrock_client_config(client_config)
             return BedrockModel(model_id=model_id, **params)
 
         case "ollama":

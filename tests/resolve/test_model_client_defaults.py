@@ -1,18 +1,24 @@
-"""Default client timeout/retries for the openai provider."""
+"""Client settings for model providers: openai timeout/retries, bedrock client_config."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from kaboo_workflows.config.resolvers.models import resolve_model
 from kaboo_workflows.models import (
     DEFAULT_OPENAI_MAX_RETRIES,
     DEFAULT_OPENAI_TIMEOUT_SECONDS,
     create_model,
 )
+from tests.factories import model_def
 
 
 def _client_args(model: Any) -> dict[str, Any]:
     return model.client_args
+
+
+def _boto_config(model: Any) -> Any:
+    return model.client.meta.config
 
 
 def test_openai_gets_default_timeout_and_retries():
@@ -34,3 +40,42 @@ def test_openai_user_values_win():
     )
     assert args["timeout"] == 30
     assert args["max_retries"] == 5
+
+
+def test_bedrock_client_config_reaches_the_boto_client():
+    model = resolve_model(
+        model_def(
+            provider="bedrock",
+            model_id="anthropic.claude",
+            params={
+                "region_name": "us-east-1",
+                "client_config": {
+                    "read_timeout": 840,
+                    "connect_timeout": 5,
+                    "retries": {"max_attempts": 3, "mode": "adaptive"},
+                },
+            },
+        )
+    )
+
+    config = _boto_config(model)
+    assert config.read_timeout == 840
+    assert config.connect_timeout == 5
+    assert config.retries["mode"] == "adaptive"
+    assert config.retries["total_max_attempts"] == 4
+
+
+def test_bedrock_client_config_without_read_timeout_keeps_the_strands_default():
+    with_retries_only = create_model(
+        "bedrock",
+        "anthropic.claude",
+        region_name="us-east-1",
+        client_config={"retries": {"mode": "standard"}},
+    )
+    without_client_config = create_model("bedrock", "anthropic.claude", region_name="us-east-1")
+
+    assert (
+        _boto_config(with_retries_only).read_timeout
+        == _boto_config(without_client_config).read_timeout
+    )
+    assert _boto_config(with_retries_only).retries["mode"] == "standard"

@@ -86,6 +86,63 @@ def test_graph_edge_accepts_from_to_aliases():
     assert (edge.from_agent, edge.to_agent) == ("a", "b")
 
 
+# ── ModelDef: a bedrock model's client_config ──────────────────────────────
+
+
+def test_bedrock_client_config_accepts_timeouts_and_retries():
+    from kaboo_workflows.config.schema import ModelDef
+
+    model = ModelDef(
+        provider="bedrock",
+        model_id="m",
+        params={
+            "client_config": {
+                "read_timeout": 300,
+                "connect_timeout": 5,
+                "retries": {"max_attempts": 4, "mode": "adaptive"},
+            }
+        },
+    )
+
+    assert model.params["client_config"]["retries"] == {"max_attempts": 4, "mode": "adaptive"}
+
+
+@pytest.mark.parametrize(
+    "client_config",
+    [
+        {"max_pool_connections": 10},
+        {"retries": {"total_max_attempts": 3}},
+        {"retries": {"mode": "eventually"}},
+        {"read_timeout": 0},
+    ],
+)
+def test_bedrock_client_config_rejects_unknown_keys_and_bad_values(client_config):
+    from kaboo_workflows.config.schema import ModelDef
+
+    with pytest.raises(ValidationError, match="client_config"):
+        ModelDef(provider="bedrock", model_id="m", params={"client_config": client_config})
+
+
+def test_bad_bedrock_client_config_in_yaml_is_a_schema_validation_error():
+    from tests.factories import yaml_config
+
+    yaml_text = yaml_config(
+        """
+        models:
+          fast:
+            provider: bedrock
+            model_id: m
+            params:
+              client_config: {read_timeot: 30}
+        agents:
+          a: {model: fast}
+        entry: a
+        """
+    )
+    with pytest.raises(SchemaValidationError, match="read_timeot"):
+        load_config(yaml_text)
+
+
 # ── load_config surfaces schema failures as the typed subclass ─────────────
 
 
