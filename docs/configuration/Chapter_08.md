@@ -79,7 +79,7 @@ agents:
     context:
       clear_tool_results:
         trigger: 60000            # estimated input tokens before anything is cleared
-        keep_last: 3              # the most recent results always stay
+        keep_last: 3              # results of the 3 most recent turns always stay
         min_chars: 1500           # shorter results always stay
         keep_tools: [warehouse___get_schema]
 ```
@@ -87,7 +87,7 @@ agents:
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `trigger` | *(required)* | Estimated input tokens (system prompt plus messages, four characters a token) above which results are cleared before a model call. |
-| `keep_last` | `3` | How many of the most recent tool results always stay. |
+| `keep_last` | `3` | How many of the most recent turns keep their results; at least 1. A turn is every result of one model response, so a batch of parallel calls stays or goes together, and the newest batch, which the model has not read yet, is always sent whole. |
 | `min_chars` | `1500` | Results shorter than this many characters always stay. |
 | `keep_tools` | `[]` | Tools whose results always stay. |
 

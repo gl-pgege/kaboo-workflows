@@ -93,7 +93,7 @@ agents:
     context:
       clear_tool_results:          # Off when absent (Chapter 8)
         trigger: 60000             # Required: estimated input tokens
-        keep_last: 3               # Most recent results that always stay
+        keep_last: 3               # Most recent turns whose results always stay (>= 1)
         min_chars: 1500            # Shorter results always stay
         keep_tools: []             # Tools whose results always stay
 ```

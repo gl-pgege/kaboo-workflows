@@ -78,7 +78,8 @@ class ContextHook(HookProvider):
             clear_trigger: Estimated input tokens (system prompt plus messages,
                 four characters a token) past which old tool results are
                 cleared before a model call. ``None`` never clears.
-            keep_last: How many of the most recent tool results always stay.
+            keep_last: How many of the most recent turns of tool results always
+                stay; a turn is every result of one model response.
             min_chars: Tool results shorter than this always stay.
             keep_tools: Tools whose results always stay. A delegate's always do.
         """

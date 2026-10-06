@@ -86,12 +86,58 @@ def _placeholder(name: str, *ids: str) -> str:
     return f"Result cleared ({', '.join([name, *ids])}): call it again to see it."
 
 
-def test_results_older_than_the_last_keep_last_are_cleared() -> None:
+def test_results_outside_the_last_keep_last_turns_are_cleared() -> None:
     messages = _transcript(*[("athena___run_query", BIG)] * 5)
 
     cleared = _clear(messages, keep_last=2)
 
     assert _results(cleared) == [_placeholder("athena___run_query")] * 3 + [BIG] * 2
+
+
+def _batches(*sizes: int) -> list[Any]:
+    """A brief, then one model response per size calling that many tools at once."""
+    messages: list[Any] = [{"role": "user", "content": [{"text": "brief"}]}]
+    for turn, size in enumerate(sizes):
+        ids = [f"t{turn}c{n}" for n in range(size)]
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [
+                    {"toolUse": {"toolUseId": i, "name": "athena___run_query", "input": {}}}
+                    for i in ids
+                ],
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": i,
+                            "status": "success",
+                            "content": [{"text": BIG}],
+                        }
+                    }
+                    for i in ids
+                ],
+            }
+        )
+    return messages
+
+
+def test_a_batch_of_parallel_results_stays_or_goes_as_one_turn() -> None:
+    messages = _batches(2, 3, 9)
+
+    cleared = _clear(messages, keep_last=1)
+
+    # The nine results the model is about to read arrive whole.
+    assert _results(cleared) == [_placeholder("athena___run_query")] * 5 + [BIG] * 9
+
+
+def test_keep_last_below_one_is_rejected() -> None:
+    with pytest.raises(ValueError, match="keep_last"):
+        agent_def(model="m", context={"clear_tool_results": {"trigger": 100, "keep_last": 0}})
 
 
 def test_results_shorter_than_min_chars_are_never_cleared() -> None:

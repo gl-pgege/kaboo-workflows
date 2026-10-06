@@ -159,20 +159,24 @@ def clear_tool_results(
     kept: Collection[str],
     tools: Collection[str],
 ) -> list[dict[str, Any]]:
-    """Replace every ``toolResult`` but the last ``keep_last`` with a placeholder.
+    """Replace every ``toolResult`` outside the last ``keep_last`` turns with a placeholder.
 
-    The placeholder reads ``Result cleared (<tool>[, <key>=<value>…]): call it
-    again to see it.``, carrying up to ten pairs from the result's JSON whose key
-    ends in ``id``/``Id``/``ID``. A result is left alone when it is shorter than
-    ``min_chars`` characters, already a placeholder, or never cleared — its tool
-    is in ``kept``, or is a delegate missing from ``tools``. The ``toolUse``
-    blocks are kept, so the model can make the call again. The output depends on
-    nothing but the input, and clearing it again changes nothing, so a result
-    reads the same on every later call once it has been cleared.
+    A turn is one message of results: everything one model response called, so
+    a batch of parallel calls is kept or cleared together, and with ``keep_last``
+    at one or more the newest batch, which the model has not read yet, arrives
+    whole. The placeholder reads ``Result cleared (<tool>[, <key>=<value>…]):
+    call it again to see it.``, carrying up to ten pairs from the result's JSON
+    whose key ends in ``id``/``Id``/``ID``. A result is left alone when it is
+    shorter than ``min_chars`` characters, already a placeholder, or never
+    cleared — its tool is in ``kept``, or is a delegate missing from ``tools``.
+    The ``toolUse`` blocks are kept, so the model can make the call again. The
+    output depends on nothing but the input, and clearing it again changes
+    nothing, so a result reads the same on every later call once it has been
+    cleared.
 
     Args:
         messages: The conversation, oldest first.
-        keep_last: How many of the most recent results are always kept.
+        keep_last: How many of the most recent turns of results are always kept.
         min_chars: Results shorter than this are always kept.
         kept: Tools whose results are never cleared (``keep_tools`` plus the
             agent's delegates).
@@ -188,8 +192,12 @@ def clear_tool_results(
         for j, block in enumerate(message.get("content") or [])
         if "toolResult" in block
     ]
+    turns = sorted({i for i, _ in places})
+    recent = set(turns[max(len(turns) - keep_last, 0) :])
     cleared = list(messages)
-    for i, j in places[: max(len(places) - keep_last, 0)]:
+    for i, j in places:
+        if i in recent:
+            continue
         result = cleared[i]["content"][j]["toolResult"]
         name = names.get(result.get("toolUseId"), "")
         if (

@@ -291,15 +291,17 @@ class ClearToolResultsDef(BaseModel):
 
     Before each model call, once the estimated input (system prompt plus
     messages, at four characters a token) exceeds ``trigger`` tokens, every tool
-    result older than the last ``keep_last`` is replaced by ``Result cleared
+    result outside the last ``keep_last`` turns is replaced by ``Result cleared
     (<tool>[, <id>=<value>…]): call it again to see it.``, carrying up to ten
-    ids found in the result. Results under ``min_chars`` characters, results of
-    tools in ``keep_tools`` and results of delegates are never cleared, and the
-    calls themselves always stay. Only the copy sent to the model changes.
+    ids found in the result. A turn is every result of one model response, so
+    parallel calls stay or go together and the newest turn, not yet read, is
+    always sent whole. Results under ``min_chars`` characters, results of tools
+    in ``keep_tools`` and results of delegates are never cleared, and the calls
+    themselves always stay. Only the copy sent to the model changes.
     """
 
     trigger: int = Field(gt=0)
-    keep_last: int = Field(default=3, ge=0)
+    keep_last: int = Field(default=3, ge=1)
     min_chars: int = Field(default=1500, ge=0)
     keep_tools: list[str] = Field(default_factory=list)
 

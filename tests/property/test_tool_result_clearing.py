@@ -36,6 +36,38 @@ def test_clearing_again_changes_nothing(steps, keep_last, min_chars):
     assert _clear(once, keep_last, min_chars) == once
 
 
+@given(st.lists(st.integers(1, 6), min_size=1, max_size=6), st.integers(1, 5))
+def test_the_newest_batch_is_never_cleared(sizes, keep_last):
+    messages: list[dict[str, Any]] = [{"role": "user", "content": [{"text": "brief"}]}]
+    for turn, size in enumerate(sizes):
+        ids = [f"t{turn}c{n}" for n in range(size)]
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [
+                    {"toolUse": {"toolUseId": i, "name": "query", "input": {}}} for i in ids
+                ],
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": i,
+                            "status": "success",
+                            "content": [{"text": "x" * 3000}],
+                        }
+                    }
+                    for i in ids
+                ],
+            }
+        )
+
+    assert _clear(messages, keep_last, 0)[-1] == messages[-1]
+
+
 @given(_steps, st.integers(0, 5), st.integers(0, 2000))
 def test_clearing_keeps_every_message_and_every_call(steps, keep_last, min_chars):
     messages = _transcript(steps)
