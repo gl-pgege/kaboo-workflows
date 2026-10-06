@@ -73,6 +73,25 @@ def test_history_group_shares_one_key() -> None:
     assert resolved["fact_checker"][0] == "team"
 
 
+def test_delegate_orchestration_remembers_as_its_entry_agent() -> None:
+    cfg = app_config(
+        agents={
+            "coordinator": agent_def(),
+            "sql_analyst": agent_def(history={"group": "sql"}),
+            "runner": agent_def(),
+        },
+        orchestrations={
+            "analyze_sql": delegate_orchestration("sql_analyst", {"runner": "runs SQL"}),
+            "team": delegate_orchestration("coordinator", {"analyze_sql": "answers with SQL"}),
+        },
+        entry="team",
+    )
+
+    resolved = _resolve_history(cfg)
+
+    assert resolved["analyze_sql"] == resolved["sql_analyst"] == ("sql", True)
+
+
 # ── _resolve_chat_owner ──────────────────────────────────────────────────────
 
 

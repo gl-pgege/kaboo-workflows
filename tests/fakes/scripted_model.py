@@ -27,10 +27,14 @@ stay deterministic. Each step is one of:
   error path (a failing node inside any orchestration).
 
 When the script is exhausted the model emits ``final_text`` and stops.
+
+Every call's messages are kept on ``calls``, so a test can assert exactly what
+the model was sent — which is not always what the agent holds.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 from typing import Any
@@ -82,6 +86,7 @@ class ScriptedModel(Model):
         self._script = script or []
         self._final_text = final_text
         self._step = 0
+        self.calls: list[list[dict[str, Any]]] = []
 
     def update_config(self, **model_config: Any) -> None:
         self._config.update(model_config)
@@ -95,6 +100,7 @@ class ScriptedModel(Model):
     async def stream(
         self, messages: Any, tool_specs: Any = None, system_prompt: Any = None, **kwargs: Any
     ):
+        self.calls.append(copy.deepcopy(messages))
         _validate_tool_pairing(messages)
         if _is_fresh_human_turn(messages):
             self._step = 0

@@ -1,0 +1,44 @@
+# A delegate orchestration whose entry agent remembers. `analyze_sql` runs as a
+# fork of `sql_analyst`, so it reads and writes sql_analyst's `sql` history
+# group, exactly as sql_analyst would if it were connected directly.
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+models:
+  analyst:
+    provider: *m
+    model_id: scripted
+    params: {final_text: "Revenue is 42."}
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: analyze_sql, input: "how much revenue?"}
+        final_text: "Coordinator done."
+  sql_analyst:
+    stream: {title: "SQL analysis"}
+    history: {group: sql}
+    model: analyst
+  query_runner:
+    model:
+      provider: *m
+      model_id: scripted
+      params: {final_text: "rows"}
+
+orchestrations:
+  analyze_sql:
+    mode: delegate
+    entry_name: sql_analyst
+    connections:
+      - {agent: query_runner, description: "Runs a SQL query"}
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: analyze_sql, description: "Answers questions with SQL"}
+
+entry: team

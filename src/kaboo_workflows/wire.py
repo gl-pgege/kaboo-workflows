@@ -255,7 +255,10 @@ def make_event_queue(
             receives a :class:`~kaboo_workflows.hooks.HistoryHook` so its
             transcript is seeded from and captured back into the request's
             history exchange. The chat owner is skipped — its transcript is the
-            chat itself, owned by the AG-UI adapter.
+            chat itself, owned by the AG-UI adapter. A delegate orchestration's
+            forked agent is looked up under the orchestration's name and gets a
+            hook only when its history is enabled; the entry orchestration's
+            never does, since its transcript is the chat.
         entry_name: The configured name of the entry node.  Stored on the
             EventQueue and used as ``agent_name`` on SESSION_START /
             SESSION_END events.
@@ -343,6 +346,12 @@ def make_event_queue(
             # this HookRegistry, so the publisher must be forwarded explicitly
             # (its AGENT_COMPLETE carries the manager's token usage).
             setattr(orch, "_kaboo_event_publisher", orch_pub)
+            key, enabled = history_map.get(orch_name, (sg, False))
+            if enabled and orch_name != entry_name:
+                orch.hooks.add_hook(HistoryHook(key, enabled=True))
+                logger.debug(
+                    "orchestrator=<%s>, history_key=<%s> | wired HistoryHook", orch_name, key
+                )
         logger.debug("orchestrator=<%s>, stream_group=<%s> | wired EventPublisher", orch_name, sg)
 
     return event_queue

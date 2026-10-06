@@ -274,9 +274,15 @@ def _resolve_history(
     - ``enabled`` is the agent's ``history.enabled`` when the agent declares
       ``history:``, otherwise the global ``AppConfig.history`` default.
 
+    A delegate orchestration maps to its entry agent's ``(key, enabled)``: the
+    agent that runs as the orchestration is a fork of that agent, so it reads
+    and writes the same transcript the declared agent would.
+
     The entry agent is intentionally included but ignored at wire time — its
     transcript is always the CopilotKit chat, not the ``kaboo_history`` blob.
     """
+    from ..schema import DelegateOrchestrationDef
+
     if app_config is None:
         return {}
 
@@ -294,6 +300,9 @@ def _resolve_history(
             if agent_history.group:
                 key = agent_history.group
         history[name] = (key, enabled)
+    for name, orch_def in app_config.orchestrations.items():
+        if isinstance(orch_def, DelegateOrchestrationDef) and orch_def.entry_name in history:
+            history[name] = history[orch_def.entry_name]
     return history
 
 

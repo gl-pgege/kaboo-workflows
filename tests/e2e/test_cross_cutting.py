@@ -14,6 +14,7 @@ import pytest
 from ag_ui.core import EventType as AGUIEventType
 
 from kaboo_workflows._context import ResponseBudget, set_response_budget
+from tests.fakes import ScriptedModel
 
 from .harness import Pipeline, run_pipeline
 
@@ -351,6 +352,31 @@ async def test_subagent_history_round_trips_and_accumulates() -> None:
     assert key in r2.exchange.outbound
     # Seeded from prior transcript, then appended this turn's exchange.
     assert len(r2.exchange.outbound[key]) > len1
+
+
+def _texts(messages: list[dict]) -> list[str]:
+    return [block["text"] for m in messages for block in m["content"] if "text" in block]
+
+
+async def test_a_forked_delegate_entry_remembers_through_its_entry_agents_group() -> None:
+    # analyze_sql is a fork of sql_analyst (history: {group: sql}). Each turn
+    # builds a fresh session, as a per-run config does, so the second turn can
+    # only know the first through the state the host replays.
+    pipe = Pipeline(
+        str(CONFIGS / "history_delegate_entry.yaml"), session_config_key="workflow_config"
+    )
+    analyst = pipe.infra.models["analyst"]
+    assert isinstance(analyst, ScriptedModel)
+
+    r1 = await pipe.turn("first question", thread_id="d1", run_id="r1")
+    assert not r1.errored()
+    assert _texts(r1.state()["kaboo_history"]["sql"]) == ["how much revenue?", "Revenue is 42."]
+
+    r2 = await pipe.turn("second question", thread_id="d1", run_id="r2", state=r1.state())
+
+    assert not r2.errored()
+    assert _texts(analyst.calls[-1]) == ["how much revenue?", "Revenue is 42.", "how much revenue?"]
+    assert len(r2.state()["kaboo_history"]["sql"]) == 4
 
 
 async def test_history_disabled_sub_agent_does_not_persist() -> None:
