@@ -29,6 +29,11 @@ def _call(call_id: str, name: str, arguments: dict[str, Any]) -> ToolCall:
     return ToolCall(id=call_id, function=FunctionCall(name=name, arguments=json.dumps(arguments)))
 
 
+def _turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The conversation alone, without the bookkeeping keys strands adds to messages."""
+    return [{"role": m["role"], "content": m["content"]} for m in messages]
+
+
 async def test_a_foreign_call_in_the_chat_reaches_the_model_as_a_note_and_the_client_keeps_it():
     pipe = Pipeline(str(CONFIGS / "foreign_calls.yaml"))
     chat = pipe.infra.models["chat"]
@@ -112,7 +117,7 @@ async def test_a_foreign_call_in_loaded_memory_reaches_the_model_as_a_note_and_i
     assert sent[1]["content"][0]["text"].startswith(
         "Earlier step (athena___run_query, a tool you don't have)"
     )
-    assert r.state()["kaboo_history"]["finance"][: len(memory)] == memory
+    assert _turns(r.state()["kaboo_history"]["finance"][: len(memory)]) == memory
 
 
 async def test_a_bedrock_sub_agent_caches_its_loaded_memory_without_writing_the_point_back():

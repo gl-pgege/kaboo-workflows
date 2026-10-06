@@ -42,6 +42,11 @@ def _note(name: str, asked: str, returned: str) -> dict[str, Any]:
     }
 
 
+def _turns(messages: list[Any]) -> list[dict[str, Any]]:
+    """The conversation alone, without the bookkeeping keys strands adds to messages."""
+    return [{"role": m["role"], "content": m["content"]} for m in messages]
+
+
 def _assert_bedrock_valid(messages: list[dict[str, Any]]) -> None:
     roles = [m["role"] for m in messages]
     assert roles[0] == "user"
@@ -194,4 +199,4 @@ async def test_the_model_is_sent_notes_while_the_agent_keeps_the_original_calls(
     assert (
         _note("analyze_sql", '{"input": "2024"}', "Revenue in 2024 was $42M.") in sent[1]["content"]
     )
-    assert agent.messages[: len(history)] == history
+    assert _turns(agent.messages[: len(history)]) == history

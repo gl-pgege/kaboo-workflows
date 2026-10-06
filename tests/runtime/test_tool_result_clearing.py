@@ -66,6 +66,11 @@ def _uses(messages: list[Any]) -> list[Any]:
     return [b["toolUse"] for m in messages for b in m["content"] if "toolUse" in b]
 
 
+def _turns(messages: list[Any]) -> list[dict[str, Any]]:
+    """The conversation alone, without the bookkeeping keys strands adds to messages."""
+    return [{"role": m["role"], "content": m["content"]} for m in messages]
+
+
 def _clear(messages: list[Any], **overrides: Any) -> list[Any]:
     options: dict[str, Any] = {
         "keep_last": 3,
@@ -184,7 +189,7 @@ async def test_the_hook_clears_only_past_its_trigger_and_the_agent_keeps_every_r
 
     sent = _results(model.calls[-1])
     assert sent.count(_placeholder("query")) == cleared
-    assert agent.messages[: len(history)] == history
+    assert _turns(agent.messages[: len(history)]) == history
 
 
 async def test_the_hook_never_clears_a_delegates_result() -> None:
