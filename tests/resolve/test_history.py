@@ -14,7 +14,12 @@ from strands import Agent
 from strands.hooks.events import BeforeInvocationEvent
 
 from kaboo_workflows._context import HistoryExchange, set_history_exchange
-from kaboo_workflows.config.resolvers.config import _resolve_chat_owner, _resolve_history
+from kaboo_workflows.config.resolvers.config import (
+    _resolve_chat_owner,
+    _resolve_history,
+    _resolve_history_policies,
+)
+from kaboo_workflows.hooks import HistoryPolicy
 from kaboo_workflows.wire import make_event_queue
 from tests.factories import agent_def, app_config, delegate_orchestration
 from tests.fakes import FakeModel
@@ -90,6 +95,30 @@ def test_delegate_orchestration_remembers_as_its_entry_agent() -> None:
     resolved = _resolve_history(cfg)
 
     assert resolved["analyze_sql"] == resolved["sql_analyst"] == ("sql", True)
+
+
+def test_a_masked_history_spares_what_the_agents_clearing_spares() -> None:
+    clearing = {"trigger": 5000, "min_chars": 400, "keep_tools": ["github___search"]}
+    cfg = app_config(
+        agents={
+            "full": agent_def(history=True),
+            "tuned": agent_def(
+                history={"keep": "masked"}, context={"clear_tool_results": clearing}
+            ),
+            "plain": agent_def(history={"keep": "masked"}),
+        },
+        orchestrations={"team": delegate_orchestration("tuned", {"plain": "helps"})},
+        entry="full",
+    )
+
+    policies = _resolve_history_policies(cfg)
+
+    assert "full" not in policies
+    assert policies["tuned"] == HistoryPolicy(
+        keep="masked", min_chars=400, keep_tools=frozenset({"github___search"})
+    )
+    assert policies["plain"] == HistoryPolicy(keep="masked")
+    assert policies["team"] == policies["tuned"]
 
 
 # ── _resolve_chat_owner ──────────────────────────────────────────────────────

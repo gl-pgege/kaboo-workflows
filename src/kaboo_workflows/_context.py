@@ -38,9 +38,12 @@ class HistoryExchange:
 
     ``inbound`` holds the transcripts the client sent this run (parsed from
     ``RunAgentInput.state['kaboo_history']``), keyed per agent bucket.
-    ``outbound`` accumulates the transcripts agents produce this run; it is
-    merged back into the outgoing ``STATE_SNAPSHOT`` so the client persists
-    and replays them next turn.
+    ``outbound`` accumulates the transcripts agents produce this run, whole, so
+    an agent called again in the same run is seeded with everything it did.
+    ``persisted`` holds the copy to write back instead, for buckets whose agent
+    keeps a masked history. :meth:`written_back` merges the three into the
+    outgoing ``STATE_SNAPSHOT`` so the client persists and replays them next
+    turn.
 
     One instance is created per request and shared by reference across the
     request's tasks via :data:`_current_history`, so a sub-agent hook running
@@ -50,6 +53,14 @@ class HistoryExchange:
 
     inbound: dict[str, list[Any]] = field(default_factory=dict)
     outbound: dict[str, list[Any]] = field(default_factory=dict)
+    persisted: dict[str, list[Any]] = field(default_factory=dict)
+
+    def written_back(self) -> dict[str, list[Any]]:
+        """Return the history to hand back: this run's buckets over the client's.
+
+        A bucket's ``persisted`` copy wins over its ``outbound`` transcript.
+        """
+        return {**self.inbound, **self.outbound, **self.persisted}
 
 
 _current_history: contextvars.ContextVar[HistoryExchange | None] = contextvars.ContextVar(

@@ -31,6 +31,7 @@ from .hooks import ContinuationHook, EventPublisher, HistoryHook
 from .types import EventType, SessionManifest, StreamEvent
 
 if TYPE_CHECKING:
+    from .hooks import HistoryPolicy
     from .types import Node
 
 
@@ -216,6 +217,7 @@ def make_event_queue(
     tool_labels: dict[str, str] | None = None,
     stream_groups: dict[str, tuple[str, str]] | None = None,
     history: dict[str, tuple[str, bool]] | None = None,
+    history_policies: dict[str, HistoryPolicy] | None = None,
     entry_name: str | None = None,
     chat_owner: str | None = None,
     chat_reply: str | None = None,
@@ -259,6 +261,9 @@ def make_event_queue(
             forked agent is looked up under the orchestration's name and gets a
             hook only when its history is enabled; the entry orchestration's
             never does, since its transcript is the chat.
+        history_policies: agent_name → :class:`~kaboo_workflows.hooks.HistoryPolicy`
+            for agents whose written-back history is not kept in full. Looked
+            up the same way as *history*.
         entry_name: The configured name of the entry node.  Stored on the
             EventQueue and used as ``agent_name`` on SESSION_START /
             SESSION_END events.
@@ -289,6 +294,7 @@ def make_event_queue(
 
     groups = stream_groups or {}
     history_map = history or {}
+    policies = history_policies or {}
     history_skip = chat_owner or entry_name
 
     for name, agent in agents.items():
@@ -318,7 +324,7 @@ def make_event_queue(
         # differs from the orchestration's entry_name.
         if name != history_skip:
             key, enabled = history_map.get(name, (sg, False))
-            agent.hooks.add_hook(HistoryHook(key, enabled=enabled))
+            agent.hooks.add_hook(HistoryHook(key, enabled=enabled, policy=policies.get(name)))
             logger.debug(
                 "agent=<%s>, history_key=<%s>, enabled=<%s> | wired HistoryHook",
                 name,
@@ -348,7 +354,7 @@ def make_event_queue(
             setattr(orch, "_kaboo_event_publisher", orch_pub)
             key, enabled = history_map.get(orch_name, (sg, False))
             if enabled and orch_name != entry_name:
-                orch.hooks.add_hook(HistoryHook(key, enabled=True))
+                orch.hooks.add_hook(HistoryHook(key, enabled=True, policy=policies.get(orch_name)))
                 logger.debug(
                     "orchestrator=<%s>, history_key=<%s> | wired HistoryHook", orch_name, key
                 )

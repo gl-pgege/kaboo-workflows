@@ -33,12 +33,16 @@ _TOOL_RESULT_CONTENT_KEYS = ("document", "image", "json", "text")
 _DELEGATE_ATTR = "_kaboo_delegate"
 
 
-def is_delegate_tool(tool: Any) -> bool:
-    """Whether ``tool`` runs another node.
+def delegate_tool_names(agent: Agent) -> set[str]:
+    """Return the names of ``agent``'s tools that run another node.
 
-    True for the tools :func:`node_as_tool` and :func:`node_as_async_tool` make.
+    Those are the tools :func:`node_as_tool` and :func:`node_as_async_tool` make.
     """
-    return bool(getattr(tool, _DELEGATE_ATTR, False))
+    return {
+        name
+        for name, tool in agent.tool_registry.registry.items()
+        if getattr(tool, _DELEGATE_ATTR, False)
+    }
 
 
 def _resolve_tool_name(node: Node, name: str | None) -> str:

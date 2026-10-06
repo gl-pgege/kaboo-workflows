@@ -14,6 +14,7 @@ from collections.abc import Collection
 from typing import Any
 
 MCP_TOOL_SEPARATOR = "___"
+DEFAULT_MIN_CHARS = 1500
 
 _DELEGATE_INPUT_CHARS = 2000
 _MCP_INPUT_CHARS = 500
@@ -92,6 +93,70 @@ def clear_tool_results(
         content[j] = {"toolResult": {**result, "content": [{"text": cleared_text(name, result)}]}}
         cleared[i] = {**cleared[i], "content": content}
     return cleared
+
+
+def mask_transcript(
+    messages: list[dict[str, Any]],
+    *,
+    min_chars: int,
+    kept: Collection[str],
+    tools: Collection[str],
+) -> list[dict[str, Any]]:
+    """Mask every finished call of a sub-agent's transcript.
+
+    A finished call keeps its brief, its text and ``toolUse`` blocks — its final
+    report among them — and loses its ``reasoningContent``; each of its tool
+    results is cleared as :func:`clear_tool_results` would with ``keep_last=0``.
+    A call with an unanswered ``toolUse``, such as one paused on an interrupt,
+    is kept whole. Masking a masked transcript changes nothing.
+
+    Args:
+        messages: The transcript, oldest first.
+        min_chars: Results shorter than this are kept.
+        kept: Tools whose results are never cleared.
+        tools: Names of the tools the agent has.
+
+    Returns:
+        The masked transcript.
+    """
+    masked: list[dict[str, Any]] = []
+    for call in split_calls(messages):
+        if _is_open(call):
+            masked.extend(call)
+            continue
+        cleared = clear_tool_results(call, keep_last=0, min_chars=min_chars, kept=kept, tools=tools)
+        masked.extend(
+            {**m, "content": [b for b in m.get("content") or [] if "reasoningContent" not in b]}
+            for m in cleared
+        )
+    return _join_turns(masked)
+
+
+def split_calls(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Split a transcript into calls, each opened by a user message with text and no result."""
+    calls: list[list[dict[str, Any]]] = []
+    for message in messages:
+        if not calls or _opens_call(message):
+            calls.append([message])
+        else:
+            calls[-1].append(message)
+    return calls
+
+
+def _opens_call(message: dict[str, Any]) -> bool:
+    content = message.get("content") or []
+    return (
+        message.get("role") == "user"
+        and any("text" in block for block in content)
+        and not any("toolResult" in block for block in content)
+    )
+
+
+def _is_open(call: list[dict[str, Any]]) -> bool:
+    blocks = [block for message in call for block in message.get("content") or []]
+    asked = {b["toolUse"].get("toolUseId") for b in blocks if "toolUse" in b}
+    answered = {b["toolResult"].get("toolUseId") for b in blocks if "toolResult" in b}
+    return not asked <= answered
 
 
 def cleared_text(name: str, result: dict[str, Any]) -> str:

@@ -347,7 +347,7 @@ def _history_snapshot(
     Returns ``None`` when there is nothing to persist so we don't emit an empty
     snapshot on turns without sub-agent history.
     """
-    merged_history = {**exchange.inbound, **exchange.outbound}
+    merged_history = exchange.written_back()
     if not merged_history:
         return None
     base = dict(input_data.state) if isinstance(input_data.state, dict) else {}

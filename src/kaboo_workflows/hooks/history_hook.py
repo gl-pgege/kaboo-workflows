@@ -10,6 +10,9 @@ process-wide singleton. This makes every non-entry agent uniformly:
   the start of every run, so it can never carry another turn's or another
   conversation's messages).
 
+An agent whose :class:`HistoryPolicy` keeps a masked history writes a masked
+copy back to the client, while the run keeps the whole transcript.
+
 The entry agent is exempt: its transcript is the CopilotKit chat, seeded by
 ag-ui-strands from ``RunAgentInput.messages`` (see the adapter). This hook is
 therefore attached to every agent EXCEPT the entry node.
@@ -20,7 +23,8 @@ from __future__ import annotations
 import copy
 import logging
 import sys
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from strands.hooks import HookProvider, HookRegistry
 from strands.hooks.events import AfterInvocationEvent, BeforeInvocationEvent
@@ -31,8 +35,27 @@ else:
     from typing_extensions import override
 
 from .._context import get_history_exchange, get_run_id, get_thread_id
+from ..tools.wrappers import delegate_tool_names
+from ._transcript import DEFAULT_MIN_CHARS, mask_transcript
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class HistoryPolicy:
+    """How a :class:`HistoryHook` shapes the transcript it writes back.
+
+    Attributes:
+        keep: ``"full"`` writes the transcript back as captured. ``"masked"``
+            masks every finished call first, and masks a transcript stored in
+            full when the agent loads it (``history.keep``).
+        min_chars: Tool results shorter than this survive masking.
+        keep_tools: Tools whose results survive masking. A delegate's always do.
+    """
+
+    keep: Literal["full", "masked"] = "full"
+    min_chars: int = DEFAULT_MIN_CHARS
+    keep_tools: frozenset[str] = frozenset()
 
 
 class HistoryHook(HookProvider):
@@ -44,7 +67,7 @@ class HistoryHook(HookProvider):
     ``enabled`` for it.
     """
 
-    def __init__(self, key: str, *, enabled: bool) -> None:
+    def __init__(self, key: str, *, enabled: bool, policy: HistoryPolicy | None = None) -> None:
         """Initialize the HistoryHook.
 
         Args:
@@ -53,9 +76,12 @@ class HistoryHook(HookProvider):
             enabled: Whether this agent remembers across turns of the same
                 conversation. When ``False`` the agent is reset to an empty
                 transcript before every invocation and never persists.
+            policy: How the written-back transcript is shaped. Defaults to
+                writing it back in full.
         """
         self._key = key
         self._enabled = enabled
+        self._policy = policy or HistoryPolicy()
 
     @override
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
@@ -72,7 +98,9 @@ class HistoryHook(HookProvider):
         covers a fresh run (seed from client, discarding stale singleton
         content), a re-invoked agent (seed from its own captured output), and a
         grouped sibling (seed from the group's latest output). With history
-        disabled, reset to an empty transcript so the agent runs fresh.
+        disabled, reset to an empty transcript so the agent runs fresh. A masked
+        agent masks what the client sent before seeding from it, in case it was
+        stored in full.
 
         ``BeforeInvocationEvent`` re-fires on every resume iteration, so if the
         agent is mid-interrupt we must not touch ``messages`` — seeding or
@@ -113,6 +141,8 @@ class HistoryHook(HookProvider):
         if seed is None:
             source = "inbound"
             seed = exchange.inbound.get(self._key)
+            if seed and self._policy.keep == "masked":
+                seed = self._mask(seed, event.agent)
         event.agent.messages = copy.deepcopy(seed) if seed else []
         logger.debug(
             "key=<%s>, thread=<%s>, run=<%s>, source=<%s>, seeded_messages=<%d> | seeded history",
@@ -128,7 +158,8 @@ class HistoryHook(HookProvider):
 
         Runs after the agent's ``conversation_manager`` has applied any
         sliding-window trim or summarization, so the reduced transcript is what
-        persists to the client. No-op when history is disabled.
+        persists to the client. A masked agent also records the masked copy the
+        client is sent instead. No-op when history is disabled.
         """
         if not self._enabled:
             return
@@ -136,10 +167,24 @@ class HistoryHook(HookProvider):
         if exchange is None:
             return
         exchange.outbound[self._key] = list(event.agent.messages)
+        if self._policy.keep == "masked":
+            exchange.persisted[self._key] = self._mask(exchange.outbound[self._key], event.agent)
+        else:
+            exchange.persisted.pop(self._key, None)
         logger.debug(
-            "key=<%s>, thread=<%s>, run=<%s>, captured_messages=<%d> | captured history",
+            "key=<%s>, thread=<%s>, run=<%s>, captured_messages=<%d>, keep=<%s> | captured history",
             self._key,
             get_thread_id(),
             get_run_id(),
             len(exchange.outbound[self._key]),
+            self._policy.keep,
+        )
+
+    def _mask(self, messages: list[Any], agent: Any) -> list[Any]:
+        registry = agent.tool_registry
+        return mask_transcript(
+            messages,
+            min_chars=self._policy.min_chars,
+            kept=self._policy.keep_tools | delegate_tool_names(agent),
+            tools={*registry.registry, *registry.dynamic_tools},
         )

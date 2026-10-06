@@ -246,10 +246,21 @@ class HistoryDef(BaseModel):
       same ``group`` share one history key, so they read/write a single
       transcript (e.g. ``researcher`` + ``fact_checker`` sharing context).
       When omitted, the agent's stable dot-path is used as its key.
+    - ``keep`` — ``"full"`` writes the transcript back as captured.
+      ``"masked"`` writes back a copy in which every finished call keeps its
+      brief, its text, its tool calls and its final report, drops reasoning,
+      and has each tool result replaced by a ``Result cleared (…)`` placeholder
+      unless the result is shorter than the agent's
+      ``context.clear_tool_results.min_chars`` (1500 without one), its tool is
+      in that block's ``keep_tools``, or it is a delegate's report. A call
+      paused on an interrupt is written back whole. Only the written-back copy
+      is masked: a second call in the same run still sees everything. A
+      transcript stored in full is masked when the agent loads it.
     """
 
     enabled: bool = True
     group: str | None = None
+    keep: Literal["full", "masked"] = "full"
 
 
 class ClearToolResultsDef(BaseModel):

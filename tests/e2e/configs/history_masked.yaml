@@ -1,0 +1,37 @@
+# A sub-agent that keeps a masked history. Once a call has finished, its tool
+# results are written back as placeholders; a call paused on a question is
+# written back whole, because it has not finished.
+x-model: &m tests.fakes.scripted_model:ScriptedModel
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: analyst, input: "revenue by region"}
+        final_text: "Coordinator done."
+  analyst:
+    stream: {title: "Analysis"}
+    history: {group: sql, keep: masked}
+    interrupt: true
+    tools: ["tests.fakes.data_tools:run_query"]
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: run_query, input: "select region, revenue from sales"}
+          - {tool: ask_user, input: {question: "Include returns?", options: ["yes", "no"]}}
+        final_text: "Revenue by region is ready."
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: analyst, description: "Answers questions with SQL"}
+
+entry: team

@@ -379,6 +379,43 @@ async def test_a_forked_delegate_entry_remembers_through_its_entry_agents_group(
     assert len(r2.state()["kaboo_history"]["sql"]) == 4
 
 
+def _result_texts(messages: list[dict]) -> list[str]:
+    return [
+        block["toolResult"]["content"][0]["text"]
+        for m in messages
+        for block in m["content"]
+        if "toolResult" in block
+    ]
+
+
+async def test_a_masked_sub_agent_writes_back_a_paused_call_whole_and_a_finished_one_masked():
+    pipe = Pipeline(str(CONFIGS / "history_masked.yaml"))
+
+    r1 = await pipe.turn("revenue by region", thread_id="m1", run_id="r1")
+
+    outcome = r1.run_outcome()
+    assert getattr(outcome, "type", None) == "interrupt"
+    paused = r1.state()["kaboo_history"]["sql"]
+    assert any("region-199" in text for text in _result_texts(paused))
+
+    r2 = await pipe.turn(
+        "(resume)",
+        thread_id="m1",
+        run_id="r2",
+        resume=[{"interruptId": outcome.interrupts[0].id, "status": "resolved", "payload": "no"}],
+    )
+
+    assert r2.finished() and not r2.errored()
+    finished = r2.state()["kaboo_history"]["sql"]
+    assert (
+        "Result cleared (run_query, queryExecutionId=q-123): call it again to see it."
+        in _result_texts(finished)
+    )
+    assert _texts(finished)[0] == "revenue by region"
+    assert _texts(finished)[-1] == "Revenue by region is ready."
+    assert any("region-199" in text for text in _result_texts(r2.exchange.outbound["sql"]))
+
+
 async def test_history_disabled_sub_agent_does_not_persist() -> None:
     # The delegate composition (no history:) must not accumulate transcripts,
     # confirming statelessness is the default.

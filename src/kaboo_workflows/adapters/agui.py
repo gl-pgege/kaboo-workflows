@@ -567,14 +567,15 @@ def _enrich_history_snapshot(agui_event: Any, exchange: HistoryExchange) -> None
 
     ag-ui-strands echoes ``input_data.state`` back in its state snapshots but
     never updates ``kaboo_history`` — that is kaboo's client-driven per-agent
-    history. We fold the captured ``outbound`` transcripts over the client's
-    ``inbound`` so the (authoritative) final snapshot carries the up-to-date
-    history for the frontend to persist and replay next turn.
+    history. We fold this run's transcripts over the client's ``inbound`` (see
+    ``HistoryExchange.written_back``) so the (authoritative) final snapshot
+    carries the up-to-date history for the frontend to persist and replay next
+    turn.
     """
     snapshot = getattr(agui_event, "snapshot", None)
     if not isinstance(snapshot, dict):
         return
-    merged_history = {**exchange.inbound, **exchange.outbound}
+    merged_history = exchange.written_back()
     if merged_history:
         snapshot["kaboo_history"] = merged_history
         logger.debug(

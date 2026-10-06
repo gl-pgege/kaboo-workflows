@@ -6,7 +6,7 @@ from .context_hook import ContextHook
 from .continuation_hook import CONTINUATION_TYPE, ContinuationHook
 from .event_publisher import EventPublisher
 from .forwarded_props_hook import ForwardedPropsHook
-from .history_hook import HistoryHook
+from .history_hook import HistoryHook, HistoryPolicy
 from .interrupt_hook import InterruptHook
 from .max_calls_guard import MaxToolCallsGuard
 from .mcp_meta_hook import MCPCallMetaHook
@@ -26,6 +26,7 @@ __all__ = [
     "EventPublisher",
     "ForwardedPropsHook",
     "HistoryHook",
+    "HistoryPolicy",
     "InterruptHook",
     "MCPCallMetaHook",
     "MaxToolCallsGuard",

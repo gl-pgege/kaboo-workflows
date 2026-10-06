@@ -38,8 +38,13 @@ if sys.version_info >= (3, 12):
 else:
     from typing_extensions import override
 
-from ..tools.wrappers import is_delegate_tool
-from ._transcript import clear_tool_results, estimate_tokens, foreign_calls_to_notes
+from ..tools.wrappers import delegate_tool_names
+from ._transcript import (
+    DEFAULT_MIN_CHARS,
+    clear_tool_results,
+    estimate_tokens,
+    foreign_calls_to_notes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +57,7 @@ class ContextHook(HookProvider):
         *,
         clear_trigger: int | None = None,
         keep_last: int = 3,
-        min_chars: int = 1500,
+        min_chars: int = DEFAULT_MIN_CHARS,
         keep_tools: Collection[str] = (),
     ) -> None:
         """Initialize the ContextHook.
@@ -96,12 +101,11 @@ class ContextHook(HookProvider):
             self._clear_trigger is not None
             and estimate_tokens(messages, context.system_prompt) > self._clear_trigger
         ):
-            delegates = {name for name, tool in registry.registry.items() if is_delegate_tool(tool)}
             messages = clear_tool_results(
                 messages,
                 keep_last=self._keep_last,
                 min_chars=self._min_chars,
-                kept=self._keep_tools | delegates,
+                kept=self._keep_tools | delegate_tool_names(context.agent),
                 tools=tools,
             )
         return replace(context, messages=cast("Messages", messages))
