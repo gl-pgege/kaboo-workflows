@@ -167,7 +167,7 @@ def foreign_calls_to_notes(
             )
         else:
             rewritten.append(message)
-    return _join_turns(rewritten)
+    return join_turns(rewritten)
 
 
 def _calls(block: dict[str, Any], uses: dict[str, Any]) -> bool:
@@ -392,7 +392,7 @@ def mask_transcript(
             }
             for m in cleared
         )
-    return _join_turns(masked)
+    return join_turns(masked)
 
 
 def split_calls(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -545,7 +545,7 @@ def settle_cache_points(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             settled[-1] = {**settled[-1], "content": [*settled[-1]["content"], content[0]]}
         if lead < len(content):
             settled.append({**message, "content": content[lead:]} if lead else message)
-    return _join_turns(settled)
+    return join_turns(settled)
 
 
 def strip_cache_points(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -559,7 +559,7 @@ def strip_cache_points(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [m for m in stripped if m["content"]]
 
 
-def _join_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def join_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop empty messages and join neighbours that share a role."""
     joined: list[dict[str, Any]] = []
     for message in messages:

@@ -7,7 +7,12 @@ messages, the chat the client renders and stores (``MESSAGES_SNAPSHOT``), the
 transcript captured into ``kaboo_history`` and anything a session manager
 persists all keep the original conversation.
 
-On every call it turns a ``toolUse`` for a tool the agent does not have into a
+On every call it joins neighbouring messages that share a role. The chat stores
+a response that called several tools at once as one message per call, and a turn
+the model never answered leaves two user messages in a row; replayed as they
+are, Bedrock rejects both.
+
+On every call it also turns a ``toolUse`` for a tool the agent does not have into a
 text note. Such calls reach an agent through a transcript it did not write: the
 chat, when the workflow changed between turns, or a ``history.group`` shared
 with another agent. A model shown a call it cannot make tends to make it anyway.
@@ -58,6 +63,7 @@ from ._transcript import (
     clear_tool_results,
     estimate_tokens,
     foreign_calls_to_notes,
+    join_turns,
     settle_cache_points,
 )
 
@@ -115,12 +121,13 @@ class ContextHook(HookProvider):
             and _manual_bedrock_cache(context.agent.model)
         ):
             original[seeded - 1]["content"].append({"cachePoint": {"type": "default"}})
-        messages = foreign_calls_to_notes(original, tools, inherited=inherited)
-        if messages is not original:
+        noted = foreign_calls_to_notes(original, tools, inherited=inherited)
+        if noted is not original:
             logger.debug(
                 "agent=<%s> | sent the model notes for calls to tools it does not have",
                 context.agent.name,
             )
+        messages = join_turns(noted)
         if (
             self._clear_trigger is not None
             and estimate_tokens(messages, context.system_prompt) > self._clear_trigger
