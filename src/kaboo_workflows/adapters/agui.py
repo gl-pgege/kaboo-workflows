@@ -39,6 +39,7 @@ from ag_ui.core import (
     RunFinishedEvent,
     RunFinishedInterruptOutcome,
     RunStartedEvent,
+    StateSnapshotEvent,
     ToolCallResultEvent,
     ToolMessage,
 )
@@ -660,6 +661,7 @@ async def _consume_run(
     """
     unresolved_tool_calls: dict[str, str] = {}
     pending_backfill = list(backfill_tool_calls or [])
+    last_snapshot: Any = None
     # Original multimodal user content, keyed by message id. ag-ui-strands
     # rebuilds MESSAGES_SNAPSHOT with a stringified (`str(content)`) view of the
     # user message, which would clobber the frontend's structured attachment
@@ -683,10 +685,23 @@ async def _consume_run(
             elif etype == AGUIEventType.STATE_SNAPSHOT:
                 _enrich_history_snapshot(agui_event, exchange)
                 _enrich_session_snapshot(agui_event)
+                last_snapshot = agui_event
             elif etype == AGUIEventType.MESSAGES_SNAPSHOT and original_user_content:
                 _restore_snapshot_user_content(agui_event, original_user_content)
 
             if _is_run_finished(agui_event):
+                if await exchange.settle() and isinstance(
+                    getattr(last_snapshot, "snapshot", None), dict
+                ):
+                    await merged.put(
+                        StateSnapshotEvent(
+                            type=AGUIEventType.STATE_SNAPSHOT,
+                            snapshot={
+                                **last_snapshot.snapshot,
+                                "kaboo_history": exchange.written_back(),
+                            },
+                        )
+                    )
                 replaced = _maybe_inject_interrupt_outcome(
                     agui_event, agui_agent, input_data.thread_id
                 )
@@ -711,6 +726,7 @@ async def _consume_run(
                 pending_backfill = []
     except Exception as exc:
         logger.error("AG-UI agent run failed: %s", exc, exc_info=True)
+        await exchange.settle(0)
         for tc_id in list(unresolved_tool_calls):
             await merged.put(_terminal_result_event(tc_id, _ERROR_RESULT))
         unresolved_tool_calls.clear()

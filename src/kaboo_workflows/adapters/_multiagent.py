@@ -136,6 +136,7 @@ class StrandsMultiAgent:
                 await self._run(input_data, merged, exchange, resume_entries, run_id, message_id)
         except Exception as exc:  # noqa: BLE001 - surface any run failure as RUN_ERROR
             logger.error("multi-agent run failed: %s", exc, exc_info=True)
+            await exchange.settle(0)
             await merged.put(
                 RunErrorEvent(type=AGUIEventType.RUN_ERROR, message=str(exc), code="AGENT_ERROR")
             )
@@ -227,6 +228,7 @@ class StrandsMultiAgent:
                 )
 
             # History write-back so members' client-driven transcripts persist.
+            await exchange.settle()
             snapshot = _history_snapshot(input_data, exchange)
             if snapshot is not None:
                 await merged.put(

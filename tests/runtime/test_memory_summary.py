@@ -3,10 +3,14 @@
 The summary pair leads the memory, the newest calls that fit stay as they were,
 and every ``To remember`` block of a summarised report is carried into the
 summary verbatim. A summary that fails leaves the masked memory as it is.
+
+The summary is written while the run goes on: the agent hands back at once with
+the masked memory, and the run's write-back settles the summary within a bound.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Iterator
 from typing import Any
@@ -19,6 +23,7 @@ from strands.models import Model
 
 from kaboo_workflows._context import HistoryExchange, set_history_exchange
 from kaboo_workflows.hooks import HistoryHook, HistoryPolicy
+from kaboo_workflows.hooks import history_hook as history_hook_module
 from kaboo_workflows.hooks._transcript import mask_transcript, to_remember_blocks
 from tests.fakes import BoomModel, FakeModel, ScriptedModel
 
@@ -59,8 +64,23 @@ def _isolate_exchange() -> Iterator[None]:
     set_history_exchange(None)
 
 
-async def _capture(messages: list[Any], summarizer: Model, *, over: int = 200) -> list[Any]:
-    """Capture ``messages`` with a summarising masked policy; return the memory written back."""
+class GatedModel(ScriptedModel):
+    """A summarizer that answers only once its gate opens."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.gate = asyncio.Event()
+
+    async def stream(self, *args: Any, **kwargs: Any):
+        await self.gate.wait()
+        async for event in super().stream(*args, **kwargs):
+            yield event
+
+
+async def _hand_back(
+    messages: list[Any], summarizer: Model, *, over: int = 200
+) -> tuple[HistoryExchange, HookRegistry, Agent]:
+    """Run the after-invocation capture with a summarising masked policy."""
     exchange = HistoryExchange()
     set_history_exchange(exchange)
     policy = HistoryPolicy(keep="masked", summarize_over=over, summarizer=summarizer)
@@ -68,9 +88,14 @@ async def _capture(messages: list[Any], summarizer: Model, *, over: int = 200) -
     registry.add_hook(HistoryHook("k", enabled=True, policy=policy))
     agent = Agent(model=FakeModel(), callback_handler=None)
     agent.messages = messages
-
     await registry.invoke_callbacks_async(AfterInvocationEvent(agent=agent))
+    return exchange, registry, agent
 
+
+async def _capture(messages: list[Any], summarizer: Model, *, over: int = 200) -> list[Any]:
+    """Capture ``messages``, settle the summary, and return the memory written back."""
+    exchange, _, _ = await _hand_back(messages, summarizer, over=over)
+    await exchange.settle(5)
     return exchange.written_back()["k"]
 
 
@@ -121,6 +146,55 @@ async def test_a_memory_within_its_budget_is_not_summarised() -> None:
     memory = await _capture(_four_calls(), summarizer, over=100_000)
 
     assert summarizer.calls == []
+    assert memory == _masked(_four_calls())
+
+
+async def test_the_agent_hands_back_before_the_summary_is_written() -> None:
+    summarizer = GatedModel(final_text=SUMMARY)
+
+    exchange, _, _ = await _hand_back(_four_calls(), summarizer)
+
+    assert exchange.written_back()["k"] == _masked(_four_calls())
+    summarizer.gate.set()
+    assert await exchange.settle(5) is True
+    assert exchange.written_back()["k"][1]["content"][0] == {"text": SUMMARY}
+
+
+async def test_a_summary_still_running_when_the_wait_ends_keeps_the_masked_memory() -> None:
+    summarizer = GatedModel(final_text=SUMMARY)
+    exchange, _, _ = await _hand_back(_four_calls(), summarizer)
+    task = exchange.summaries["k"]
+
+    assert await exchange.settle(0.01) is False
+
+    assert exchange.written_back()["k"] == _masked(_four_calls())
+    await asyncio.sleep(0)
+    assert task.cancelled()
+    assert exchange.summaries == {}
+
+
+async def test_a_newer_capture_cancels_the_summary_of_the_older_one() -> None:
+    summarizer = GatedModel(final_text=SUMMARY)
+    exchange, registry, agent = await _hand_back(_four_calls(), summarizer)
+    older = exchange.summaries["k"]
+
+    agent.messages = [*_four_calls(), *_call(5, "Report 5.")]
+    await registry.invoke_callbacks_async(AfterInvocationEvent(agent=agent))
+    await asyncio.sleep(0)
+
+    assert older.cancelled()
+    summarizer.gate.set()
+    await exchange.settle(5)
+    assert exchange.written_back()["k"][-1] == _masked(_call(5, "Report 5."))[-1]
+
+
+async def test_a_summarizer_slower_than_its_timeout_keeps_the_masked_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(history_hook_module, "SUMMARY_TIMEOUT_SECONDS", 0.01)
+
+    memory = await _capture(_four_calls(), GatedModel(final_text=SUMMARY))
+
     assert memory == _masked(_four_calls())
 
 

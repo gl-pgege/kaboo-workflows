@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+from strands.models import CacheConfig
+
 from kaboo_workflows.config.resolvers.models import resolve_model
 from kaboo_workflows.models import (
     DEFAULT_OPENAI_MAX_RETRIES,
@@ -79,3 +82,27 @@ def test_bedrock_client_config_without_read_timeout_keeps_the_strands_default():
         == _boto_config(without_client_config).read_timeout
     )
     assert _boto_config(with_retries_only).retries["mode"] == "standard"
+
+
+def test_a_bedrock_cache_config_mapping_becomes_the_strands_setting():
+    model = resolve_model(
+        model_def(
+            provider="bedrock",
+            model_id="anthropic.claude",
+            params={
+                "region_name": "us-east-1",
+                "cache_prompt": "default",
+                "cache_tools": "default",
+                "cache_config": {"strategy": "auto", "ttl": "1h"},
+            },
+        )
+    )
+
+    assert model.get_config()["cache_config"] == CacheConfig(strategy="auto", ttl="1h")
+
+
+def test_a_bedrock_cache_config_with_an_unknown_key_fails_at_startup():
+    with pytest.raises(ValueError, match="strategy and ttl"):
+        create_model(
+            "bedrock", "anthropic.claude", region_name="us-east-1", cache_config={"mode": "auto"}
+        )

@@ -12,11 +12,15 @@ self-hosted process it is what makes per-conversation routing correct.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
+
+SUMMARY_WAIT_SECONDS = 20.0
+"""How long a run's write-back waits for memory summaries still being written."""
 
 _current_thread_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "kaboo_thread_id", default=None
@@ -49,11 +53,16 @@ class HistoryExchange:
     request's tasks via :data:`_current_history`, so a sub-agent hook running
     in a child task and the snapshot enricher running in the parent see the
     same buffers.
+
+    ``summaries`` holds the summaries still being written, one per bucket. Until
+    :meth:`settle` applies one, its bucket hands back the masked copy already in
+    ``persisted``, so an agent returns to its caller without waiting for it.
     """
 
     inbound: dict[str, list[Any]] = field(default_factory=dict)
     outbound: dict[str, list[Any]] = field(default_factory=dict)
     persisted: dict[str, list[Any]] = field(default_factory=dict)
+    summaries: dict[str, asyncio.Task[list[Any]]] = field(default_factory=dict)
 
     def written_back(self) -> dict[str, list[Any]]:
         """Return the history to hand back: this run's buckets over the client's.
@@ -61,6 +70,39 @@ class HistoryExchange:
         A bucket's ``persisted`` copy wins over its ``outbound`` transcript.
         """
         return {**self.inbound, **self.outbound, **self.persisted}
+
+    def summarize_later(self, key: str, task: asyncio.Task[list[Any]]) -> None:
+        """Let ``task`` replace ``persisted[key]`` once it is settled.
+
+        A summary still pending for the bucket was written from an older copy,
+        so it is cancelled.
+        """
+        previous = self.summaries.pop(key, None)
+        if previous is not None:
+            previous.cancel()
+        self.summaries[key] = task
+
+    async def settle(self, timeout: float = SUMMARY_WAIT_SECONDS) -> bool:
+        """Wait up to ``timeout`` seconds for the pending summaries and apply them.
+
+        One still running is cancelled and its bucket keeps the masked copy.
+        Returns whether any bucket changed.
+        """
+        if not self.summaries:
+            return False
+        pending, self.summaries = self.summaries, {}
+        done, running = await asyncio.wait(pending.values(), timeout=timeout)
+        for task in running:
+            task.cancel()
+        changed = False
+        for key, task in pending.items():
+            if task not in done or task.cancelled() or task.exception() is not None:
+                continue
+            memory = task.result()
+            if memory is not self.persisted.get(key):
+                self.persisted[key] = memory
+                changed = True
+        return changed
 
 
 _current_history: contextvars.ContextVar[HistoryExchange | None] = contextvars.ContextVar(

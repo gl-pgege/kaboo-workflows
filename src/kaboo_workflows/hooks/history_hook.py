@@ -13,7 +13,11 @@ process-wide singleton. This makes every non-entry agent uniformly:
 An agent whose :class:`HistoryPolicy` keeps a masked history writes a masked
 copy back to the client, while the run keeps the whole transcript. With a
 ``summarize_over`` budget, a masked copy that still exceeds it has its oldest
-calls summarised by the policy's ``summarizer`` model.
+calls summarised by the policy's ``summarizer`` model. The summary is written
+while the run goes on: the agent returns to its caller at once, and the
+run's write-back waits for the summary only for a bounded time
+(:meth:`~kaboo_workflows._context.HistoryExchange.settle`), keeping the masked
+copy if it is late or fails.
 
 The entry agent is exempt: its transcript is the CopilotKit chat, seeded by
 ag-ui-strands from ``RunAgentInput.messages`` (see the adapter). This hook is
@@ -22,6 +26,7 @@ therefore attached to every agent EXCEPT the entry node.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import sys
@@ -53,6 +58,9 @@ from ._transcript import (
 )
 
 logger = logging.getLogger(__name__)
+
+SUMMARY_TIMEOUT_SECONDS = 60.0
+"""How long the summarizer may take before the masked memory is kept instead."""
 
 _SUMMARY_INSTRUCTIONS = (
     "You condense an agent's earlier work in a conversation into a summary the agent "
@@ -220,33 +228,50 @@ class HistoryHook(HookProvider):
         )
 
     async def _on_after_summarizing(self, event: AfterInvocationEvent) -> None:
-        """Capture, then summarise the oldest calls of a masked copy over budget."""
+        """Capture, then start summarising a masked copy over budget without waiting.
+
+        Async only so it runs on the event loop the summary task is created on.
+        """
         self._on_after(event)
         exchange = get_history_exchange()
         if not self._enabled or exchange is None or self._key not in exchange.persisted:
             return
-        exchange.persisted[self._key] = await self._summarize(exchange.persisted[self._key])
+        memory = exchange.persisted[self._key]
+        if self._over_budget(memory):
+            exchange.summarize_later(self._key, asyncio.create_task(self._summarize(memory)))
+
+    def _over_budget(self, memory: list[Any]) -> bool:
+        budget = self._policy.summarize_over
+        return (
+            budget is not None
+            and self._policy.summarizer is not None
+            and estimate_tokens(memory) > budget
+        )
 
     async def _summarize(self, memory: list[Any]) -> list[Any]:
         """Fold the oldest calls of ``memory`` into one summary pair, if it is over budget.
 
         The newest calls that fit three quarters of the budget are kept, leaving
-        the rest for the summary. Any failure keeps ``memory`` as it is.
+        the rest for the summary. Any failure, or a summarizer slower than
+        :data:`SUMMARY_TIMEOUT_SECONDS`, keeps ``memory`` as it is.
         """
         budget = self._policy.summarize_over
         summarizer = self._policy.summarizer
-        if budget is None or summarizer is None or estimate_tokens(memory) <= budget:
+        if budget is None or summarizer is None or not self._over_budget(memory):
             return memory
         older, newer = split_for_summary(memory, budget - budget // 4)
         if not older:
             return memory
         try:
-            result = await Agent(
-                model=summarizer,
-                name="history_summarizer",
-                system_prompt=_SUMMARY_INSTRUCTIONS,
-                callback_handler=None,
-            ).invoke_async(f"The earlier work to summarise:\n\n{render_calls(older)}")
+            result = await asyncio.wait_for(
+                Agent(
+                    model=summarizer,
+                    name="history_summarizer",
+                    system_prompt=_SUMMARY_INSTRUCTIONS,
+                    callback_handler=None,
+                ).invoke_async(f"The earlier work to summarise:\n\n{render_calls(older)}"),
+                timeout=SUMMARY_TIMEOUT_SECONDS,
+            )
             summary = str(result).strip()
         except Exception:
             logger.warning(

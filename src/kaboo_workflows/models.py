@@ -45,6 +45,22 @@ def _bedrock_client_config(client_config: dict[str, Any]) -> BotocoreConfig:
     return Config(**{"read_timeout": DEFAULT_READ_TIMEOUT, **client_config})
 
 
+def _bedrock_cache_config(cache_config: Mapping[str, Any]) -> Any:
+    """Return the strands ``CacheConfig`` a YAML ``cache_config`` mapping describes.
+
+    strands reads the setting's attributes, so a plain mapping passed through
+    would fail on the first request rather than at startup.
+    """
+    from strands.models import CacheConfig
+
+    try:
+        return CacheConfig(**cache_config)
+    except TypeError as err:
+        raise ValueError(
+            f"A bedrock model's cache_config takes strategy and ttl only: {err}"
+        ) from None
+
+
 def _bedrock_thinking_fields(thinking: bool | Mapping[str, Any]) -> dict[str, Any]:
     """Return the ``additional_request_fields`` that carry a thinking setting to Bedrock."""
     if thinking is False:
@@ -92,7 +108,10 @@ def create_model(
             ``additional_request_fields``.
         **params: Provider-specific keyword arguments. For ``"bedrock"``, a
             ``client_config`` mapping (``read_timeout``, ``connect_timeout``,
-            ``retries``) becomes the model's ``boto_client_config``.
+            ``retries``) becomes the model's ``boto_client_config``, and a
+            ``cache_config`` mapping (``strategy``, ``ttl``) becomes strands'
+            ``CacheConfig``, which caches the conversation up to each request's
+            last user message.
 
     Returns:
         Strands model instance.
@@ -117,6 +136,8 @@ def create_model(
                         "A bedrock model takes client_config or boto_client_config, not both."
                     )
                 params["boto_client_config"] = _bedrock_client_config(client_config)
+            if isinstance(params.get("cache_config"), Mapping):
+                params["cache_config"] = _bedrock_cache_config(params["cache_config"])
             if thinking is not None:
                 params = _with_bedrock_thinking(params, thinking)
             return BedrockModel(model_id=model_id, **params)

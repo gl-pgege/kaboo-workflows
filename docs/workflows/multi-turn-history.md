@@ -123,9 +123,16 @@ Revenue for 2024 was $42.1M.
 - Query `8f3c` is the one the finance team signed off.
 ```
 
-If summarising fails, the masked memory is written back as it is and a warning
-is logged. `summarize_over` requires `keep: masked`, and `summarize_model` must
-name a model under `models:`; both are checked when the config loads.
+The summary is written while the run goes on. The agent returns to its caller
+at once, with the masked memory in place, and the run waits for the summary
+only when it writes the history back: up to 20 seconds, after which it keeps
+the masked memory and cancels the summary. A summary written from an older
+copy, because the agent was called again in the same run, is cancelled too.
+
+If summarising fails, or the summariser takes longer than 60 seconds, the
+masked memory is written back as it is and a warning is logged.
+`summarize_over` requires `keep: masked`, and `summarize_model` must name a
+model under `models:`; both are checked when the config loads.
 
 ## Loaded memory is cached on Bedrock
 
@@ -136,6 +143,25 @@ foreign calls into notes leaves the cache point opening a message, it moves to
 the end of the message before, since Bedrock rejects a cache point with nothing
 before it. A model with its own `cache_config` is left alone, since strands then
 places its cache points itself. Cache points are never written back.
+
+`cache_config` caches the whole conversation instead: strands puts the cache
+point at the end of the latest user message on every request, so each turn of
+a tool loop reads everything before it from the cache. Set it as a mapping on a
+Bedrock model, beside `cache_prompt` and `cache_tools`, for three cache points
+of the four Bedrock allows:
+
+```yaml
+models:
+  sonnet:
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+    params:
+      cache_prompt: default
+      cache_tools: default
+      cache_config: {strategy: auto}
+```
+
+A key other than `strategy` and `ttl` fails when the config loads.
 
 The run's usage in the activity stream (`usageByRun`) carries `cacheHitRate`,
 the share of the prompt read from the cache, for any run that read or wrote it:
