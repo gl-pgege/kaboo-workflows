@@ -58,8 +58,7 @@ def _check_context_source(source: str) -> None:
     ):
         return
     raise ValueError(
-        f"Unknown context header source '{source}'. "
-        "Use run_id, thread_id or forwarded_props.<key>."
+        f"Unknown context header source '{source}'. Use run_id, thread_id or forwarded_props.<key>."
     )
 
 
