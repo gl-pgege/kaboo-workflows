@@ -11,7 +11,12 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from kaboo_workflows._context import Principal, set_auth_context
+from kaboo_workflows._context import (
+    Principal,
+    set_activity_context,
+    set_auth_context,
+    set_forwarded_props,
+)
 from kaboo_workflows.auth import build_auth
 
 
@@ -53,6 +58,39 @@ def test_relay_sends_the_token_in_every_configured_header(
 
     assert request.headers["authorization"] == "Bearer user-jwt"
     assert request.headers["x-kaboo-run-token"] == "Bearer user-jwt"
+
+
+def test_relay_stamps_run_context_headers_from_config(user_principal: None) -> None:
+    # Services date scripts and group a run's edits by these, and a gateway
+    # passes only the headers it is told to, so which ones go is config.
+    set_activity_context(thread_id="thread-1", run_id="run-1")
+    set_forwarded_props({"timezone": "America/Toronto"})
+    try:
+        auth = build_auth(
+            "relay",
+            {
+                "context_headers": {
+                    "x-kaboo-run-id": "run_id",
+                    "x-kaboo-timezone": "forwarded_props.timezone",
+                    "x-kaboo-locale": "forwarded_props.locale",
+                }
+            },
+        )
+
+        request = _apply(auth)
+    finally:
+        set_activity_context(thread_id=None)
+        set_forwarded_props(None)
+
+    assert request.headers["authorization"] == "Bearer user-jwt"
+    assert request.headers["x-kaboo-run-id"] == "run-1"
+    assert request.headers["x-kaboo-timezone"] == "America/Toronto"
+    assert "x-kaboo-locale" not in request.headers
+
+
+def test_an_unknown_context_header_source_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Unknown context header source 'run'"):
+        build_auth("relay", {"context_headers": {"x-kaboo-run-id": "run"}})
 
 
 def test_an_empty_header_list_is_rejected() -> None:

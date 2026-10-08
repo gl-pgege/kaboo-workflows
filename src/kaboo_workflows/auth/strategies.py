@@ -26,10 +26,10 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from .._context import get_auth_context
+from .._context import get_auth_context, get_forwarded_props, get_run_id, get_thread_id
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator, Sequence
+    from collections.abc import AsyncGenerator, Generator, Mapping, Sequence
 
 _LEEWAY_SECONDS = 60.0
 """Refresh a cached token this many seconds before its stated expiry."""
@@ -47,6 +47,29 @@ def _header_names(header: str | Sequence[str]) -> tuple[str, ...]:
     if not names or not all(names):
         raise ValueError("header must be a non-empty header name, or a list of them")
     return names
+
+
+_FORWARDED = "forwarded_props."
+
+
+def _check_context_source(source: str) -> None:
+    if source in ("run_id", "thread_id") or (
+        source.startswith(_FORWARDED) and len(source) > len(_FORWARDED)
+    ):
+        return
+    raise ValueError(
+        f"Unknown context header source '{source}'. "
+        "Use run_id, thread_id or forwarded_props.<key>."
+    )
+
+
+def _context_value(source: str) -> str | None:
+    if source == "run_id":
+        return get_run_id()
+    if source == "thread_id":
+        return get_thread_id()
+    value = get_forwarded_props().get(source[len(_FORWARDED) :])
+    return value if isinstance(value, str) and value else None
 
 
 class _BearerAuth(httpx.Auth):
@@ -105,6 +128,9 @@ class RelayTokenAuth(_BearerAuth):
             gateway that authenticates on ``Authorization`` and forwards its own
             credential needs both it and the header the target reads.
         scheme: Auth scheme prefix (default ``Bearer``; ``""`` for a raw value).
+        context_headers: Headers to stamp with the current run's context, each
+            mapped to ``run_id``, ``thread_id`` or ``forwarded_props.<key>``.
+            A header whose value is missing for this run is left off.
     """
 
     def __init__(
@@ -113,16 +139,27 @@ class RelayTokenAuth(_BearerAuth):
         token: str | None = None,
         header: str | Sequence[str] = "Authorization",
         scheme: str = "Bearer",
+        context_headers: Mapping[str, str] | None = None,
     ) -> None:
         self._explicit = token
         self.header_names = _header_names(header)
         self.scheme = scheme
+        self.context_headers = dict(context_headers or {})
+        for source in self.context_headers.values():
+            _check_context_source(source)
 
     def _token(self) -> str | None:
         if self._explicit is not None:
             return self._explicit
         principal = get_auth_context()
         return principal.token if principal else None
+
+    def _apply(self, request: httpx.Request, token: str | None) -> None:
+        super()._apply(request, token)
+        for name, source in self.context_headers.items():
+            value = _context_value(source)
+            if value:
+                request.headers[name] = value
 
 
 class StaticTokenAuth(_BearerAuth):
