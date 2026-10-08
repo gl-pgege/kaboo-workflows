@@ -252,6 +252,22 @@ The same value is written to every name listed. An empty list is rejected.
 | Param | Default | Purpose |
 |-------|---------|---------|
 | `token` | principal's token | Explicit override, for a client bound to a captured token |
+| `context_headers` | none | Headers to stamp with the current run's context, each mapped to `run_id`, `thread_id` or `forwarded_props.<key>` |
+
+`context_headers` (0.24.0) tells the services behind a gateway which run a call
+belongs to, and anything the client forwarded with it, such as the user's time
+zone. A header whose value the run lacks is left off, and an unknown source is
+rejected when the client is built:
+
+```yaml
+    auth:
+      type: relay
+      params:
+        header: Authorization
+        context_headers:
+          x-run-id: run_id
+          x-timezone: forwarded_props.timezone
+```
 
 **`static`** — a fixed token on every request.
 
