@@ -28,7 +28,13 @@ from strands import tool
 from .._context import Reference, get_references, request_inline
 from .fetching import _MAX_FETCH_BYTES, fetch_reference_bytes
 
-__all__ = ["_MAX_FETCH_BYTES", "fetch_attachment", "list_references", "resolve_inline_blocks"]
+__all__ = [
+    "_MAX_FETCH_BYTES",
+    "fetch_attachment",
+    "list_references",
+    "media_block",
+    "resolve_inline_blocks",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -78,13 +84,13 @@ def _resolve_bytes(ref: Reference) -> bytes | None:
     return None
 
 
-def _content_block(ref: Reference, raw: bytes) -> dict[str, Any] | None:
-    """Build a strands media ``ContentBlock`` for a supported attachment.
+def media_block(mime_type: str | None, name: str | None, raw: bytes) -> dict[str, Any] | None:
+    """Build a strands media ``ContentBlock`` for supported bytes, else ``None``.
 
     Gated by the MIME *top-level* type so e.g. ``audio/mpeg`` never matches a
     video format merely because ``mpeg`` is a video subtype token.
     """
-    mime = (ref.mime_type or "").lower()
+    mime = (mime_type or "").lower()
     top = mime.split("/", 1)[0]
     if top == "image":
         fmt = _mime_to_format(mime, _IMAGE_FORMATS)
@@ -100,11 +106,16 @@ def _content_block(ref: Reference, raw: bytes) -> dict[str, Any] | None:
             return {
                 "document": {
                     "format": fmt,
-                    "name": ref.name or "document",
+                    "name": name or "document",
                     "source": {"bytes": raw},
                 }
             }
     return None
+
+
+def _content_block(ref: Reference, raw: bytes) -> dict[str, Any] | None:
+    """Build a strands media ``ContentBlock`` for a supported attachment."""
+    return media_block(ref.mime_type, ref.name, raw)
 
 
 def resolve_inline_blocks(references: list[Reference]) -> list[dict[str, Any]]:

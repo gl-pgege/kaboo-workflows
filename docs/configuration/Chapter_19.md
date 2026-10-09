@@ -77,6 +77,32 @@ When `attachments.tool: true` (the default), in-scope agents get two tools:
 
 Custom object kinds are **not** covered by `fetch_attachment` — you resolve those with your own MCP tool (e.g. `query_table(id)`). The manifest hands the agent the `kind`+`id`; wiring the resolver is the documented extension point.
 
+## Media a tool returns
+
+A tool behind an MCP gateway answers in text: the gateway turns each HTTP
+response into JSON or text, and binary responses do not pass. To let the model
+*see* an image or a document a tool produced, return it as data inside the
+tool's JSON:
+
+```json
+{
+  "summary": "3 problems in 2 of 11 widgets",
+  "attachments": [
+    {"name": "Rows 1-7", "mime_type": "image/jpeg", "data": "<base64>"}
+  ]
+}
+```
+
+Every agent the config builds carries `ToolAttachmentsHook`. It removes
+`attachments` from the result before the model reads it and appends each entry
+as a media block of the same tool result, after a text block with its `name`,
+so the bytes never reach the model as text. Supported types are those of
+`fetch_attachment`; at most 8 entries of up to 3.75 MB each are unpacked, and
+anything dropped is named in a text block. Strands carries media in a tool
+result to every provider (its OpenAI formatter moves it into a following user
+message). No storage or second fetch is involved: the bytes ride the gateway
+response the tool already returns.
+
 ## Authorized fetching & attachments beyond the first turn
 
 By default, URL sources are fetched server-side **without credentials** — fine

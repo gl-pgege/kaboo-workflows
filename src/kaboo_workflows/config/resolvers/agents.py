@@ -11,6 +11,7 @@ from ...exceptions import ConfigurationError
 from ...hooks.context_hook import ContextHook
 from ...hooks.interrupt_hook import InterruptHook
 from ...hooks.reference_hook import ReferenceHook
+from ...hooks.tool_attachments_hook import ToolAttachmentsHook
 from ...tools.ask_user import ask_user
 from ...tools.references import fetch_attachment, list_references
 from ...utils import load_object
@@ -182,6 +183,10 @@ def build_agent_from_def(
                 keep_tools=clearing.keep_tools,
             )
         )
+
+    # 6bbbb. Media a tool returned as data becomes media blocks; attached at
+    # build time for the same reason as the hooks above.
+    hooks.append(ToolAttachmentsHook())
 
     # 6c. Resolve output_schema
     if agent_def.output_schema is not None:

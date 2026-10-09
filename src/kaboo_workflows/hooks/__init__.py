@@ -17,6 +17,7 @@ from .session_state_hook import (
     session_state_snapshot,
 )
 from .stop_guard import MultiAgentStopGuard, StopGuard, stop_guard_from_event
+from .tool_attachments_hook import ToolAttachmentsHook
 from .tool_name_sanitizer import ToolNameSanitizer
 
 __all__ = [
@@ -34,6 +35,7 @@ __all__ = [
     "ReferenceHook",
     "SessionStateHook",
     "StopGuard",
+    "ToolAttachmentsHook",
     "ToolNameSanitizer",
     "restore_session_state",
     "session_state_snapshot",
