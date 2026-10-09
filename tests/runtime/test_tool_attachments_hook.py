@@ -78,11 +78,11 @@ class _CallThenRecord(Model):
     def get_config(self) -> dict[str, Any]:
         return {}
 
-    async def structured_output(self, *args: Any, **kwargs: Any):  # ty: ignore[invalid-method-override]
+    async def structured_output(self, *args: Any, **kwargs: Any):
         raise NotImplementedError
         yield
 
-    async def stream(self, messages: Any, *args: Any, **kwargs: Any):  # ty: ignore[invalid-method-override]
+    async def stream(self, messages: Any, *args: Any, **kwargs: Any):
         self.seen.append(copy.deepcopy(messages))
         yield {"messageStart": {"role": "assistant"}}
         if len(self.seen) == 1:

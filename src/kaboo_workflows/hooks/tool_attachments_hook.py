@@ -20,12 +20,15 @@ import binascii
 import json
 import logging
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from strands.hooks import HookProvider, HookRegistry
 from strands.hooks.events import AfterToolCallEvent
 
 from ..tools.references import media_block
+
+if TYPE_CHECKING:
+    from strands.types.tools import ToolResult
 
 if sys.version_info >= (3, 12):
     from typing import override
@@ -64,7 +67,7 @@ def _attachment_blocks(item: Any) -> list[dict[str, Any]]:
     return [{"text": name}, block]
 
 
-def unpack_attachments(content: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+def unpack_attachments(content: list[Any]) -> list[dict[str, Any]] | None:
     """Return ``content`` with every ``attachments`` field unpacked, or ``None`` if there was none.
 
     Looks in ``text`` blocks whose text is a JSON object and in ``json`` blocks.
@@ -124,7 +127,7 @@ class ToolAttachmentsHook(HookProvider):
             replaced["structuredContent"] = {
                 k: v for k, v in structured.items() if k != ATTACHMENTS_FIELD
             }
-        event.result = replaced  # type: ignore[assignment]
+        event.result = cast("ToolResult", replaced)
         logger.debug(
             "tool=<%s> | unpacked %d media block(s) from a tool result",
             event.tool_use.get("name"),
