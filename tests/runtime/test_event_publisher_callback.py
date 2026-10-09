@@ -6,6 +6,8 @@ We drive it directly and observe the emitted StreamEvents — no private handler
 
 from __future__ import annotations
 
+import base64
+import json
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
@@ -137,3 +139,23 @@ def test_tool_end_marks_error_when_exception_present():
     pub, events = _publisher()
     pub._on_tool_end(_tool_end_event(status="success", exception=RuntimeError("x")))
     assert _tool_end(events).data["status"] == "error"
+
+
+def test_tool_end_streams_the_names_of_attachments_and_never_their_data():
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    data = base64.b64encode(png).decode()
+    body = {
+        "summary": "1 widget",
+        "attachments": [{"name": "Rows 1-2", "mime_type": "image/png", "data": data}],
+    }
+    pub, events = _publisher()
+    event = _tool_end_event(status="success")
+    event.result["content"] = [{"text": json.dumps(body)}]
+    pub._on_tool_end(event)
+    streamed = _tool_end(events).data["tool_result"]
+    assert '"summary": "1 widget"' in streamed
+    assert "Rows 1-2" in streamed
+    assert data not in streamed
+    assert "attachments" not in streamed

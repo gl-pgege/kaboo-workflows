@@ -38,6 +38,7 @@ from .._context import get_delegation_id, get_run_id, get_thread_id, get_turn_id
 from ..telemetry import current_trace_id
 from ..types import EventType, StreamEvent
 from .cost_tracking import pop_cost_box, push_cost_box
+from .tool_attachments_hook import unpack_attachments
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,10 @@ def _extract_result_text(result: Any, max_len: int = _MAX_RESULT_LEN) -> str | N
     """Extract a plain-text summary from a strands tool result (for streaming TOOL_END)."""
     if result is None:
         return None
+    content = result.get("content", [])
+    content = unpack_attachments(content) or content
     parts: list[str] = []
-    for block in result.get("content", []):
+    for block in content:
         if "text" in block:
             parts.append(block["text"])
         elif "json" in block:
