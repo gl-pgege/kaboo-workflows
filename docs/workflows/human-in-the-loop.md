@@ -91,7 +91,9 @@ Served through `create_agui_app`, the pending gate now travels on the AG-UI stat
 channel under `kaboo_session` and is restored onto whichever agent runs the
 resume — including one that has never seen the conversation. A resume therefore
 works after a restart, on a second replica, and when the session is rebuilt per
-run. Nothing to configure; see
+run. Only a resume restores it: a new message supersedes the gate, on a fresh
+process as on a warm one, so a host that replays an older snapshot cannot bring
+back a gate already answered. Nothing to configure; see
 [Chapter 7](../configuration/Chapter_07.md#pending-interrupts-survive-a-restart-without-a-store)
 for the switch that turns it off and why you would.
 

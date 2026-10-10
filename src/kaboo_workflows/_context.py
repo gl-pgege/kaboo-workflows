@@ -127,6 +127,7 @@ class SessionExchange:
 
     inbound: dict[str, Any] = field(default_factory=dict)
     agent: Any = None
+    resuming: bool = False
 
 
 _current_session: contextvars.ContextVar[SessionExchange | None] = contextvars.ContextVar(

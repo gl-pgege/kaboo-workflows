@@ -228,6 +228,50 @@ async def test_resume_without_carried_state_still_reports_a_lost_session() -> No
         )
 
 
+async def test_a_new_message_on_a_restarted_service_does_not_replay_an_answered_gate() -> None:
+    """A fresh run leaves behind a gate the replayed state still carries.
+
+    A host that serves the next turn from a snapshot older than the resume's
+    last one hands over the gate still activated, though the transcript shows
+    it answered. Restoring it made the fresh run resume the answered call
+    instead of reading the new message; on a workflow without that tool the
+    result was "Unknown tool", and Bedrock refused every later turn of the
+    thread.
+    """
+    from ag_ui.core import UserMessage
+
+    first = Pipeline(str(CONFIGS / "interrupt_plain.yaml"))
+    r1 = await first.turn("start the task", thread_id="c5", run_id="r1")
+    interrupt_id = getattr((getattr(r1.run_outcome(), "interrupts", []) or [])[0], "id", None)
+    assert interrupt_id
+    answered_call_id = r1.of_type(AGUIEventType.TOOL_CALL_START)[0].tool_call_id
+    stale = r1.state()
+    assert stale["kaboo_session"]["interrupt_state"]["activated"] is True
+
+    r2 = await first.turn(
+        thread_id="c5",
+        run_id="r2",
+        state=stale,
+        messages=r1.messages(),
+        resume=[{"interruptId": interrupt_id, "status": "resolved", "payload": {"answer": "yes"}}],
+    )
+    assert not r2.errored() and r2.finished()
+
+    restarted = Pipeline(str(CONFIGS / "interrupt_plain.yaml"))
+    r3 = await restarted.turn(
+        thread_id="c5",
+        run_id="r3",
+        state=stale,
+        messages=[*r2.messages(), UserMessage(id="next", role="user", content="what next?")],
+    )
+
+    assert not r3.errored()
+    results = r3.of_type(AGUIEventType.TOOL_CALL_RESULT)
+    assert answered_call_id not in [r.tool_call_id for r in results]
+    carried = r3.state().get("kaboo_session", {}).get("interrupt_state", {})
+    assert interrupt_id not in carried.get("interrupts", {})
+
+
 async def test_swarm_tool_gate_pauses_then_executes_the_edited_call() -> None:
     # A gated PLATFORM-STYLE tool (interrupt.tools) inside a swarm node: the
     # gate pauses the run before the tool runs, the descriptor carries the

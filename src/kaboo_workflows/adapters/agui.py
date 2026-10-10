@@ -614,6 +614,12 @@ def _parse_session_state(input_data: RunAgentInput) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _carries_active_gate(input_data: RunAgentInput) -> bool:
+    """Whether the client's ``kaboo_session`` state holds a gate still paused."""
+    carried = _parse_session_state(input_data).get("interrupt_state")
+    return isinstance(carried, dict) and bool(carried.get("activated"))
+
+
 def _restore_snapshot_user_content(agui_event: Any, originals: dict[str, Any]) -> None:
     """Put structured multimodal user content back on a MESSAGES_SNAPSHOT.
 
@@ -1051,7 +1057,11 @@ def _add_kaboo_endpoint(
         # reason: it lets a paused approval outlive this process. SessionStateHook
         # restores it onto the executing agent; _enrich_session_snapshot writes
         # back what the run leaves behind.
-        set_session_exchange(SessionExchange(inbound=_parse_session_state(input_data)))
+        set_session_exchange(
+            SessionExchange(
+                inbound=_parse_session_state(input_data), resuming=bool(input_data.resume)
+            )
+        )
 
         # How much this response may carry. Bound before any task is created so
         # the run's hooks and the SSE writer below share the one counter: the
@@ -1254,8 +1264,10 @@ def _add_kaboo_endpoint(
         # group stays addressable as index N-1 by the frontend's monotonic cards.
         superseded = False
         existing_agent = bridge.get_thread_agent(agui_agent, thread_id)
+        last_role = input_data.messages[-1].role if input_data.messages else None
+        if existing_agent is None and last_role == "user":
+            superseded = _carries_active_gate(input_data)
         if existing_agent is not None and bridge.is_interrupt_active(existing_agent):
-            last_role = input_data.messages[-1].role if input_data.messages else None
             if last_role == "user":
                 # A new user turn arrived while a prior interrupt is still
                 # pending (e.g. the user typed instead of resolving, or a prior

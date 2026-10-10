@@ -192,7 +192,9 @@ class Pipeline:
             # Mirror kaboo_endpoint: the client transcript carries a tool-result
             # message for the answered card; the resume payload is authoritative.
             _drop_replayed_tool_results(input_data, resume)
-        set_session_exchange(SessionExchange(inbound=_parse_session_state(input_data)))
+        set_session_exchange(
+            SessionExchange(inbound=_parse_session_state(input_data), resuming=bool(resume))
+        )
         set_forwarded_props(forwarded_props or {})
 
         session = self._resolve_session(input_data)

@@ -170,7 +170,8 @@ A session manager persists the *conversation*. An interrupt is different: when a
 There is nothing to configure. Serving through `create_agui_app`, the pending interrupt travels on the AG-UI **state channel** under `kaboo_session`, the same channel that carries `kaboo_history`:
 
 - On the way out, it is written into the `STATE_SNAPSHOT` your host already persists.
-- On the way in, it is read from `RunAgentInput.state` and restored onto the agent that runs the turn — including one that has never seen the conversation, which is how a resume works after a restart, on a second replica, or when the session is rebuilt per run.
+- On the way in, it is read from `RunAgentInput.state` and restored onto the agent that runs the resume — including one that has never seen the conversation, which is how a resume works after a restart, on a second replica, or when the session is rebuilt per run.
+- A new message instead of a resume supersedes the gate, on a fresh process as on a warm one. Nothing is restored, the paused call is closed, and the cleared state goes out, so a host replaying an older snapshot cannot bring back a gate already answered.
 
 Hosts on [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) get this end to end for free, because the runtime persists state snapshots per thread and replays them into the next run.
 

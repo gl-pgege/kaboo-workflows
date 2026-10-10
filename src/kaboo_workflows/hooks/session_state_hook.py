@@ -54,17 +54,21 @@ def _is_interrupt_state(value: Any) -> TypeGuard[dict[str, Any]]:
 
 
 def restore_session_state(agent: Any) -> bool:
-    """Seed *agent* with the interrupt state the client sent, if any.
+    """Seed *agent* with the interrupt state the client sent, if this run resumes.
 
-    Returns whether anything was restored. Idempotent, so the adapter can call it
-    on the resume path — where the state is needed *before* the run starts, to
-    build the interrupt responses — and the hook can call it again for a fresh
-    run without either clobbering the other.
+    Returns whether anything was restored. Only a resume restores: a fresh run's
+    message supersedes any gate the state still holds, and a host that replays an
+    older snapshot can hand over a gate already answered. Idempotent, so the
+    adapter can call it on the resume path — where the state is needed *before*
+    the run starts, to build the interrupt responses — and the hook can call it
+    again without either clobbering the other.
     """
     exchange = get_session_exchange()
     if exchange is None:
         return False
     exchange.agent = agent
+    if not exchange.resuming:
+        return False
     state = exchange.inbound.get("interrupt_state")
     if not _is_interrupt_state(state):
         return False
