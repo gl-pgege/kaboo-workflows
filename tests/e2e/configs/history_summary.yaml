@@ -1,6 +1,6 @@
 # A masked memory with a summary backstop. Once the written-back memory passes
 # summarize_over, its oldest calls fold into one summary written by `summarizer`.
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 models:
   summarizer:

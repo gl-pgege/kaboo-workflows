@@ -1,7 +1,7 @@
 # A delegate orchestration whose entry agent remembers. `analyze_sql` runs as a
 # fork of `sql_analyst`, so it reads and writes sql_analyst's `sql` history
 # group, exactly as sql_analyst would if it were connected directly.
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 models:
   analyst:

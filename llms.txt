@@ -7,7 +7,9 @@
 - [Documentation site](https://gl-pgege.github.io/kaboo-workflows/)
 - [README](https://github.com/gl-pgege/kaboo-workflows/blob/main/README.md)
 - [API reference](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api-reference.md)
+- [Best practices](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/best-practices.md)
 - [kaboo-workflows](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/index.md)
+- [Testing your workflows](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/testing.md)
 
 ## Configuration
 
@@ -42,6 +44,21 @@
 - [Parallel (top-level + nested)](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/workflows/parallel.md)
 - [Swarm + graph combined](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/workflows/swarm-and-graph.md)
 
+## Recipes
+
+- [Ask the user, and request inputs](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/asking-the-user.md)
+- [Images and file attachments](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/attachments-and-images.md)
+- [Activity a chat UI can show](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/chat-ui-activity.md)
+- [Cost and context control](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/cost-and-context.md)
+- [Guard hooks for every agent](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/guard-hooks.md)
+- [Recipes](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/index.md)
+- [Compose a workflow per run](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/per-run-workflows.md)
+- [Serve on AgentCore in production](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/production-serving.md)
+- [Skills](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/skills.md)
+- [Structured outputs a UI can render](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/structured-outputs.md)
+- [Tools that need run context](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/tools-with-run-context.md)
+- [Call MCP tools as the signed-in user](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/recipes/user-identity-mcp.md)
+
 ## API reference
 
 - [kaboo_workflows.adapters](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/adapters.md)
@@ -52,6 +69,7 @@
 - [kaboo_workflows](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/kaboo_workflows.md)
 - [kaboo_workflows.mcp](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/mcp.md)
 - [kaboo_workflows.renderers](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/renderers.md)
+- [kaboo_workflows.testing](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/testing.md)
 - [kaboo_workflows.tools](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/tools.md)
 - [kaboo_workflows.types](https://github.com/gl-pgege/kaboo-workflows/blob/main/docs/api/types.md)
 

@@ -15,7 +15,8 @@ from strands import Agent, tool
 
 from kaboo_workflows.hooks import ContextHook
 from kaboo_workflows.hooks._transcript import foreign_calls_to_notes
-from tests.fakes import LocalBedrockModel, ScriptedModel
+from kaboo_workflows.testing import ScriptedModel
+from tests.fakes import LocalBedrockModel
 
 
 def _user(text: str) -> dict[str, Any]:

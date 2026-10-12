@@ -1,7 +1,7 @@
 # HITL interrupt on a first-class SWARM node. The planner asks the user a
 # question mid-swarm, pausing the whole run; on resume it hands off to the
 # writer, whose text is the chat reply.
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   planner:

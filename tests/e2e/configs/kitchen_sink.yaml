@@ -4,7 +4,7 @@
 #
 # Exercises mixed nesting (swarm + delegate side by side) and a parallel batch
 # inside a first-class graph entry, all in one run.
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   strategist:

@@ -1,6 +1,6 @@
 # First-class swarm whose middle node fails — error must surface from a
 # multi-agent run, not hang.
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   planner:

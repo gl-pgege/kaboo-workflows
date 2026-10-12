@@ -25,7 +25,8 @@ from kaboo_workflows._context import HistoryExchange, set_history_exchange
 from kaboo_workflows.hooks import HistoryHook, HistoryPolicy
 from kaboo_workflows.hooks import history_hook as history_hook_module
 from kaboo_workflows.hooks._transcript import mask_transcript, to_remember_blocks
-from tests.fakes import BoomModel, FakeModel, ScriptedModel
+from kaboo_workflows.testing import ScriptedModel
+from tests.fakes import BoomModel, FakeModel
 
 SUMMARY_BRIEF = "Summary of your earlier work in this conversation"
 REMEMBER = "## To remember\n- warehouse id wh-7\n- revenue is stored in cents"

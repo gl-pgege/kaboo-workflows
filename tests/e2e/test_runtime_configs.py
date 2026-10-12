@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ag_ui.core import EventType as AGUIEventType
 
-from .harness import Pipeline
+from kaboo_workflows.testing import Pipeline
 
 CONFIGS = Path(__file__).parent / "configs"
 
@@ -28,7 +28,7 @@ def _speaks(text: str) -> str:
           assistant:
             stream: {{title: "Assistant"}}
             model:
-              provider: tests.fakes.scripted_model:ScriptedModel
+              provider: kaboo_workflows.testing:ScriptedModel
               model_id: scripted
               params:
                 script: []

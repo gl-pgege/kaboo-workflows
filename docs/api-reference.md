@@ -26,6 +26,9 @@ The curated top-level exports, for the common case:
 - **Auth**: `Principal`, `get_auth_context`, `set_auth_context`, `build_auth`,
   `RelayTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`
 - **Forwarded props**: `get_forwarded_props`, `set_forwarded_props`
+- **Run context**: `get_thread_id`, `get_run_id`, `get_turn_id` — which
+  conversation, request and logical turn a tool or hook is running in
+  ([recipe](recipes/tools-with-run-context.md))
 - **Telemetry**: `init_telemetry`, `telemetry_enabled`, `current_trace_id`
 - **Rendering / CLI**: `AnsiRenderer`, `cli_errors`
 - **Errors**: `ConfigurationError`, `SchemaValidationError`,
@@ -42,7 +45,7 @@ The curated top-level exports, for the common case:
 ## Auth — [`kaboo_workflows.auth`](api/auth.md)
 
 The outbound MCP auth strategies an `auth:` block resolves to
-([Chapter 9](configuration/Chapter_09.md#outbound-auth--the-auth-field)):
+([Chapter 9](configuration/Chapter_09.md#outbound-auth-the-auth-field)):
 `RelayTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`,
 plus `build_auth` to construct one from a name and params, and
 `apply_auth_to_transport_options` to wire one into a transport.
@@ -81,6 +84,13 @@ Loaders, interpolation, infra resolution, and the full YAML schema models
 ## Renderers — [`kaboo_workflows.renderers`](api/renderers.md)
 
 `AnsiRenderer`.
+
+## Testing — [`kaboo_workflows.testing`](api/testing.md)
+
+`ScriptedModel` (a model that replays a per-agent script), `Pipeline` and
+`run_pipeline` (drive a config through the AG-UI path in-process), and
+`TurnResult` (the events and activity a client would see). See
+[Testing your workflows](testing.md).
 
 ## Types — [`kaboo_workflows.types`](api/types.md)
 

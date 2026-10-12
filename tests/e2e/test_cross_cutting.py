@@ -15,9 +15,7 @@ import pytest
 from ag_ui.core import EventType as AGUIEventType
 
 from kaboo_workflows._context import ResponseBudget, set_response_budget
-from tests.fakes import ScriptedModel
-
-from .harness import Pipeline, run_pipeline
+from kaboo_workflows.testing import Pipeline, ScriptedModel, run_pipeline
 
 CONFIGS = Path(__file__).parent / "configs"
 

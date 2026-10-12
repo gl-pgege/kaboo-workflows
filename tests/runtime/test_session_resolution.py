@@ -29,7 +29,7 @@ BASE_YAML = """
 agents:
   assistant:
     model:
-      provider: tests.fakes.scripted_model:ScriptedModel
+      provider: kaboo_workflows.testing:ScriptedModel
       model_id: scripted
       params:
         script: []

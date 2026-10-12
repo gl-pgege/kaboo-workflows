@@ -17,9 +17,15 @@ any [CopilotKit](https://copilotkit.ai) frontend can consume.
 - **[Concepts](concepts.md)** — the mental model: `load()` returns plain strands
   objects; orchestration shapes; the AG-UI event stream.
 - **[Configuration reference](configuration/README.md)** — the complete
-  18-chapter reference for every YAML option.
+  19-chapter reference for every YAML option.
 - **[Workflow guides](workflows/deep-nesting.md)** — worked, tested examples of
   deep nesting, swarm+graph, parallelism, HITL, history, and error handling.
+- **[Recipes](recipes/index.md)** — production patterns: serving on AgentCore,
+  per-run workflows, skills, user identity, guard hooks, cost control.
+- **[Testing your workflows](testing.md)** — scripted models and an in-process
+  pipeline to test a workflow end to end with no model or network.
+- **[Best practices](best-practices.md)** — rules of thumb from production, and
+  why each one holds.
 - **[API reference](api-reference.md)** — the full public Python surface,
   auto-generated from docstrings.
 - **[Troubleshooting](troubleshooting.md)** — fixes for the common first-run

@@ -1,5 +1,5 @@
 # First-class swarm entry: planner → researcher → writer (deterministic handoffs).
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   planner:

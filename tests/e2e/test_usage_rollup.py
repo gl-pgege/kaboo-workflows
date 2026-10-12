@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .harness import run_pipeline
+from kaboo_workflows.testing import run_pipeline
 
 CONFIGS = Path(__file__).parent / "configs"
 

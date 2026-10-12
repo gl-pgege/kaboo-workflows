@@ -14,7 +14,7 @@ from typing import Any
 from strands import Agent, tool
 
 from kaboo_workflows.hooks import ContextHook
-from tests.fakes import ScriptedModel
+from kaboo_workflows.testing import ScriptedModel
 from tests.runtime.test_foreign_tool_calls import (
     _assert_bedrock_valid,
     _assistant,

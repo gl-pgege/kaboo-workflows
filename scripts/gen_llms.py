@@ -66,11 +66,13 @@ def build_llms_txt() -> str:
     docs = _docs_files()
     configuration = [p for p in docs if p.parent.name == "configuration"]
     workflows = [p for p in docs if p.parent.name == "workflows"]
+    recipes = [p for p in docs if p.parent.name == "recipes"]
     api = [p for p in docs if p.parent.name == "api"]
     top = [
         p
         for p in docs
-        if p.parent == DOCS and p.name in {"index.md", "api-reference.md"}
+        if p.parent == DOCS
+        and p.name in {"index.md", "api-reference.md", "testing.md", "best-practices.md"}
     ]
 
     out: list[str] = ["# kaboo-workflows\n", f"> {SUMMARY}\n"]
@@ -87,6 +89,10 @@ def build_llms_txt() -> str:
 
     out.append("## Workflows\n")
     out.extend(_links(workflows))
+    out.append("")
+
+    out.append("## Recipes\n")
+    out.extend(_links(recipes))
     out.append("")
 
     out.append("## API reference\n")

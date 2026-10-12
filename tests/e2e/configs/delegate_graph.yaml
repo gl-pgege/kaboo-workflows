@@ -1,6 +1,6 @@
 # Graph nested under a delegate:
 #   coordinator ─▶ research_graph (graph: strategist → [writer, researcher] → editor)
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   coordinator:

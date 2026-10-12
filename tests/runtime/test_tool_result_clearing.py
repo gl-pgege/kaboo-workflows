@@ -17,9 +17,9 @@ from strands import Agent, tool
 from kaboo_workflows.config.resolvers.agents import build_agent_from_def
 from kaboo_workflows.hooks import ContextHook
 from kaboo_workflows.hooks._transcript import clear_tool_results, estimate_tokens
+from kaboo_workflows.testing import ScriptedModel
 from kaboo_workflows.tools import node_as_async_tool
 from tests.factories import agent_def
-from tests.fakes import ScriptedModel
 
 BIG = "x" * 2000
 TOOLS = {"athena___run_query", "github___search", "analyze_sql", "query"}

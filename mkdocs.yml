@@ -88,7 +88,22 @@ nav:
       - Human-in-the-loop: workflows/human-in-the-loop.md
       - Multi-turn history: workflows/multi-turn-history.md
       - Errors & rejection: workflows/errors-and-rejection.md
+  - Recipes:
+      - Overview: recipes/index.md
+      - Serve on AgentCore: recipes/production-serving.md
+      - Compose a workflow per run: recipes/per-run-workflows.md
+      - Skills: recipes/skills.md
+      - MCP tools as the signed-in user: recipes/user-identity-mcp.md
+      - Tools that need run context: recipes/tools-with-run-context.md
+      - Guard hooks: recipes/guard-hooks.md
+      - Ask the user: recipes/asking-the-user.md
+      - Structured outputs: recipes/structured-outputs.md
+      - Images and attachments: recipes/attachments-and-images.md
+      - Activity in a chat UI: recipes/chat-ui-activity.md
+      - Cost and context: recipes/cost-and-context.md
+  - Testing: testing.md
   - Evaluation: evaluation.md
+  - Best practices: best-practices.md
   - API reference:
       - Overview: api-reference.md
       - kaboo_workflows: api/kaboo_workflows.md
@@ -100,6 +115,7 @@ nav:
       - tools: api/tools.md
       - converters: api/converters.md
       - renderers: api/renderers.md
+      - testing: api/testing.md
       - types: api/types.md
   - Troubleshooting: troubleshooting.md
   - Ecosystem: https://gl-pgege.github.io/kaboo-docs/

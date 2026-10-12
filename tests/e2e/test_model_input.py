@@ -14,9 +14,8 @@ from typing import Any
 
 from ag_ui.core import AssistantMessage, FunctionCall, ToolCall, ToolMessage, UserMessage
 
-from tests.fakes import LocalBedrockModel, ScriptedModel
-
-from .harness import Pipeline
+from kaboo_workflows.testing import Pipeline, ScriptedModel
+from tests.fakes import LocalBedrockModel
 
 CONFIGS = Path(__file__).parent / "configs"
 

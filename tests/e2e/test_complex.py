@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from .harness import Pipeline, run_pipeline
+from kaboo_workflows.testing import Pipeline, run_pipeline
 
 CONFIGS = Path(__file__).parent / "configs"
 

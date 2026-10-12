@@ -1,7 +1,7 @@
 # Parallel at the top level AND nested parallelism inside a sub-graph:
 #   strategist ─▶ [ writer , subteam ] ─▶ editor
 #   subteam (graph): sub_lead ─▶ [ sa , sb ] ─▶ sub_end
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   strategist:

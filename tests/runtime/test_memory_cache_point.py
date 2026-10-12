@@ -17,7 +17,8 @@ from strands.models import CacheConfig
 from kaboo_workflows._context import HistoryExchange, set_history_exchange
 from kaboo_workflows.hooks import ContextHook, HistoryHook
 from kaboo_workflows.hooks._transcript import settle_cache_points
-from tests.fakes import LocalBedrockModel, ScriptedModel
+from kaboo_workflows.testing import ScriptedModel
+from tests.fakes import LocalBedrockModel
 
 MEMORY: list[Any] = [
     {"role": "user", "content": [{"text": "what was 2024 revenue?"}]},

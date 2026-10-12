@@ -1,6 +1,6 @@
 # Graph nested inside a graph node:
 #   outer_start → inner_graph (g1 → g2) → outer_end
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   outer_start:

@@ -1,6 +1,6 @@
 # Swarm nested under a delegate:
 #   coordinator ─▶ research_swarm (swarm: planner → researcher → writer)
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   coordinator:

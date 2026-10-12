@@ -361,6 +361,9 @@ The curated top-level exports, for the common case:
 - **Auth**: `Principal`, `get_auth_context`, `set_auth_context`, `build_auth`,
   `RelayTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`
 - **Forwarded props**: `get_forwarded_props`, `set_forwarded_props`
+- **Run context**: `get_thread_id`, `get_run_id`, `get_turn_id` — which
+  conversation, request and logical turn a tool or hook is running in
+  ([recipe](recipes/tools-with-run-context.md))
 - **Telemetry**: `init_telemetry`, `telemetry_enabled`, `current_trace_id`
 - **Rendering / CLI**: `AnsiRenderer`, `cli_errors`
 - **Errors**: `ConfigurationError`, `SchemaValidationError`,
@@ -377,7 +380,7 @@ The curated top-level exports, for the common case:
 ## Auth — [`kaboo_workflows.auth`](api/auth.md)
 
 The outbound MCP auth strategies an `auth:` block resolves to
-([Chapter 9](configuration/Chapter_09.md#outbound-auth--the-auth-field)):
+([Chapter 9](configuration/Chapter_09.md#outbound-auth-the-auth-field)):
 `RelayTokenAuth`, `M2MClientCredentialsAuth`, `StaticTokenAuth`,
 plus `build_auth` to construct one from a name and params, and
 `apply_auth_to_transport_options` to wire one into a transport.
@@ -417,6 +420,13 @@ Loaders, interpolation, infra resolution, and the full YAML schema models
 
 `AnsiRenderer`.
 
+## Testing — [`kaboo_workflows.testing`](api/testing.md)
+
+`ScriptedModel` (a model that replays a per-agent script), `Pipeline` and
+`run_pipeline` (drive a config through the AG-UI path in-process), and
+`TurnResult` (the events and activity a client would see). See
+[Testing your workflows](testing.md).
+
 ## Types — [`kaboo_workflows.types`](api/types.md)
 
 `EventType`, `StreamEvent`, and the `SessionManifest` family
@@ -440,7 +450,7 @@ The serving layer: turn a resolved config into an AG-UI / CopilotKit app.
 
 Outbound MCP auth strategies: relay, on-behalf-of, machine-to-machine and static
 tokens. These are what an `auth:` block on an MCP client resolves to — see
-[Chapter 9](../configuration/Chapter_09.md#outbound-auth--the-auth-field) for the
+[Chapter 9](../configuration/Chapter_09.md#outbound-auth-the-auth-field) for the
 YAML form.
 
 ::: kaboo_workflows.auth
@@ -515,6 +525,18 @@ Terminal renderers for streamed agent activity.
       show_root_heading: true
       members_order: source
 
+# docs/api/testing.md
+
+# kaboo_workflows.testing
+
+Scripted models and an in-process pipeline for testing your own workflows. See
+[Testing your workflows](../testing.md) for the guide.
+
+::: kaboo_workflows.testing
+    options:
+      show_root_heading: true
+      members_order: source
+
 # docs/api/tools.md
 
 # kaboo_workflows.tools
@@ -536,6 +558,115 @@ Shared event protocol and session manifest models.
     options:
       show_root_heading: true
       members_order: source
+
+# docs/best-practices.md
+
+# Best practices
+
+Rules of thumb from running kaboo-workflows in production, each with the reason
+behind it. The [recipes](recipes/index.md) show them in full.
+
+## Configuration
+
+- **Keep models and MCP clients apart from workflows, and refer to them by
+  name.** The same workflow then runs against real models in production and
+  scripted ones in tests, and a workflow stored in a database never carries a
+  URL or a credential ([Testing](testing.md#testing-your-own-tools),
+  [per-run workflows](recipes/per-run-workflows.md)).
+- **Secrets live in the base config; escape `${` in everything else.** A
+  submitted workflow is interpolated against the server's environment, so a
+  user-authored `${…}` would resolve there too. `$${` is a literal `${`.
+- **Grant tools by exact name, a few at a time.** `tool_filters.allowed` is an
+  exact-match list. Narrow clients per job and a ceiling of about 20 tools per
+  agent keep prompts small and tool choices good.
+- **Validate on save, not on first run.** `load_session_config` checks a
+  workflow exactly as a run would and names what is missing; add your own
+  rules after it and refuse any unfilled placeholder.
+- **Configure only what the model supports.** Adaptive thinking, prompt caching
+  and media blocks are model features; a config written for one model can fail
+  at the provider on another.
+- **Use module paths in workflows submitted per run.** Relative paths resolve
+  from a config file's directory; a submitted workflow has none, so they
+  resolve from the service's working directory.
+
+## Prompts and skills
+
+- **Short prompts, reusable skills.** Inline only the rules that must always
+  hold; list the rest so agents load them when a task calls for it
+  ([Skills](recipes/skills.md)).
+- **Tell agents to reload what compression removed.** Long runs compress old
+  messages, and an agent will happily carry on from a skill it can no longer
+  see.
+- **Keep the start of a prompt stable.** Prompt caching keys on the prefix;
+  append changing lines, such as today's date, at the end.
+- **Write titles, labels and schema descriptions for their reader.** Stream
+  titles and tool labels are read by users; schema field descriptions are read
+  by the model. Neither should look like an identifier.
+
+## Reliability
+
+- **Put guard hooks on every agent.** Repair transcripts before each model
+  call, refuse a call that has failed twice, stop cleanly when a sign-in
+  expires, and cap tool calls ([Guard hooks](recipes/guard-hooks.md)).
+- **Respect Bedrock's conversation rules.** Every tool call answered in the next
+  message, no two messages in a row from the same role, no empty text blocks.
+  A violation stops the run without an error; `ScriptedModel` enforces the
+  pairing rule so tests catch it first.
+- **One voice asks the user.** Grant `ask_user` to the agent that talks to the
+  user, ask once with every open question, and treat a cancelled request as an
+  answer ([Ask the user](recipes/asking-the-user.md)).
+- **On capped hosts, set a response budget.** A long turn then pauses and
+  continues in a fresh response instead of being cut off; on AgentCore also
+  report busy while a run is open
+  ([Serve on AgentCore](recipes/production-serving.md)).
+
+## State and identity
+
+- **Conversation state belongs to the client.** History and pending interrupts
+  travel on the AG-UI state channel, so any replica can serve any turn and a
+  restart loses nothing. Do not keep conversation state in process memory.
+- **Bound anything process-local, and key it deliberately.** Thread id for the
+  conversation, run id for the request, turn id for a side effect that must
+  happen once across an interrupt and its resume
+  ([Tools that need run context](recipes/tools-with-run-context.md)).
+- **Identity comes only from the verified principal.** Forwarded props are
+  client input; validate them like any other.
+- **Relay a user's token only on clients built per run.** Per-run clients are
+  what keep one user's token out of another's run
+  ([Call MCP tools as the signed-in user](recipes/user-identity-mcp.md)).
+
+## Cost
+
+- **Cache the system prompt, the tool list and the conversation.** Three of
+  Bedrock's four cache points pay for themselves on the first tool loop.
+- **Think where it pays.** Thinking on the agent that plans and judges, off for
+  the ones executing clear instructions.
+- **Do not resend what the agent no longer needs.** Clear old tool results
+  within a run and mask them in history between runs
+  ([Cost and context control](recipes/cost-and-context.md)).
+
+## Testing
+
+- **Script a test for every workflow you ship.** A scripted run exercises the
+  real tools, hooks, prompts and orchestration with no model, network or
+  server ([Testing your workflows](testing.md)).
+- **Test what runs, not what is stored.** For composed workflows, feed the
+  composer's output to the pipeline and assert on the prompt the model
+  received.
+- **Prove restarts on a fresh pipeline.** Resuming on a new `Pipeline` with the
+  persisted state is the only test that a pause survives a deploy.
+- **Keep model evaluations few and deliberate.** Scripted tests prove
+  behaviour; [evaluations](evaluation.md) prove answer quality, at the price of
+  a real model call per item.
+
+## Observability
+
+- **Turn on telemetry** and send traces to an OTLP backend such as Langfuse
+  ([Evaluation](evaluation.md#enable-telemetry)).
+- **Log every model call's latency and retries with its run id.** It answers
+  "why was that slow?" when tracing is off.
+- **Watch token usage per run** after every prompt or config change; caching in
+  particular breaks silently.
 
 # docs/concepts.md
 
@@ -4511,9 +4642,15 @@ any [CopilotKit](https://copilotkit.ai) frontend can consume.
 - **[Concepts](concepts.md)** — the mental model: `load()` returns plain strands
   objects; orchestration shapes; the AG-UI event stream.
 - **[Configuration reference](configuration/README.md)** — the complete
-  18-chapter reference for every YAML option.
+  19-chapter reference for every YAML option.
 - **[Workflow guides](workflows/deep-nesting.md)** — worked, tested examples of
   deep nesting, swarm+graph, parallelism, HITL, history, and error handling.
+- **[Recipes](recipes/index.md)** — production patterns: serving on AgentCore,
+  per-run workflows, skills, user identity, guard hooks, cost control.
+- **[Testing your workflows](testing.md)** — scripted models and an in-process
+  pipeline to test a workflow end to end with no model or network.
+- **[Best practices](best-practices.md)** — rules of thumb from production, and
+  why each one holds.
 - **[API reference](api-reference.md)** — the full public Python surface,
   auto-generated from docstrings.
 - **[Troubleshooting](troubleshooting.md)** — fixes for the common first-run
@@ -4542,6 +4679,2130 @@ Nothing documented here ships without a test: every example config is
 load-validated, every complex workflow guide is backed by a passing end-to-end
 test, executable doc snippets run in CI, and a completeness gate guarantees every
 public symbol has a docstring and an API page.
+
+# docs/recipes/asking-the-user.md
+
+# Ask the user, and request inputs
+
+An agent that guesses when it should ask produces confident wrong answers. The
+library pauses a run for a question with `ask_user`, gates risky tools behind
+an approval, and resumes the same run with the answer
+([Human-in-the-loop](../workflows/human-in-the-loop.md) has the protocol).
+This recipe adds the parts a product needs on top: custom requests — "attach a
+file", "pick a data source" — that a UI renders as its own panel.
+
+## The agent side
+
+```yaml
+agents:
+  assistant:
+    tools:
+      - ./tools/requests.py:request_files
+      - ./tools/requests.py:request_datasources
+    interrupt:
+      tools: []             # tools that need approval before running
+      ask_user: true        # grant the built-in ask_user tool
+      ttl_seconds: 86400    # stamp an expiry the client can show and enforce
+    system_prompt: |
+      When the question is ambiguous, ask once with ask_user, putting every
+      open question into that one call. When the data you need is not
+      attached, call request_datasources rather than asking in prose.
+```
+
+Grant `ask_user` to the agent that talks to the user, and usually not to the
+analysts it delegates to: questions should come from one voice, and a
+sub-agent's question pauses the whole run anyway.
+
+## A custom request is a tool that interrupts
+
+Any tool can pause the run. Declare it with `context=True` and call
+`tool_context.interrupt`; whatever the client sends back on resume becomes the
+interrupt's return value, and the tool turns it into a result the model can
+read:
+
+```python
+import json
+from typing import Any, Literal
+
+from strands import tool
+from strands.types.tools import ToolContext
+
+Kind = Literal["sql", "kafka", "prometheus"]
+
+
+def _answer(response: Any) -> str:
+    if response is None:
+        return "The user did not provide a selection."
+    if isinstance(response, dict) and response.get("status") == "cancelled":
+        return "The user declined the request."
+    return json.dumps(response, ensure_ascii=False)
+
+
+@tool(name="request_datasources", context=True)
+def request_datasources(
+    tool_context: ToolContext, reason: str, kinds: list[Kind] | None = None
+) -> dict:
+    """Pause and ask the user to select one or more data sources.
+
+    Use this when the analysis needs a data source the run does not have.
+
+    Args:
+        reason: Why the data source is needed, shown to the user.
+        kinds: The kinds of data source to offer; all when omitted.
+    """
+    response = tool_context.interrupt(
+        name="request_datasources",
+        reason={
+            "type": "form",
+            "kind": "datasources",
+            "kinds": list(kinds) if kinds else ["sql", "kafka", "prometheus"],
+            "questions": [{"question": reason, "type": "text"}],
+        },
+    )
+    return {"status": "success", "content": [{"text": _answer(response)}]}
+```
+
+The `reason` payload is the contract with your UI:
+
+- **`type`** is one the client already renders. kaboo-react renders
+  `approval` and `form`; ours registers one `form` renderer that branches on
+  **`kind`** to show the file picker or the data source picker.
+- **`questions`** keeps the plain form meaningful wherever the custom panel is
+  not registered, so an older client degrades to a text question rather than a
+  dead end.
+- **A cancelled request is an answer.** Tell the model the user declined, so it
+  can continue without the input instead of asking again.
+
+## What the user experiences
+
+- The run pauses; the chat shows the panel; the answer resumes the *same* run,
+  so the agent continues mid-thought rather than starting over.
+- A paused run survives a restart or a second replica: the pending question
+  travels in the AG-UI state the client sends back
+  ([A gate outlives the process](../workflows/human-in-the-loop.md#a-gate-outlives-the-process-that-opened-it)).
+- If the user ignores the question and types something new, the new message
+  starts a fresh run. A pending question is restored only when the client
+  resumes it.
+- `ttl_seconds` only stamps an expiry; enforcing it is the client's or host's
+  job.
+
+## Test it
+
+A scripted model can call your request tool, and `Pipeline.turn(resume=...)`
+answers it, including on a fresh pipeline to prove the restart case
+([Testing](../testing.md#interrupts-and-resume)).
+
+# docs/recipes/attachments-and-images.md
+
+# Images and file attachments
+
+Users attach spreadsheets, PDFs and screenshots; tools produce images worth
+looking at. [Chapter 19](../configuration/Chapter_19.md) documents every knob.
+This recipe is the setup Kaboo runs, and why each setting is there.
+
+## The setup
+
+```yaml
+attachments:
+  default: reference
+  tool: true
+  base_url: ${API_BASE_URL:-http://localhost:3000}
+  authorization: forwarded_props:runToken
+  content_url_template: /api/storage/download/{id}
+
+agents:
+  orchestrator: {}                       # manifest + fetch tool
+  chart_reviewer:
+    attachments: {inline: true}          # also sees images directly
+  formatter:
+    attachments: none                    # never needs the files
+```
+
+- **`default: reference`** gives every agent a manifest of what the user
+  attached and nothing heavier. A manifest line costs a few tokens; an inlined
+  PDF costs thousands on every turn it stays in history.
+- **`tool: true`** grants `list_references` and `fetch_attachment`, so an agent
+  pulls a file's content only when its task needs it.
+- **`base_url` + `authorization`** let the server fetch files from your own API
+  with the caller's token, taken from the run's `forwardedProps`. The token is
+  sent only to URLs under `base_url`; presigned and third-party URLs are
+  fetched without it.
+- **`content_url_template`** makes a file fetchable on *every* turn, not only
+  the turn it was attached on — the client sends the file's id in state, and
+  the template turns it into a URL.
+- **`inline: true`** only on the agent that must see pixels, on a model that
+  can. Everyone else works from the manifest.
+
+## Tools that return images
+
+A tool behind an MCP gateway can only answer in text, so return images as
+base64 inside the result's JSON under `attachments`. The library strips them
+out of the text and hands them to the model as image blocks of the same tool
+result
+([Chapter 19](../configuration/Chapter_19.md#media-a-tool-returns)):
+
+```json
+{
+  "summary": "3 problems in 2 of 11 widgets",
+  "attachments": [{"name": "Rows 1-7", "mime_type": "image/jpeg", "data": "<base64>"}]
+}
+```
+
+Kaboo uses this to close the loop on dashboards: after building one, the
+visualizer calls a verification tool that renders the dashboard in a headless
+browser and returns screenshots, and the agent fixes what it can see — a
+chart with no data, a title cut off — before it reports back. Agents that can
+see their output catch problems no schema check will.
+
+Keep images small and few: at most 8 per result are unpacked, each up to
+3.75 MB, and every one stays in the agent's history.
+
+## Custom kinds of reference
+
+Users can cite things that are not files — a table, a dashboard, a ticket.
+These arrive as references with a `kind` and an `id`, appear in the same
+manifest, and are resolved by your own tools (`get_dashboard(id)`), not by
+`fetch_attachment`. A data source cited this way is also what
+[tag-activated skills](skills.md#which-skills-an-agent-gets) match on.
+
+## Frontend
+
+kaboo-react mints the reference ids, sends files as multimodal message parts on
+the turn they are attached and as state on later turns, and renders the
+attachment chips
+([Chapter 19](../configuration/Chapter_19.md#frontend-wiring-kaboo-react)).
+
+# docs/recipes/chat-ui-activity.md
+
+# Activity a chat UI can show
+
+A multi-agent run can take minutes. Users trust it when they can see it
+working — which specialist is on the job, what it is doing right now, in
+words rather than function names. Two pieces of config produce that, and
+kaboo-react renders it.
+
+## What the client receives
+
+`create_agui_app` folds every agent's stream into **activity groups** and sends
+them alongside the chat reply: a snapshot first, then JSON Patches as they
+change (`activity_deltas`). Each group is one card in the UI:
+
+- **the agent's title**, and the task it was handed;
+- **its tool calls**, each with a readable label, arguments and result;
+- **its text**, its token usage, and any [structured output](structured-outputs.md);
+- **its children**, for agents it delegated to.
+
+The entry agent has no card: its stream *is* the chat reply.
+
+## Name the cards
+
+```yaml
+agents:
+  orchestrator:
+    model: default
+  sql_analyst:
+    stream:
+      title: Analyzing SQL data
+  sql_visualizer:
+    stream:
+      group: sql_visualization
+      title: Creating SQL visualizations
+```
+
+Titles are what a user reads, so write them as what the agent is *doing*,
+and in the user's language — "Analyzing SQL data", not "sql_analyst". An agent
+with no title gets one derived from its name, which is rarely the phrase you
+would choose. Agents that share a `group` render as one card, which suits a
+pair that works on the same thing in turn.
+
+## Label the tools
+
+```yaml
+mcp_clients:
+  web_research:
+    url: ${GATEWAY_URL}
+    transport: streamable-http
+    params:
+      tool_filters:
+        allowed: [web-research___search, web-research___read_pages]
+    tool_labels:
+      web-research___search: Searching the web
+      web-research___read_pages: Reading web pages
+```
+
+A tool call shows its label (`toolLabel`) instead of
+`web-research___read_pages`. Label every tool a user will see; an unlabelled
+one shows its raw name.
+
+## Keep it fast
+
+- **Leave `activity_deltas` on.** Sending a full tree on every change grows
+  with the run; on long multi-agent runs that is what fills a response
+  ([Serve on AgentCore in production](production-serving.md#stay-under-the-response-cap)).
+- **Do not route the chat reply through a group.** The entry agent's text is
+  the answer and streams as ordinary AG-UI text messages.
+
+## Test it
+
+`TurnResult.groups` holds the cards as the UI would, so a test can assert the
+tree a user would see — which agents worked, nested under whom
+([Testing](../testing.md#multi-agent-runs-and-activity)).
+
+# docs/recipes/cost-and-context.md
+
+# Cost and context control
+
+A data-analysis run can make dozens of model calls, each resending a long
+system prompt, a tool list and every earlier tool result. Most of the cost —
+and most context-window trouble — comes from that resending. Each setting
+below is documented in its chapter; this recipe is the combination Kaboo runs,
+in order of payoff.
+
+## 1. Cache what every call repeats
+
+```yaml
+models:
+  default:
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-5
+    params:
+      cache_prompt: default        # the system prompt
+      cache_tools: default         # the tool list
+      cache_config: {strategy: auto}   # the conversation up to the last message
+      max_tokens: 32000
+```
+
+Three of Bedrock's four cache points: a tool loop re-reads its system prompt,
+tools and earlier turns from the cache instead of paying for them again on
+every call. Loaded history keeps a cache point of its own
+([Multi-turn history](../workflows/multi-turn-history.md#loaded-memory-is-cached-on-bedrock)).
+Anything that rewrites the start of the prompt on every call — a timestamp at
+the top of a system prompt, say — defeats the cache; append such lines at the
+end instead.
+
+## 2. Think where it pays
+
+```yaml
+models:
+  default:
+    thinking: {effort: high, display: summarized}
+
+agents:
+  orchestrator:
+    thinking: {effort: medium}     # routing and synthesis
+  sql_analyst:
+    thinking: false                # writes code against a known schema
+```
+
+Set thinking on the model as a default, then turn it down per agent
+([Chapter 2](../configuration/Chapter_02.md#thinking)). Agents doing
+mechanical work against clear instructions rarely gain from it; the agent that
+plans and judges does. Adaptive thinking needs a model that supports it — a
+config written for Sonnet 5 sent to an older model fails at the provider.
+
+## 3. Clear old tool results
+
+```yaml
+agents:
+  sql_analyst:
+    context:
+      clear_tool_results:
+        trigger: 60000
+        keep_last: 3
+        keep_tools: [sql___get_schema]
+```
+
+Query results are the bulk of a long analysis, and an agent rarely needs the
+ninth-from-last one verbatim. Past the trigger, older results are replaced by a
+line naming the tool and the ids in the result, so the agent can fetch again
+what it actually needs ([Chapter 8](../configuration/Chapter_08.md#clearing-old-tool-results)).
+Keep reference results such as a schema.
+
+## 4. Bound what carries across turns
+
+```yaml
+agents:
+  orchestrator:
+    conversation_manager:
+      type: strands.agent:SlidingWindowConversationManager
+      params: {window_size: 80}
+    history:
+      group: orchestrator
+  sql_analyst:
+    history:
+      group: sql
+      keep: masked
+      summarize_over: 40000
+      summarize_model: utility
+```
+
+A sliding window bounds what an agent keeps within a run. History bounds what
+it carries into the next turn: masked history writes back each finished tool
+result as a one-line pointer the agent can call again, and `summarize_over`
+has a cheap model condense the oldest calls once the masked memory still grows
+too large
+([Multi-turn history](../workflows/multi-turn-history.md#keeping-a-masked-memory)).
+Agents that share a history `group` share one memory — useful when two agents
+take turns as the same voice.
+
+## 5. Keep toolboxes small
+
+Every tool's schema rides along on every call, and a model choosing among
+forty tools chooses worse than one choosing among eight. Kaboo refuses a
+workflow that gives an agent more than 20 tools, and splits each service's
+tools into narrow MCP clients — an `_explore` client for read-only discovery
+beside the full one — so an agent is granted exactly what its job needs
+([Call MCP tools as the signed-in user](user-identity-mcp.md#relay-the-token-on-every-mcp-call)).
+
+## 6. Put ceilings on runaway work
+
+- `MaxToolCallsGuard` caps tool calls per invocation, so a confused agent stops
+  instead of looping ([Chapter 6](../configuration/Chapter_06.md)).
+- [Refusing repeated failures](guard-hooks.md#refuse-a-call-that-has-already-failed-twice)
+  stops the commonest loop of all: the same broken call, again.
+- A small, deterministic model for utility work — naming a conversation,
+  classifying a request — costs a fraction of the analyst model:
+
+    ```yaml
+    models:
+      utility:
+        provider: bedrock
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        params: {temperature: 0, max_tokens: 200}
+    ```
+
+## Measure it
+
+Token usage per run arrives in the activity stream and in `TurnResult.usage_by_run`
+in tests; with [telemetry](../evaluation.md#enable-telemetry) on, every model
+call's tokens and latency land in your tracing backend. Measure before and
+after each change — caching in particular is easy to break silently.
+
+# docs/recipes/guard-hooks.md
+
+# Guard hooks for every agent
+
+Some failures have nothing to do with any particular workflow: a transcript
+the provider rejects, a model retrying the same broken call, a user whose
+sign-in expires mid-run. Hooks
+([Chapter 6](../configuration/Chapter_06.md)) are where to catch them, once,
+for every agent. These are the guards Kaboo puts on every agent of every
+workflow.
+
+## Answer every tool call before the model sees the transcript
+
+Bedrock rejects a turn unless every tool call in an assistant message is
+answered by a tool result in the very next message — and strands reacts to the
+rejection by stopping the run silently. Transcripts break this rule more often
+than you would think: a turn cut off mid-tools, an interrupted call replayed
+from the client, a message the host persisted twice. Bedrock is just as strict
+about two messages in a row from the same role, and about empty text blocks.
+
+Repairing the transcript before every model call turns each of those into a
+run that carries on:
+
+```python
+from typing import Any
+
+from strands.hooks import HookProvider, HookRegistry
+from strands.hooks.events import BeforeModelCallEvent
+
+UNANSWERED = (
+    "This call did not run: the turn that made it ended before it could. "
+    "Call it again if you still need its result."
+)
+
+
+def _blank(block: Any) -> bool:
+    return isinstance(block, dict) and set(block) == {"text"} and not str(block["text"]).strip()
+
+
+def alternating(messages: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    for message in messages:
+        content = [b for b in message.get("content") or [] if not _blank(b)]
+        if not content:
+            continue
+        if merged and merged[-1]["role"] == message["role"]:
+            merged[-1] = {**merged[-1], "content": merged[-1]["content"] + content}
+        else:
+            merged.append({**message, "content": content})
+    for message in merged:
+        if message["role"] == "user":
+            results = [b for b in message["content"] if "toolResult" in b]
+            message["content"] = results + [b for b in message["content"] if b not in results]
+    return merged
+
+
+def answered(messages: list[dict]) -> list[dict]:
+    messages = alternating(messages)
+    repaired: list[dict] = []
+    for index, message in enumerate(messages):
+        repaired.append(message)
+        if message["role"] != "assistant":
+            continue
+        asked = [b["toolUse"]["toolUseId"] for b in message["content"] if "toolUse" in b]
+        following = messages[index + 1] if index + 1 < len(messages) else None
+        replies = following if following and following["role"] == "user" else None
+        given = {
+            b["toolResult"]["toolUseId"]
+            for b in (replies or {}).get("content", [])
+            if "toolResult" in b
+        }
+        missing = [
+            {"toolResult": {"toolUseId": t, "status": "error", "content": [{"text": UNANSWERED}]}}
+            for t in asked
+            if t not in given
+        ]
+        if not missing:
+            continue
+        if replies is not None:
+            replies["content"] = missing + replies["content"]
+        else:
+            repaired.append({"role": "user", "content": missing})
+    return repaired
+
+
+class AnswerEveryToolUse(HookProvider):
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(BeforeModelCallEvent, self._answer)
+
+    def _answer(self, event: BeforeModelCallEvent) -> None:
+        event.agent.messages[:] = answered(event.agent.messages)
+
+
+broken = [
+    {"role": "user", "content": [{"text": "Run the report"}]},
+    {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "run", "input": {}}}]},
+    {"role": "user", "content": [{"text": "Any news?"}]},
+]
+fixed = answered(broken)
+assert fixed[2]["content"][0]["toolResult"]["toolUseId"] == "t1"
+```
+
+The inserted result is an error the model can read, so it calls the tool again
+if it still needs it.
+
+## Refuse a call that has already failed twice
+
+A model that gets an error back sometimes sends the identical call again, and
+again. Refusing the third identical attempt, with a message telling it to
+change course, breaks the loop without ending the run:
+
+```python
+import json
+from typing import Any
+
+from strands.hooks import HookProvider, HookRegistry
+from strands.hooks.events import AfterToolCallEvent, BeforeInvocationEvent, BeforeToolCallEvent
+
+REPEATED_FAILURE = (
+    "This exact call has already failed twice, so it was not sent again. Read the "
+    "earlier errors, then change the arguments or take a different approach."
+)
+
+
+def failed(result: Any) -> bool:
+    return isinstance(result, dict) and result.get("status") == "error"
+
+
+class RefuseRepeatedFailures(HookProvider):
+    def __init__(self, limit: int = 2) -> None:
+        self.limit = limit
+        self.failures: dict[str, int] = {}
+
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(BeforeInvocationEvent, lambda event: self.failures.clear())
+        registry.add_callback(BeforeToolCallEvent, self._refuse)
+        registry.add_callback(AfterToolCallEvent, self._count)
+
+    @staticmethod
+    def _key(tool_use: Any) -> str:
+        return json.dumps([tool_use.get("name"), tool_use.get("input")], sort_keys=True, default=str)
+
+    def _refuse(self, event: BeforeToolCallEvent) -> None:
+        if self.failures.get(self._key(event.tool_use), 0) >= self.limit:
+            event.cancel_tool = REPEATED_FAILURE
+
+    def _count(self, event: AfterToolCallEvent) -> None:
+        key = self._key(event.tool_use)
+        if failed(event.result):
+            self.failures[key] = self.failures.get(key, 0) + 1
+        else:
+            self.failures.pop(key, None)
+```
+
+The key is the tool name *and* its input: the same tool with different
+arguments is a new attempt, which is exactly what the message asks for. Ours
+also counts a result whose JSON body says `"success": false` or carries an
+`"error"`, since many MCP services report failure that way. The library's
+`MaxToolCallsGuard` is the coarser companion: a ceiling on tool calls per
+invocation, whatever they are.
+
+## Stop when the sign-in expires
+
+A run relaying the user's token ([Call MCP tools as the signed-in
+user](user-identity-mcp.md)) can outlive it, and then every tool call fails
+authorization. Check the token's expiry before each model call and each tool
+call, and answer with one clear message instead:
+
+```python
+import time
+from typing import Any
+
+from strands.hooks import HookProvider, HookRegistry
+from strands.hooks.events import BeforeModelCallEvent, BeforeToolCallEvent
+from strands.models import Model
+
+from kaboo_workflows import get_auth_context
+
+SIGNED_OUT = (
+    "Your sign-in expired while I was working, so I stopped here. Sign in again "
+    "and send your question once more; what I built so far is kept."
+)
+
+
+def signed_out() -> bool:
+    principal = get_auth_context()
+    expiry = principal.claims.get("exp") if principal else None
+    return isinstance(expiry, (int, float)) and time.time() >= expiry
+
+
+class SignedOutModel(Model):
+    def update_config(self, **model_config: Any) -> None:
+        pass
+
+    def get_config(self) -> Any:
+        return {}
+
+    def structured_output(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError
+
+    async def stream(self, *args: Any, **kwargs: Any) -> Any:
+        yield {"messageStart": {"role": "assistant"}}
+        yield {"contentBlockDelta": {"delta": {"text": SIGNED_OUT}}}
+        yield {"contentBlockStop": {}}
+        yield {"messageStop": {"stopReason": "end_turn"}}
+
+
+class StopOnExpiredSignIn(HookProvider):
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(BeforeModelCallEvent, self._answer_signed_out)
+        registry.add_callback(BeforeToolCallEvent, self._refuse_tool)
+
+    def _answer_signed_out(self, event: BeforeModelCallEvent) -> None:
+        if signed_out():
+            event.agent.model = SignedOutModel()
+
+    def _refuse_tool(self, event: BeforeToolCallEvent) -> None:
+        if signed_out():
+            event.cancel_tool = SIGNED_OUT
+
+
+assert not signed_out()
+```
+
+Swapping in a model that replies with the message makes it the agent's answer,
+so it reaches the chat like any other reply. An agent with an `output_schema`
+cannot answer in prose; on strands versions with `AfterToolsEvent`, ours
+cancels such an agent's invocation and ends its turn after the current tools
+instead.
+
+## Two small ones
+
+- **Today's date.** Models do not know what day it is. A
+  `BeforeInvocationEvent` hook that appends "Today's date is …" in the user's
+  time zone (`get_forwarded_props()["timezone"]`) to the system prompt fixes
+  every "last month" question.
+- **Model timing.** A `BeforeModelCallEvent` / `AfterModelCallEvent` pair that
+  logs each call's latency, time to first event and retry count with the run id
+  (`get_run_id()`) answers "why was that slow?" without a tracing backend.
+
+## Put them on every agent
+
+Either add them when composing the workflow, as Kaboo does
+([Compose a workflow per run](per-run-workflows.md)), or declare them once in
+the config and alias them:
+
+```yaml
+x-guards: &guards
+  - my_service.hooks:AnswerEveryToolUse
+  - my_service.hooks:RefuseRepeatedFailures
+  - my_service.hooks:StopOnExpiredSignIn
+
+agents:
+  analyst:
+    hooks: *guards
+  visualizer:
+    hooks: *guards
+```
+
+`x-` blocks exist only to hold anchors; the loader strips them
+([Chapter 4](../configuration/Chapter_04.md)).
+
+## Test them
+
+Each guard has a failure it exists for, so script the model into that failure
+and assert the run survived it — a broken transcript passed in as `messages`,
+the same failing call scripted three times
+([Testing](../testing.md#hooks-and-guards)).
+
+# docs/recipes/index.md
+
+# Recipes
+
+The configuration chapters say what every field does. These recipes show how
+the pieces fit together in a real service — each one is a pattern running in
+production in [Kaboo](https://gl-pgege.github.io/kaboo-docs/), written so you
+can lift it into your own project.
+
+| Recipe | Reach for it when |
+|--------|-------------------|
+| [Serve on AgentCore in production](production-serving.md) | You deploy behind AWS AgentCore Runtime, or any host with response caps and idle reaping |
+| [Compose a workflow per run](per-run-workflows.md) | One service runs many workflows — per tenant, per project, per admin-authored row |
+| [Skills](skills.md) | Agents need reusable instructions, loaded only when a task calls for them |
+| [Call MCP tools as the signed-in user](user-identity-mcp.md) | Tools behind a gateway must act with the caller's permissions |
+| [Tools that need run context](tools-with-run-context.md) | A tool keeps state per conversation or must act once per turn |
+| [Guard hooks for every agent](guard-hooks.md) | Runs should survive malformed transcripts, retry loops and expired sign-ins |
+| [Ask the user, and request inputs](asking-the-user.md) | An agent needs an answer, an approval, a file or a data source mid-run |
+| [Structured outputs a UI can render](structured-outputs.md) | An agent's result should arrive as typed data for a card, not prose |
+| [Images and file attachments](attachments-and-images.md) | Users attach files, or tools return images |
+| [Activity a chat UI can show](chat-ui-activity.md) | Users should see which agent is working on what, in words |
+| [Cost and context control](cost-and-context.md) | Long, tool-heavy runs cost too much or outgrow the context window |
+
+[Testing your workflows](../testing.md) covers proving any of these with a
+scripted model, and [Best practices](../best-practices.md) collects the rules
+of thumb behind them.
+
+# docs/recipes/per-run-workflows.md
+
+# Compose a workflow per run
+
+One service can run a different workflow on every request: a workflow per
+tenant, per project, per row an admin edits in a UI. Nothing is restarted and
+nothing is read from disk at run time. The host stores workflows, composes the
+final YAML for each run, and submits it with the run; the agent service layers
+it over its own base config
+([Chapter 17](../configuration/Chapter_17.md#when-the-config-itself-is-per-request),
+`examples/21_runtime_configs/`).
+
+## Split the config in two
+
+**The base config** lives with the service and holds what every workflow
+shares, including anything secret:
+
+```yaml
+# config.yaml — the service's own file
+models:
+  analyst-model:
+    provider: bedrock
+    model_id: ${BEDROCK_MODEL_ID:-us.anthropic.claude-sonnet-5}
+    params: {region_name: "${BEDROCK_REGION:-us-east-1}"}
+
+mcp_clients:
+  sql:
+    url: ${GATEWAY_URL}
+    transport: streamable-http
+    auth: {type: relay}
+    params:
+      tool_filters: {allowed: [sql___run_query, sql___get_schema]}
+
+attachments:
+  default: reference
+
+agents:
+  assistant:                       # the fallback when a run submits nothing
+    model: analyst-model
+    system_prompt: You are a helpful data assistant.
+entry: assistant
+```
+
+**A stored workflow** holds only `agents`, `orchestrations` and `entry`, and
+refers to models and MCP clients by name:
+
+```yaml
+agents:
+  analyst:
+    model: analyst-model
+    mcp: [sql]
+    system_prompt: You answer questions from the sales database.
+entry: analyst
+```
+
+The overlay replaces the base's `agents`, `orchestrations` and `entry`, adds to
+its `models` and `mcp_clients`, and may not declare `mcp_servers` at all — a run
+may not launch a process. Stored workflows that only *name* the base's models
+and clients never carry a URL or a credential.
+
+## Compose, then submit
+
+Composition is plain dictionary work on the host. Ours applies the user's
+choices (thinking level, model override), drops agents for data sources the run
+does not have, inlines [skills](skills.md), adds the
+[hooks every agent needs](guard-hooks.md), stamps today's date, and fills in
+IDs such as the current project:
+
+```python
+import yaml
+
+from kaboo_workflows import load_session_config, parse_config_sources
+
+EVERY_AGENT_HOOKS = ["my_service.hooks:AnswerEveryToolUse"]
+
+
+def compose(stored: str, *, project_id: str) -> str:
+    doc = yaml.safe_load(stored)
+    for agent in doc.get("agents", {}).values():
+        agent["hooks"] = [*agent.get("hooks", []), *EVERY_AGENT_HOOKS]
+    text = yaml.safe_dump(doc, sort_keys=False)
+    text = text.replace("{{project_id}}", project_id)
+    return text.replace("${", "$${")
+
+
+STORED = """
+agents:
+  analyst:
+    model: analyst-model
+    system_prompt: |
+      You answer questions about project {{project_id}}.
+      Quote templates such as ${name} literally.
+entry: analyst
+"""
+
+BASE = parse_config_sources("""
+models:
+  analyst-model: {provider: bedrock, model_id: us.anthropic.claude-sonnet-5}
+agents:
+  assistant: {model: analyst-model, system_prompt: Fallback.}
+entry: assistant
+""")
+
+composed = compose(STORED, project_id="p-42")
+config = load_session_config(BASE, composed)
+
+prompt = config.agents["analyst"].system_prompt
+assert "project p-42" in prompt
+assert "${name}" in prompt
+assert config.agents["analyst"].hooks == EVERY_AGENT_HOOKS
+```
+
+The run then carries the composed text in `forwardedProps`, under the key the
+service was started with (`create_agui_app(session_config_key="workflow_config")`):
+
+```json
+{
+  "threadId": "t-1",
+  "runId": "r-1",
+  "messages": [{"id": "m-1", "role": "user", "content": "How did Q3 go?"}],
+  "forwardedProps": {"workflow_config": "agents:\n  analyst: ..."}
+}
+```
+
+## Escape interpolation in anything authored outside the repository
+
+A submitted workflow is interpolated against **the service's environment**, on
+purpose, so an admin-authored config can say `${API_KEY}` without the secret
+living in the database. The flip side: any `${…}` in user-authored text — a
+prompt that quotes template syntax, or one written to fish for
+`${AWS_SECRET_ACCESS_KEY}` — resolves against the server too.
+
+`$${` is the escape for a literal `${`. We escape every `${` in the composed
+workflow, which means stored workflows never read the environment and
+everything secret stays in the base config. If your workflow authors are
+trusted and need environment values, escape only the fields they write freely,
+such as prompts.
+
+## Keep it safe and testable
+
+- **Validate on save**, with the same loader a run uses
+  ([production recipe](production-serving.md#validate-a-workflow-before-saving-it)),
+  so a broken workflow is an error in the editor rather than a failed run.
+- **Pass `allowed_mcp_hosts`** to `create_agui_app` and `load_session_config`
+  if a workflow can declare its own MCP clients.
+- **Refuse leftovers.** After filling placeholders, fail composition if any
+  remain; a prompt that still says `{{dashboard_id}}` produces confident
+  nonsense.
+- **Test the composed text**, not the stored one:
+  `Pipeline(base, session_config_key="workflow_config")` with the composer's
+  output in `forwarded_props` runs it end to end
+  ([Testing](../testing.md#runtime-composed-workflows)).
+
+# docs/recipes/production-serving.md
+
+# Serve on AgentCore in production
+
+`create_agui_app` already speaks AgentCore Runtime's HTTP contract: AG-UI on
+`POST /invocations`, a health check on `GET /ping`. This recipe covers what a
+production deployment adds on top — the settings worth turning on, and four
+behaviours of the host that the defaults do not account for.
+
+## The app
+
+```{.python notest}
+import os
+from pathlib import Path
+
+import strands.models.bedrock as bedrock
+
+from kaboo_workflows.adapters import create_agui_app
+
+from my_service.auth import verify_run_token
+
+bedrock.DEFAULT_READ_TIMEOUT = int(os.environ.get("BEDROCK_READ_TIMEOUT", "300"))
+
+app = create_agui_app(
+    Path(__file__).parent / "config.yaml",
+    session_config_key="workflow_config",
+    allowed_mcp_hosts=["gateway.internal.example.com"],
+    auth=verify_run_token,
+    ping_path=None,
+    activity_deltas=True,
+    response_budget=CONTINUATION_BUDGET,
+)
+```
+
+- **`session_config_key`** lets each run bring its own workflow, layered over
+  the base config — see [Compose a workflow per run](per-run-workflows.md).
+- **`allowed_mcp_hosts`** bounds what a submitted workflow's MCP clients may
+  connect to. Set it whenever workflows are authored anywhere but your
+  repository: an arbitrary URL needs no code to exfiltrate data.
+- **`auth`** verifies every request and binds the caller, so MCP tools can run
+  as them — see [Call MCP tools as the signed-in user](user-identity-mcp.md).
+- **`ping_path=None`** because the packaged health check always answers
+  healthy, and AgentCore needs more than that (below).
+- **`activity_deltas`** sends activity as JSON Patches after the first
+  snapshot. Full snapshots on every change are what fill a response on long,
+  multi-agent runs.
+- **The Bedrock read timeout** defaults to strands' value, which a long
+  thinking turn can exceed. Raise it for the slowest call you expect.
+
+AgentCore Runtime expects the container on port 8080.
+
+## Report busy while a run is open
+
+AgentCore decides a session is idle from its `/ping` status, not from whether a
+request is still on the wire. A session that only ever answers `Healthy` can be
+reaped mid-run, which reaches the user as a stream that ends with no terminal
+event. Answer `HealthyBusy` while any invocation is open:
+
+```{.python notest}
+class RunCounter:
+    def __init__(self) -> None:
+        self.active = 0
+
+    @property
+    def status(self) -> str:
+        return "HealthyBusy" if self.active else "Healthy"
+
+
+runs = RunCounter()
+
+
+@app.get("/ping")
+def ping() -> dict[str, str]:
+    return {"status": runs.status}
+```
+
+Increment `runs.active` when a `POST /invocations` arrives and decrement it when
+the response ends — in the ASGI middleware below, which sees both.
+
+## Stay under the response cap
+
+AgentCore closes the socket once a response reaches 100 MiB, with no error of
+its own. The run dies without a terminal event, and CopilotKit reports
+whichever tool call was open as failed — the user is told a healthy tool broke.
+Two budgets keep that from happening:
+
+1. **`response_budget`** pauses the run at the next tool boundary once the
+   response has carried that many bytes, and continues the same turn in a fresh
+   response. The user loses nothing. Clients resolve the pause on their own; it
+   is an interrupt marked `reason: "continuation"`
+   ([Human-in-the-loop](../workflows/human-in-the-loop.md)).
+2. **A hard backstop** for a response that fills without ever reaching a tool
+   call: wrap the ASGI `send` so it forwards whole SSE frames, and once the
+   budget is spent, close the stream with a real `RUN_FINISHED` and a short
+   message saying the answer was cut off. A truncated answer with a reason
+   beats a failure with none.
+
+Give the pause room to fire first:
+
+```{.python notest}
+AGENTCORE_RESPONSE_CAP = 104_857_600
+HARD_BUDGET = AGENTCORE_RESPONSE_CAP - 10 * 1024 * 1024
+CONTINUATION_BUDGET = HARD_BUDGET * 3 // 4
+```
+
+The margin under the cap leaves room for the closing events and for
+chunked-transfer framing, which counts against the cap but is not yours to
+measure. When cutting the stream, split only on the blank line between SSE
+frames — cutting an arbitrary chunk leaves the client half an event.
+
+## Non-streaming calls over `/invocations`
+
+AgentCore Runtime forwards only `POST /invocations`. Anything else your service
+answers — validating a workflow before an admin saves it, running a workflow
+once for a background job — has to ride that path too. Dispatch on a field in
+the body, in a **pure ASGI** middleware, and replay the body downstream for
+ordinary AG-UI runs:
+
+```{.python notest}
+class NonStreamingOverInvocations:
+    def __init__(self, app, runs: RunCounter) -> None:
+        self.app = app
+        self.runs = runs
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope["path"] != "/invocations" or scope["method"] != "POST":
+            await self.app(scope, receive, send)
+            return
+        self.runs.active += 1
+        try:
+            body = await read_body(receive)
+            if b'"my_validate"' in body[:4096]:
+                await answer_validation(body, scope, send)
+                return
+            await self.app(scope, replay(body, receive), budgeted(send, body))
+        finally:
+            self.runs.active -= 1
+
+
+app.add_middleware(NonStreamingOverInvocations, runs=runs)
+```
+
+Starlette's `BaseHTTPMiddleware` will not do here: once it has consumed the
+body, its disconnect listener receives the replayed `http.request` and breaks
+the downstream SSE stream. Authenticate the non-streaming branches with the
+same verifier the AG-UI path uses.
+
+## Validate a workflow before saving it
+
+`load_session_config` runs the same overlay, schema and reference checks a run
+would, without building anything:
+
+```{.python notest}
+from kaboo_workflows import load_session_config, parse_config_sources
+
+BASE_RAW = parse_config_sources("config.yaml")
+
+
+def validate(workflow_yaml: str) -> dict:
+    try:
+        config = load_session_config(
+            BASE_RAW, workflow_yaml, allowed_mcp_hosts=["gateway.internal.example.com"]
+        )
+    except Exception as exc:
+        return {"valid": False, "error": str(exc)}
+    return {"valid": True, "entry": config.entry, "agents": sorted(config.agents)}
+```
+
+The error names the bad reference and lists what is available, which makes it
+a good message to show an admin. Add your own rules after it. Ours refuse an
+agent holding more than 20 tools, a tool granted twice by overlapping MCP
+clients, and a prompt that names a tool the agent is not granted.
+
+## Run a workflow once, without streaming
+
+For a background job, build the run the same way a streamed run is built and
+answer with the final text:
+
+```{.python notest}
+from dataclasses import replace
+
+from kaboo_workflows import (
+    load_session,
+    load_session_config,
+    resolve_infra,
+    resolve_run_clients,
+    set_auth_context,
+    validate_raw_config,
+)
+
+BASE_INFRA = resolve_infra(validate_raw_config(BASE_RAW))
+
+
+async def run_once(workflow_yaml: str, prompt: str, principal) -> str:
+    config = load_session_config(BASE_RAW, workflow_yaml, allowed_mcp_hosts=ALLOWED)
+    set_auth_context(principal)
+    clients = resolve_run_clients(config, BASE_INFRA)
+    clients.start(pin_clients=False)
+    try:
+        resolved = load_session(
+            config, replace(BASE_INFRA, clients=clients.clients, mcp_lifecycle=clients)
+        )
+        result = await resolved.entry.invoke_async(prompt)
+        return str(result).strip()
+    finally:
+        clients.stop()
+```
+
+`set_auth_context` comes first so relayed MCP calls go out as the caller, and
+the run's clients stop with the call, as they do with a streamed run.
+
+## Related
+
+- [Chapter 17: when the config itself is per-request](../configuration/Chapter_17.md#when-the-config-itself-is-per-request)
+- [Evaluation: enable telemetry](../evaluation.md#enable-telemetry) for traces
+  in Langfuse or any OTLP backend
+- `examples/agentcore/` for inbound auth styles on AgentCore
+
+# docs/recipes/skills.md
+
+# Skills
+
+A skill is a named piece of instructions — how to write SQL against this
+warehouse, how to lay out a dashboard, how to brief a banker on a customer —
+that agents use only when a task calls for it. Skills keep system prompts short
+and let one well-written instruction serve every agent that needs it.
+
+kaboo-workflows has no `skills:` field of its own. Skills are composed into the
+workflow on the host, before the run is submitted — an application of
+[Compose a workflow per run](per-run-workflows.md). This recipe is the pattern
+Kaboo runs: a skill catalogue in a database, three ways to load a skill, and a
+single tool agents call to load one.
+
+## Three loading strategies
+
+| Strategy | What happens | Use it for |
+|----------|--------------|------------|
+| `full` | Inlined into the agent's system prompt as top-priority rules | Short rules that must always apply: investigation discipline, house style |
+| `catalog` | Listed by name and when-to-use; the agent loads it with a tool call | Guides only some tasks need: a tool manual, a web research protocol |
+| `rag` | Listed like a catalog skill; the agent loads matching sections by query | Long references: an SDK manual, a widget reference |
+
+Every agent's prompt ends with the skills it has *not* loaded, so an agent can
+always discover the one that fits — and most skills cost nothing until used.
+
+## Which skills an agent gets
+
+- **Bound** in the stored workflow, with a host-side key the composer removes
+  before submitting:
+
+    ```yaml
+    agents:
+      sql_analyst:
+        skills: [sql-guide, efficiency-discipline]
+        mcp: [sql, skills]
+    ```
+
+- **Activated by tags.** A skill tagged with a data source's name or kind is
+  loaded whenever the run has that data source attached — a skill tagged
+  `offers-redshift` switches on for every run that attaches the connection
+  named `offers-redshift`. We scope tag-activated skills to the agents that
+  work with that kind of data, and the orchestrator always qualifies.
+- **Gated by tools.** A skill that only makes sense with certain MCP clients
+  (`requires_clients`) is only offered to agents that hold one of them.
+
+## The composer
+
+```python
+from dataclasses import dataclass, field
+
+CATALOG_HEADER = (
+    "\n\n<available_skills>\n"
+    "These skills are NOT loaded yet. Before starting any task, check whether one\n"
+    "of them covers it, and call `load_skill` with its name if so. Do the work only\n"
+    "after the relevant skill is loaded. If a skill you loaded earlier is no longer\n"
+    "visible in your context (long runs compress old messages), load it again.\n\n"
+)
+
+
+@dataclass
+class Skill:
+    name: str
+    description: str
+    content: str
+    strategy: str = "full"
+    rules: str | None = None
+    tags: list[str] = field(default_factory=list)
+    requires_clients: list[str] = field(default_factory=list)
+
+
+def compose_skills(doc: dict, skills: dict[str, Skill], active_tags: set[str]) -> None:
+    for agent in doc.get("agents", {}).values():
+        bound = agent.pop("skills", [])
+        held = set(agent.get("mcp", []))
+
+        def usable(skill: Skill) -> bool:
+            return not skill.requires_clients or bool(held & set(skill.requires_clients))
+
+        names = [name for name in dict.fromkeys(bound) if name in skills]
+        names += [
+            s.name
+            for s in skills.values()
+            if s.name not in names and set(s.tags) & active_tags and usable(s)
+        ]
+
+        full = [skills[n] for n in names if skills[n].strategy == "full"]
+        if full:
+            rules = "\n\n".join(f"### {s.name}\n{s.content}" for s in full)
+            agent["system_prompt"] = (
+                f'<rules priority="1">\n{rules}\n</rules>\n\n'
+                f"<agent_instructions>\n{agent['system_prompt']}\n</agent_instructions>"
+            )
+
+        catalog = [
+            s
+            for s in skills.values()
+            if (s.name in names and s.strategy != "full") or (s.name not in names and usable(s))
+        ]
+        if catalog:
+            lines = "\n".join(f"- **{s.name}**: {s.rules or s.description}" for s in catalog)
+            agent["system_prompt"] += CATALOG_HEADER + lines + "\n</available_skills>"
+
+
+SKILLS = {
+    "efficiency-discipline": Skill(
+        "efficiency-discipline", "Avoid redundant work", "Never repeat a tool call."
+    ),
+    "sql-guide": Skill(
+        "sql-guide", "SQL patterns", "...", strategy="rag", rules="Use when writing SQL"
+    ),
+    "nbo-analysis": Skill(
+        "nbo-analysis", "Offer revenue analysis", "Quantify every claim.", tags=["offers"]
+    ),
+}
+
+doc = {
+    "agents": {
+        "sql_analyst": {
+            "system_prompt": "You analyse data.",
+            "skills": ["efficiency-discipline"],
+            "mcp": ["sql", "skills"],
+        }
+    }
+}
+compose_skills(doc, SKILLS, active_tags={"offers"})
+
+prompt = doc["agents"]["sql_analyst"]["system_prompt"]
+assert "skills" not in doc["agents"]["sql_analyst"]
+assert "### efficiency-discipline" in prompt and "### nbo-analysis" in prompt
+assert "- **sql-guide**: Use when writing SQL" in prompt
+```
+
+The wording of the two blocks matters. Inlined rules are framed as overriding
+the agent's own instructions, so a house rule beats a workflow author's
+shortcut. The catalog tells the agent to check *before* starting, to load
+*before* doing the work, and to reload a skill that long-run compression has
+pushed out of its context — without that last line, agents carry on from a
+skill they can no longer see.
+
+## The load tool
+
+Agents load `catalog` and `rag` skills with one tool. Ours is a skills service
+behind the MCP gateway, so every agent reaches it as `skills___load_skill` by
+holding the `skills` client. A large reference skill answers a bare call with
+its table of contents and asks for a query; a call with a query gets the
+matching sections from a vector and keyword search.
+
+A project without a skills service can start with a local tool over the same
+catalogue:
+
+```python
+from strands import tool
+
+LIBRARY = {
+    "sql-guide": "## Joins\nPrefer explicit JOIN ... ON.\n\n## Windows\nUse ROW_NUMBER() for top-N.",
+}
+
+
+@tool
+def load_skill(name: str, query: str | None = None) -> str:
+    """Load a skill's instructions by name.
+
+    Args:
+        name: The skill to load, as listed under available skills.
+        query: For a long reference skill, the topic to load sections about.
+    """
+    content = LIBRARY.get(name)
+    if content is None:
+        return f"No skill named {name!r}. Pass one of: {', '.join(sorted(LIBRARY))}."
+    if query is None:
+        return content
+    sections = [s for s in content.split("\n\n") if query.lower() in s.lower()]
+    return "\n\n".join(sections) or f"No section of {name!r} mentions {query!r}."
+
+
+assert "ROW_NUMBER" in load_skill("sql-guide", "windows")
+```
+
+## Prove it
+
+Feed the composer's output to a `Pipeline` with a scripted model, and assert on
+the system prompt the model received
+([Testing](../testing.md#asserting-what-the-model-was-sent)): the full skill is
+inlined, the catalog lists the rest, and nothing named under `skills:` reached
+the library.
+
+# docs/recipes/structured-outputs.md
+
+# Structured outputs a UI can render
+
+Some results are better as a card than a paragraph: the dashboard an agent
+built, an order's status, a list of findings with their sources. Give that
+agent an `output_schema` and its result arrives as typed data alongside the
+chat, with the schema's name telling the UI how to draw it.
+
+## Declare the schema
+
+```python
+from pydantic import BaseModel, Field
+
+
+class DashboardSnippet(BaseModel):
+    """Dashboard produced or updated by this agent, presented as a live card."""
+
+    dashboard_id: str | None = Field(
+        default=None,
+        description="ID of the dashboard created or updated in this run. Null if none was produced.",
+    )
+    title: str | None = Field(default=None, description="Dashboard title.")
+    summary: str | None = Field(
+        default=None, description="One sentence describing what the dashboard shows."
+    )
+
+
+assert DashboardSnippet().dashboard_id is None
+```
+
+```yaml
+agents:
+  visualizer:
+    output_schema: ./schemas.py:DashboardSnippet
+    stream: {title: "Creating visualizations"}
+```
+
+The model reads the class docstring and every field description, so write them
+for the model: say what goes in each field and what to do when there is
+nothing to report. Optional fields with a `None` default let an agent that
+produced nothing say so, instead of inventing an ID to satisfy the schema.
+
+## What the client receives
+
+The agent's activity group carries two extra fields once it finishes:
+
+| Field | Value |
+|-------|-------|
+| `structuredOutput` | The filled schema, as JSON |
+| `outputSchemaName` | The class name, here `DashboardSnippet` |
+
+Register one renderer per schema name in the UI; a group with no renderer for
+its schema falls back to plain text. Keep structured output for the agents
+whose result *is* a card — usually a specialist the orchestrator delegates to —
+and let the orchestrator answer the user in prose.
+
+## Test it
+
+A scripted model produces the structured output by calling a tool named after
+the schema class:
+
+```python
+import asyncio
+import tempfile
+import textwrap
+from pathlib import Path
+
+from kaboo_workflows.testing import Pipeline
+
+project = Path(tempfile.mkdtemp())
+(project / "schemas.py").write_text(
+    textwrap.dedent(
+        '''
+        from pydantic import BaseModel, Field
+
+        class OrderCard(BaseModel):
+            """An order's status, shown as a card."""
+
+            order_id: str | None = Field(default=None, description="The order's number.")
+            status: str | None = Field(default=None, description="Where the order is now.")
+        '''
+    )
+)
+(project / "config.yaml").write_text(
+    textwrap.dedent(
+        """
+        x-model: &scripted kaboo_workflows.testing:ScriptedModel
+        agents:
+          assistant:
+            model:
+              provider: *scripted
+              model_id: scripted
+              params:
+                script: [{tool: tracker, input: "order 42"}]
+                final_text: "Order 42 has shipped."
+          tracker:
+            output_schema: ./schemas.py:OrderCard
+            model:
+              provider: *scripted
+              model_id: scripted
+              params:
+                script: [{tool: OrderCard, input: {order_id: "42", status: "shipped"}}]
+        orchestrations:
+          team:
+            mode: delegate
+            entry_name: assistant
+            connections:
+              - {agent: tracker, description: "Tracks orders"}
+        entry: team
+        """
+    )
+)
+
+
+async def main() -> None:
+    pipe = Pipeline(str(project / "config.yaml"))
+    result = await pipe.turn("Where is order 42?")
+    pipe.close()
+
+    card = result.group("assistant.tracker")
+    assert card["outputSchemaName"] == "OrderCard"
+    assert card["structuredOutput"] == {"order_id": "42", "status": "shipped"}
+
+
+asyncio.run(main())
+```
+
+## Watch for
+
+- **Hooks that end a turn early** must respect the schema: an agent with an
+  `output_schema` cannot answer in free text. See the structured variant of
+  [`StopOnExpiredSignIn`](guard-hooks.md#stop-when-the-sign-in-expires).
+- **Relative paths** in `output_schema` resolve from the config file's
+  directory, like tool paths; in a workflow submitted per run, which has no
+  file, they resolve from the service's working directory — prefer a module
+  path (`my_service.schemas:DashboardSnippet`) there.
+
+# docs/recipes/tools-with-run-context.md
+
+# Tools that need run context
+
+A tool is a plain function, but some need to know where they are running:
+which conversation, which request, which user. The library binds that context
+per run, and these functions read it from inside any tool or hook:
+
+| Function | Returns | Use it for |
+|----------|---------|------------|
+| `get_thread_id()` | The conversation's id | State that should outlive one request, such as values an agent stores for later turns |
+| `get_run_id()` | This request's id; a resume is a new request | Logs, metrics, per-request scratch space |
+| `get_turn_id()` | The logical turn's id, the same across an interrupt and its resume | Keys for side effects that must happen once per turn |
+| `get_forwarded_props()` | What the client forwarded with the run | Client settings such as the user's time zone |
+| `get_auth_context()` | The run's `Principal`, or `None` | The caller's identity and token claims |
+
+All of them return `None` (or an empty dict) outside a run, so a tool still
+works when you call it directly in a unit test.
+
+## Share values between agents in one run
+
+Agents in a multi-agent run often need to hand each other something larger
+than a delegation message: the findings one analyst produced, the table
+another selected. A small run-scoped store does it, keyed by thread and run:
+
+```python
+import json
+from collections import OrderedDict
+from threading import Lock
+
+from strands import tool
+
+from kaboo_workflows import get_run_id, get_thread_id
+
+_MAX_RUNS = 256
+_stores: OrderedDict[str, dict[str, str]] = OrderedDict()
+_lock = Lock()
+
+
+def _store() -> dict[str, str]:
+    key = f"{get_thread_id()}:{get_run_id()}"
+    with _lock:
+        store = _stores.setdefault(key, {})
+        _stores.move_to_end(key)
+        while len(_stores) > _MAX_RUNS:
+            _stores.popitem(last=False)
+        return store
+
+
+@tool
+def set_workflow_variable(name: str, value: str) -> dict:
+    """Store a named value for other agents in this run to read.
+
+    Args:
+        name: The variable's name, such as "sql_findings".
+        value: The value; serialize structured data as JSON.
+    """
+    _store()[name] = value
+    return {"status": "ok", "name": name}
+
+
+@tool
+def get_workflow_variable(name: str) -> dict:
+    """Read a value an earlier agent in this run stored.
+
+    Args:
+        name: The variable's name.
+    """
+    store = _store()
+    if name not in store:
+        return {"status": "not_found", "name": name, "available": sorted(store)}
+    return {"status": "ok", "name": name, "value": store[name]}
+
+
+set_workflow_variable("selected_table", json.dumps({"schema": "sales", "table": "orders"}))
+assert get_workflow_variable("selected_table")["status"] == "ok"
+```
+
+Three details carry the weight:
+
+- **The store is bounded.** One process serves many runs; an unbounded
+  module-level dict is a slow memory leak.
+- **A miss lists what is available.** The model recovers from a wrong name in
+  one step instead of guessing.
+- **Values are strings.** Asking the model for JSON keeps the tool schema
+  simple and the contents inspectable.
+
+A process-local store suits a single process per session, as on AgentCore
+Runtime. Behind a load balancer, keep the same tool interface over Redis or a
+database.
+
+## Do a side effect once per turn
+
+A run that pauses for approval and resumes is two requests, so the run id
+changes between them. Key anything that must not happen twice on the turn id:
+
+```python
+from strands import tool
+
+from kaboo_workflows import get_thread_id, get_turn_id
+
+_sent: set[tuple[str | None, str | None, str]] = set()
+
+
+@tool
+def send_summary(recipient: str) -> str:
+    """Email the conversation's summary to a recipient.
+
+    Args:
+        recipient: The email address to send to.
+    """
+    key = (get_thread_id(), get_turn_id(), recipient)
+    if key in _sent:
+        return f"Already sent to {recipient} this turn."
+    _sent.add(key)
+    return f"Sent to {recipient}."
+
+
+assert send_summary("ops@example.com") == "Sent to ops@example.com."
+assert send_summary("ops@example.com").startswith("Already sent")
+```
+
+## Read what the client forwarded, and who is asking
+
+```python
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from strands import tool
+
+from kaboo_workflows import get_auth_context, get_forwarded_props
+
+
+@tool
+def today() -> str:
+    """Return today's date in the user's time zone."""
+    zone = get_forwarded_props().get("timezone")
+    try:
+        tz = ZoneInfo(zone) if isinstance(zone, str) and zone else None
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = None
+    return datetime.now(tz).date().isoformat()
+
+
+@tool
+def whoami() -> str:
+    """Return the signed-in user's name."""
+    principal = get_auth_context()
+    return principal.claims.get("name", "unknown") if principal else "anonymous"
+
+
+assert whoami() == "anonymous"
+```
+
+Treat forwarded props as user input: they come from the client, so validate
+them, as `today` does with the time zone. Identity comes only from
+`get_auth_context()`, which the server's verifier set
+([Call MCP tools as the signed-in user](user-identity-mcp.md)).
+
+## Wire them in
+
+Reference tools from the config by file or module:
+
+```yaml
+agents:
+  analyst:
+    tools:
+      - ./tools/context_kv.py:set_workflow_variable
+      - ./tools/context_kv.py:get_workflow_variable
+```
+
+Relative paths resolve from the config file's directory.
+
+# docs/recipes/user-identity-mcp.md
+
+# Call MCP tools as the signed-in user
+
+When an agent's tools read a database or change a dashboard, they should do so
+with the permissions of the person who asked — not a service account that can
+see everything. The chain has three links: verify the caller when the run
+arrives, bind them to the run, and relay their token on every MCP call.
+
+```text
+browser ──token──► host ──forwardedProps.runToken──► agent service
+                                                       │ auth= verifier → Principal
+                                                       ▼
+                                   MCP client (auth: relay) ──token──► gateway ──► service
+```
+
+## Verify the caller when the run arrives
+
+`create_agui_app(auth=...)` takes an async function that receives each
+`/invocations` request and returns a `Principal` — or raises
+`HTTPException(401)` to refuse it. Ours reads the token the host stamps into
+`forwardedProps.runToken` and verifies it against the identity provider's
+JWKS:
+
+```{.python notest}
+import os
+
+import jwt
+from fastapi import HTTPException, Request
+
+from kaboo_workflows import Principal
+
+JWKS = jwt.PyJWKClient(os.environ["OIDC_JWKS_URI"], cache_keys=True)
+
+
+async def verify_run_token(request: Request) -> Principal | None:
+    body = await request.json()
+    token = (body.get("forwardedProps") or {}).get("runToken")
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing forwardedProps.runToken")
+    try:
+        key = JWKS.get_signing_key_from_jwt(token)
+        claims = jwt.decode(
+            token,
+            key.key,
+            algorithms=["RS256"],
+            issuer=os.environ.get("OIDC_ISSUER"),
+            options={"verify_aud": False},
+        )
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {exc}") from exc
+    return Principal(token=token, claims=claims)
+```
+
+The token travels in the body rather than a header because the host — a
+CopilotKit runtime, a backend — is what calls the agent service, and it may
+run work on the user's behalf with a token it obtained itself. Audience checks
+belong at the services that finally receive the relayed token; which audience
+a token carries depends on the gateway in between.
+
+## Relay the token on every MCP call
+
+`auth: relay` sends the bound principal's token with every request the MCP
+client makes ([Chapter 9](../configuration/Chapter_09.md#outbound-auth-the-auth-field)).
+Behind a gateway with one target per service, give each target its own client
+with an exact tool allow-list, and anchor the auth block once:
+
+```yaml
+mcp_clients:
+  dashboard:
+    url: ${GATEWAY_URL}
+    transport: streamable-http
+    auth: &relay_auth
+      type: relay
+      params:
+        header: [Authorization, x-run-token]
+        context_headers:
+          x-run-id: run_id
+          x-timezone: forwarded_props.timezone
+    params:
+      tool_filters:
+        allowed: [dashboard___get_dashboard, dashboard___update_widgets]
+    tool_labels:
+      dashboard___update_widgets: Updating the dashboard
+    transport_options:
+      terminate_on_close: false
+      timeout: {read: 840}
+
+  sql:
+    url: ${GATEWAY_URL}
+    transport: streamable-http
+    auth: *relay_auth
+    params:
+      tool_filters:
+        allowed: [sql___run_query, sql___get_schema]
+```
+
+- **Two headers** because a managed AgentCore Gateway authenticates the caller
+  on `Authorization` and then replaces it with its own credential for the
+  target. The second, allowlisted header is the one the service reads.
+- **`context_headers`** tell the services which run a call belongs to, and
+  pass along anything the client forwarded, such as the user's time zone.
+- **`tool_filters.allowed`** names are exact matches, not globs. Narrow clients
+  (a read-only `sql_explore` beside a full `sql`) let you grant an agent only
+  what its job needs.
+- **`terminate_on_close: false`** and a long read timeout suit gateways that
+  hold long tool calls open.
+
+## Only relay on clients built per run
+
+A relayed token is per-request, so the client carrying it must be too. With
+`session_config_key` set, `create_agui_app` builds a run's MCP clients for that
+run and closes them when it ends — the token one run relays can never reach
+another user's run. A process serving one fixed config shares its clients;
+relay is only safe there when the process serves a single user, as an AgentCore
+Runtime microVM does per session (`examples/agentcore/` shows both shapes).
+`m2m` and `static` strategies carry no per-user identity and are safe on a
+shared client anywhere.
+
+## When there is no principal, or it expires
+
+- A relay client with no principal in context omits the header, so the target
+  answers 401. That is the first thing to check when a tool unexpectedly fails
+  authorization.
+- A long run can outlive the user's token. Stop it with a clear message instead
+  of letting every tool fail —
+  [`StopOnExpiredSignIn`](guard-hooks.md#stop-when-the-sign-in-expires).
+- Background jobs that run with no user should use the service's own identity:
+  have the host obtain a client-credentials token and send it the same way, so
+  the agent service needs no second code path.
+
+# docs/testing.md
+
+# Testing your workflows
+
+`kaboo_workflows.testing` lets you test a workflow end to end with no model
+provider, no network and no server. Two pieces do the work:
+
+- **`ScriptedModel`** stands in for the LLM. Each agent gets a script of
+  steps — call this tool, hand off to that agent, answer with this text — and
+  replays it the same way on every run.
+- **`Pipeline`** drives a config through the same AG-UI path
+  `create_agui_app` serves, in-process, and returns what a client would have
+  seen as a `TurnResult`: the AG-UI events, the reply text, the state to carry
+  into the next turn, and the activity groups a chat UI renders.
+
+Because the real strands event loop runs, a scripted test exercises your
+tools, hooks, prompts, orchestration wiring, interrupts and history exactly
+as production does. Only the model's choices are fixed.
+
+Use scripted tests for behaviour and wiring, and [evaluations](evaluation.md)
+for answer quality against a real model. The two complement each other.
+
+## A first test
+
+```python
+import asyncio
+
+from kaboo_workflows.testing import Pipeline
+
+CONFIG = """
+agents:
+  assistant:
+    system_prompt: You answer questions about orders.
+    model:
+      provider: kaboo_workflows.testing:ScriptedModel
+      model_id: scripted
+      params:
+        final_text: "Your order shipped yesterday."
+entry: assistant
+"""
+
+
+async def main() -> None:
+    pipe = Pipeline(CONFIG)
+    result = await pipe.turn("Where is my order?")
+    pipe.close()
+
+    assert result.finished()
+    assert result.text() == "Your order shipped yesterday."
+
+
+asyncio.run(main())
+```
+
+`Pipeline` takes what `load` takes: a file path, a raw YAML string, or a list
+of either. In a pytest suite with `pytest-asyncio`, write the body as an
+`async def test_…` function instead of calling `asyncio.run`. Call
+`pipe.close()` when the config starts MCP servers or clients;
+`run_pipeline(config, message)` builds a pipeline, drives one turn and closes
+it for you.
+
+## Writing a script
+
+A script is a list of steps, one per model turn. The step index resets when a
+new user message arrives and advances on every model call within the turn, so
+a turn that calls two tools and then answers is three steps. When the script
+runs out, the model replies with `final_text`.
+
+| Step | What the model does |
+|------|---------------------|
+| `{text: "..."}` | Answers with this text and ends the turn |
+| `{tool: lookup, input: "42"}` | Calls a tool. A string input fills the tool's first parameter; a mapping is passed as the full input |
+| `{tools: [{tool: a, input: ...}, {tool: b, input: ...}]}` | Calls several tools in one message, as a model making parallel calls does |
+| `{handoff: reviewer, message: "..."}` | Hands off to another agent in a swarm |
+| `{error: "..."}` | Raises mid-turn, to test how a failure surfaces |
+
+Tool names match the tools strands exposes that turn, exactly first and then
+by substring, so a prefixed MCP tool such as `sql___run_query` matches
+`{tool: run_query}`. A delegate connection appears as a tool named after the
+connected agent, so `{tool: researcher}` delegates to `researcher`.
+
+Give every agent its own scripted model. A model shared by several agents
+shares one script and one step counter, and their turns interleave.
+
+The scripted model is as strict as Bedrock about conversation shape: a turn
+whose tool results do not pair one-to-one with the previous message's tool
+calls raises the same `ValidationException` Bedrock would. A malformed
+transcript, such as a replayed answer to an interrupted call, fails your test
+instead of failing silently in production.
+
+## Testing your own tools
+
+Test the workflow you ship, not a copy of it. Keep the models in their own
+file and the workflow — agents, prompts, tools, orchestration — in another,
+referring to models by name. Production loads the real models file; tests load
+a scripted one under the same names
+([multi-file configs](configuration/Chapter_13.md) merge them):
+
+```text
+my_service/
+  models.yaml          # production models
+  workflow.yaml        # agents, prompts, tools, orchestration
+  tools.py
+tests/
+  models.yaml          # the same model names, scripted
+  test_assistant.py
+```
+
+```yaml
+# my_service/workflow.yaml — relative paths resolve from this file
+agents:
+  assistant:
+    model: assistant-model
+    system_prompt: You answer questions about orders.
+    tools: [./tools.py:lookup_order]
+entry: assistant
+```
+
+```yaml
+# my_service/models.yaml
+models:
+  assistant-model:
+    provider: bedrock
+    model_id: us.anthropic.claude-sonnet-5
+```
+
+```yaml
+# tests/models.yaml
+models:
+  assistant-model:
+    provider: kaboo_workflows.testing:ScriptedModel
+    model_id: scripted
+    params:
+      script:
+        - {tool: lookup_order, input: "42"}
+      final_text: "Order 42 has shipped."
+```
+
+```{.python notest}
+# tests/test_assistant.py
+from pathlib import Path
+
+from ag_ui.core import EventType
+
+from kaboo_workflows.testing import Pipeline
+
+ROOT = Path(__file__).parents[1]
+
+
+async def test_assistant_looks_up_the_order() -> None:
+    pipe = Pipeline([str(ROOT / "tests/models.yaml"), str(ROOT / "my_service/workflow.yaml")])
+    result = await pipe.turn("Where is order 42?")
+    pipe.close()
+
+    tool_results = result.of_type(EventType.TOOL_CALL_RESULT)
+    assert "shipped" in tool_results[0].content
+    assert result.text() == "Order 42 has shipped."
+```
+
+The script decides *that* the tool is called and with what input; the tool
+itself runs for real. Assert on its result event, or on whatever side effect it
+has, such as a row written to a test database. Name a model per agent in
+`workflow.yaml` (`coordinator-model`, `researcher-model`) so each can carry its
+own script.
+
+## Asserting what the model was sent
+
+Declare the scripted model under top-level `models:` and the pipeline keeps the
+instance at `pipe.infra.models[name]`. Its `calls` hold every conversation it
+was sent and `system_prompts` every system prompt, which is how you test that a
+prompt was composed the way you meant — for example, that a skill was inlined.
+
+```python
+import asyncio
+
+from kaboo_workflows.testing import Pipeline
+
+CONFIG = """
+models:
+  scripted:
+    provider: kaboo_workflows.testing:ScriptedModel
+    model_id: scripted
+    params: {final_text: "Revenue rose 4%."}
+agents:
+  analyst:
+    model: scripted
+    system_prompt: |
+      <rules>Cite the table every figure comes from.</rules>
+      You analyse revenue.
+entry: analyst
+"""
+
+
+async def main() -> None:
+    pipe = Pipeline(CONFIG)
+    await pipe.turn("How did revenue do?")
+    pipe.close()
+
+    model = pipe.infra.models["scripted"]
+    assert "<rules>Cite the table" in model.system_prompts[0]
+    assert model.calls[0][-1]["content"][0]["text"] == "How did revenue do?"
+
+
+asyncio.run(main())
+```
+
+## Multi-agent runs and activity
+
+`TurnResult.groups` is the activity tree a chat UI renders: one group per
+agent stream, nested under the group that called it. The entry agent's own
+stream is the chat reply, so it has no group.
+
+```python
+import asyncio
+
+from kaboo_workflows.testing import run_pipeline
+
+CONFIG = """
+x-model: &scripted kaboo_workflows.testing:ScriptedModel
+agents:
+  coordinator:
+    model:
+      provider: *scripted
+      model_id: scripted
+      params:
+        script: [{tool: researcher, input: "find last quarter's revenue"}]
+        final_text: "Revenue was 42M."
+  researcher:
+    stream: {title: "Researching"}
+    model: {provider: *scripted, model_id: scripted, params: {final_text: "42M."}}
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: researcher, description: "Finds figures"}
+entry: team
+"""
+
+
+async def main() -> None:
+    result = await run_pipeline(CONFIG, "What was revenue last quarter?")
+
+    assert result.text() == "Revenue was 42M."
+    assert result.agent_names() == {"researcher"}
+    assert result.group_ids() == ["coordinator.researcher"]
+
+
+asyncio.run(main())
+```
+
+`children_of(group_id)` walks the tree for nested delegation, and
+`group(group_id)` returns one group as the UI holds it.
+
+## Interrupts and resume
+
+A run that pauses on `ask_user` or a gated tool finishes with an `interrupt`
+outcome. To resume it, send the next turn the way a client does: the previous
+turn's `state()` and `messages()`, plus the answer in `resume`.
+
+```python
+import asyncio
+
+from kaboo_workflows.testing import Pipeline
+
+CONFIG = """
+agents:
+  assistant:
+    interrupt: true
+    model:
+      provider: kaboo_workflows.testing:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - {tool: ask_user, input: {question: "Delete the draft?", options: ["yes", "no"]}}
+        final_text: "Deleted."
+entry: assistant
+"""
+
+
+async def main() -> None:
+    pipe = Pipeline(CONFIG)
+    first = await pipe.turn("Clean up my drafts", thread_id="c1", run_id="r1")
+    outcome = first.run_outcome()
+    assert outcome.type == "interrupt"
+
+    second = await pipe.turn(
+        thread_id="c1",
+        run_id="r2",
+        state=first.state(),
+        messages=first.messages(),
+        resume=[
+            {
+                "interruptId": outcome.interrupts[0].id,
+                "status": "resolved",
+                "payload": {"answer": "yes"},
+            }
+        ],
+    )
+    pipe.close()
+
+    assert second.finished()
+    assert second.text() == "Deleted."
+
+
+asyncio.run(main())
+```
+
+To prove a paused run survives a restart, resume on a **new** `Pipeline`
+built from the same config. It shares nothing with the first, so the only
+thing carrying the pause across is the state you pass — the same guarantee a
+deployed service gives. Each new pipeline builds fresh scripted models, so
+assert on the resumed tool result rather than on a scripted reply.
+
+## Hooks and guards
+
+Hooks run in a pipeline exactly as in production, so you test one by declaring
+it in the config and asserting on what the run did. This scripts a coordinator
+into calling its helper twice and checks the built-in tool-call guard refused
+the second call:
+
+```python
+import asyncio
+
+from ag_ui.core import EventType
+
+from kaboo_workflows.testing import Pipeline
+
+CONFIG = """
+x-model: &scripted kaboo_workflows.testing:ScriptedModel
+agents:
+  coordinator:
+    model:
+      provider: *scripted
+      model_id: scripted
+      params:
+        script:
+          - {tool: helper, input: "first"}
+          - {tool: helper, input: "second"}
+    hooks:
+      - type: kaboo_workflows.hooks:MaxToolCallsGuard
+        params: {max_calls: 1}
+  helper:
+    model: {provider: *scripted, model_id: scripted, params: {final_text: "Done."}}
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: helper, description: "Helps"}
+entry: team
+"""
+
+
+async def main() -> None:
+    pipe = Pipeline(CONFIG)
+    result = await pipe.turn("Get help twice")
+    pipe.close()
+
+    results = result.of_type(EventType.TOOL_CALL_RESULT)
+    assert any("tool call limit" in r.content for r in results)
+
+
+asyncio.run(main())
+```
+
+Your own hooks work the same way: reference them by import spec
+(`type: my_service.hooks:RefuseRepeatedFailures`) and script the model into
+the situation the hook exists for. The
+[guard hooks recipe](recipes/guard-hooks.md) shows the hooks worth having.
+
+## Runtime-composed workflows
+
+A service that serves a different workflow on every run
+([Chapter 17](configuration/Chapter_17.md#when-the-config-itself-is-per-request))
+is tested the same way. Pass the base config and `session_config_key`, then
+submit each run's workflow in `forwarded_props`:
+
+```python
+import asyncio
+
+from kaboo_workflows.testing import Pipeline
+
+BASE = """
+models:
+  analyst-model:
+    provider: kaboo_workflows.testing:ScriptedModel
+    model_id: scripted
+    params: {final_text: "Revenue rose 4%."}
+agents:
+  fallback:
+    model: analyst-model
+    system_prompt: You are a fallback assistant.
+entry: fallback
+"""
+
+SUBMITTED = """
+agents:
+  analyst:
+    model: analyst-model
+    system_prompt: You analyse revenue.
+entry: analyst
+"""
+
+
+async def main() -> None:
+    pipe = Pipeline(BASE, session_config_key="workflow_config")
+    result = await pipe.turn(
+        "How did revenue do?", forwarded_props={"workflow_config": SUBMITTED}
+    )
+    pipe.close()
+
+    assert result.text() == "Revenue rose 4%."
+    assert pipe.infra.models["analyst-model"].system_prompts[0] == "You analyse revenue."
+
+
+asyncio.run(main())
+```
+
+Feed it the exact YAML your composer produces, and the test covers the
+composition too.
+
+## Evaluations with real models
+
+Scripted tests prove the workflow does what it is told. Whether a real model
+tells it the right things is a quality question: run a golden dataset through
+`kaboo-workflows eval` or `run_eval` from pytest and gate CI on the scorers
+([Evaluation](evaluation.md#offline-evals)). Keep evaluations few and
+deliberate — each item is a real model call.
 
 # docs/troubleshooting.md
 

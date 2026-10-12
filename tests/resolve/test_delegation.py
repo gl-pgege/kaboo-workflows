@@ -12,8 +12,9 @@ import pytest
 from pydantic import BaseModel
 from strands import Agent
 
+from kaboo_workflows.testing import ScriptedModel
 from kaboo_workflows.tools import node_as_async_tool, node_as_tool
-from tests.fakes import FakeModel, ScriptedModel
+from tests.fakes import FakeModel
 
 
 class Verdict(BaseModel):

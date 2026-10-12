@@ -1,6 +1,6 @@
 # Delegate nested 3 levels deep:
 #   top(coordinator) ─▶ research_team(lead) ─▶ field_team(field_researcher ─▶ verifier)
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   coordinator:

@@ -271,17 +271,39 @@ def set_activity_context(
 
 
 def get_thread_id() -> str | None:
-    """Return the current conversation's ``thread_id`` (or ``None``)."""
+    """Return the current conversation's ``thread_id``.
+
+    Callable from any tool or hook while a run is in flight. Use it to scope
+    state to one conversation, such as values a tool stores for later turns.
+
+    Returns:
+        The thread id bound for this run, or ``None`` outside a run.
+    """
     return _current_thread_id.get()
 
 
 def get_run_id() -> str | None:
-    """Return the current conversation's ``run_id`` (or ``None``)."""
+    """Return the current request's ``run_id``.
+
+    A new run id arrives with every request, including the one that resumes
+    an interrupted turn, so it suits per-request bookkeeping such as logs and
+    metrics.
+
+    Returns:
+        The run id bound for this run, or ``None`` outside a run.
+    """
     return _current_run_id.get()
 
 
 def get_turn_id() -> str | None:
-    """Return the current logical turn's id (stable across resume, or ``None``)."""
+    """Return the current logical turn's id.
+
+    Unlike the run id, it stays the same across an interrupt and its resume, so
+    it is the key to use when a tool's side effect must happen once per turn.
+
+    Returns:
+        The turn id bound for this run, or ``None`` outside a run.
+    """
     return _current_turn_id.get()
 
 

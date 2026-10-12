@@ -4,7 +4,7 @@
 #
 # Note: ask_user interrupts fire for delegated sub-agents (invoked via
 # invoke_async, which is interrupt-aware); this mirrors the demo's HITL flow.
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   coordinator:

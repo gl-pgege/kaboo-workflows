@@ -55,7 +55,7 @@ agents:
     stream: {title: "Assistant"}
     tools: ["tests.fakes.gated_tools:submit_report"]
     model:
-      provider: tests.fakes.scripted_model:ScriptedModel
+      provider: kaboo_workflows.testing:ScriptedModel
       model_id: scripted
       params:
         script:

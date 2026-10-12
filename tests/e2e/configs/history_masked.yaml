@@ -1,7 +1,7 @@
 # A sub-agent that keeps a masked history. Once a call has finished, its tool
 # results are written back as placeholders; a call paused on a question is
 # written back whole, because it has not finished.
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   coordinator:

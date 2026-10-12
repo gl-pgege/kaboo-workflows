@@ -2,7 +2,7 @@
 # tool pauses the whole run BEFORE the tool executes; an approve-with-edits
 # resume executes it with the edited arguments, the handoff proceeds and the
 # writer's text is the chat reply.
-x-model: &m tests.fakes.scripted_model:ScriptedModel
+x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   planner:

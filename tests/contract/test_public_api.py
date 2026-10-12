@@ -32,6 +32,7 @@ PUBLIC_MODULES = [
     "kaboo_workflows.tools",
     "kaboo_workflows.converters",
     "kaboo_workflows.renderers",
+    "kaboo_workflows.testing",
     "kaboo_workflows.types",
 ]
 

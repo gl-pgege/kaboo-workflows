@@ -153,7 +153,7 @@ def _judge(final_text: str, threshold: float = 0.7) -> JudgeScorer:
     return JudgeScorer(
         rubric="Answers with a number.",
         model={
-            "provider": "tests.fakes.scripted_model:ScriptedModel",
+            "provider": "kaboo_workflows.testing:ScriptedModel",
             "model_id": "scripted",
             "params": {"final_text": final_text},
         },
