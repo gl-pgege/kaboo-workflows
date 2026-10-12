@@ -142,6 +142,24 @@ def test_parse_single_source_rewrites_relative_tool_path_to_absolute(tmp_path):
     assert Path(path_part).is_absolute()
 
 
+def test_parse_single_source_rewrites_relative_output_schema_path_to_absolute(tmp_path):
+    path = write_config(
+        tmp_path,
+        """
+        agents:
+          a:
+            system_prompt: hi
+            output_schema: ./schemas.py:Answer
+        entry: a
+        """,
+    )
+    raw = parse_single_source(path)
+    path_part, sep, attr = raw["agents"]["a"]["output_schema"].rpartition(":")
+    assert sep == ":"
+    assert attr == "Answer"
+    assert Path(path_part) == (tmp_path / "schemas.py").resolve()
+
+
 def test_parse_single_source_applies_per_source_interpolation(tmp_path, monkeypatch):
     monkeypatch.delenv("PROMPT", raising=False)
     path = write_config(

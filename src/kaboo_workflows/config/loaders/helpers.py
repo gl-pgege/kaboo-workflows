@@ -235,6 +235,7 @@ def rewrite_relative_paths(raw: dict, config_dir: Path) -> None:
     - ``agents.<name>.tools[]`` — tool spec strings
     - ``agents.<name>.hooks[]`` — string import specs and ``HookDef.type``
     - ``agents.<name>.type`` — custom agent factory path
+    - ``agents.<name>.output_schema`` — structured output model path
     - ``mcp_servers.<name>.type`` — MCP server factory path
     - ``models.<name>.provider`` — custom model class path
     - ``session_manager.type`` — custom session manager path
@@ -272,6 +273,10 @@ def rewrite_relative_paths(raw: dict, config_dir: Path) -> None:
             # type
             if isinstance(agent_def.get("type"), str):
                 agent_def["type"] = make_absolute(agent_def["type"], config_dir)
+
+            # output_schema
+            if isinstance(agent_def.get("output_schema"), str):
+                agent_def["output_schema"] = make_absolute(agent_def["output_schema"], config_dir)
 
     # ── mcp_servers ───────────────────────────────────────────────────────
     mcp_servers = raw.get("mcp_servers")
