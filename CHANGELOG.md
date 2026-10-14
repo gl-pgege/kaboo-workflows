@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## v0.28.0 (2026-10-14)
+
+### BREAKING CHANGE
+
+- requires ag-ui-protocol 1.x, ag-ui-strands 1.x, mcp 2 and
+strands-agents 1.55+. Custom MCPServer subclasses receive
+mcp.server.mcpserver.MCPServer instead of FastMCP, and an http_client or
+auth passed to an MCP transport must come from httpx2. See
+docs/upgrading.md.
+
+### Feat
+
+- move to the AG-UI 1.0 generation and mcp 2
+
+### Fix
+
+- keep ag-ui-strands from warning on every approval and question
+
 ## v0.27.1 (2026-10-14)
 
 ### Fix
