@@ -22,7 +22,7 @@ The SDK server's `run(transport="streamable-http")` internally does:
 async def run_streamable_http_async(self):
     config = uvicorn.Config(self.streamable_http_app(), ...)
     server = uvicorn.Server(config)
-    await server.serve()   # blocks forever
+    await server.serve()  # blocks forever
 ```
 
 The `uvicorn.Server` instance is a **local variable** — it is never stored on `self`.  When running in a background thread, uvicorn cannot install signal handlers (Python restricts `signal.signal()` to the main thread), so there is no way to trigger shutdown from outside.
