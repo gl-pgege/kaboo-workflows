@@ -36,6 +36,10 @@ ag-ui-protocol 1.0.0. Approvals and questions resume exactly as before:
 kaboo-workflows answers them itself rather than through ag-ui-strands' own
 interrupt protocol.
 
+Clients need no change: kaboo-runtime 0.6 and kaboo-react 0.10 work with 0.28,
+and kaboo-runtime 0.7 and kaboo-react 0.11 work with 0.27. Runs now also carry
+ag-ui-strands' `RAW` events, one per model call with its usage and latency.
+
 ### AG-UI activity deltas carry typed patch operations
 
 **Who:** code that reads `ag_ui.core` events in Python, such as tests that
