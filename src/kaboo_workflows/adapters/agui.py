@@ -123,6 +123,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+class _SuppressInterruptRawWarning(logging.Filter):
+    """Drop ag-ui-strands' warning that a strands interrupt event is not RAW-safe.
+
+    Every approval and question is a strands interrupt, which this adapter maps
+    to the run's interrupt outcome itself. ag-ui-strands also offers the event
+    for RAW forwarding, fails to serialize it, and would warn on each one.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        return "tool_interrupt_event" not in record.getMessage()
+
+
+logging.getLogger("ag_ui_strands.agent").addFilter(_SuppressInterruptRawWarning())
+
 _DONE = bridge.STREAM_DONE
 
 
