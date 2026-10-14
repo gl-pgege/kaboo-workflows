@@ -70,6 +70,27 @@ jobs:
       - name: pytest with coverage
         run: uv run just test
 
+  newest:
+    name: Tests (newest versions the ranges allow)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Resolve the newest allowed versions
+        run: uv lock --upgrade
+
+      - name: Install dev deps
+        run: uv sync --all-groups --all-extras
+
+      - name: pytest with coverage
+        run: uv run just test
+
   # ── Docs (proven snippets + strict site build) ──────────────────────────────
   docs:
     name: Docs
