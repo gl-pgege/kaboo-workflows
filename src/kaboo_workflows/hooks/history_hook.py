@@ -31,12 +31,13 @@ import copy
 import logging
 import sys
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from strands import Agent
 from strands.hooks import HookProvider, HookRegistry
 from strands.hooks.events import AfterInvocationEvent, BeforeInvocationEvent
 from strands.models import Model
+from strands.types.content import Messages
 
 if sys.version_info >= (3, 12):
     from typing import override
@@ -186,7 +187,9 @@ class HistoryHook(HookProvider):
             seed = exchange.inbound.get(self._key)
             if seed and self._policy.keep == "masked":
                 seed = self._mask(seed, event.agent)
-        event.agent.messages = copy.deepcopy(strip_cache_points(seed)) if seed else []
+        event.agent.messages = (
+            cast("Messages", copy.deepcopy(strip_cache_points(seed))) if seed else []
+        )
         if event.agent.messages:
             event.invocation_state[SEEDED_MESSAGES] = len(event.agent.messages)
         logger.debug(

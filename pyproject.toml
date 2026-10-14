@@ -23,9 +23,9 @@ dependencies = [
     "strands-agents>=1.44.0,<2.0.0",
     "pydantic>=2.12.5",
     "pyyaml>=6.0.0",
-    "mcp>=1.24.0",
-    "ag-ui-strands>=0.2.0",
-    "ag-ui-protocol>=0.1.19",
+    "mcp>=1.24.0,<2",
+    "ag-ui-strands>=0.2.0,<0.3",
+    "ag-ui-protocol>=0.1.19,<1",
     "jsonpatch>=1.33",
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
@@ -58,7 +58,7 @@ eval-deepeval = [
     "deepeval>=3.0.0",
 ]
 langfuse = [
-    "langfuse>=3.0.0",
+    "langfuse>=3.0.0,<5",
 ]
 
 [project.urls]

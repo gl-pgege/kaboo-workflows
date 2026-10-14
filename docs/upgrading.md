@@ -10,6 +10,31 @@ for an approval. Features that span the stack light up once every piece is
 upgraded — see
 [Upgrading the stack](https://gl-pgege.github.io/kaboo-docs/start-here/#upgrading-the-stack).
 
+## 0.27.1
+
+**Who:** anyone who installed 0.27.0 fresh, or pins one of these packages
+themselves.
+
+0.27.0 allowed dependency versions it was never tested with, and a fresh
+install picked up `ag-ui-strands` 1.0, whose own interrupt tracking refuses a
+resumed run (`PENDING_INTERRUPTS`), so every approval and question failed on
+resume. The ranges now stop at the versions kaboo-workflows is tested with:
+
+```diff
+- "ag-ui-strands>=0.2.0",
+- "ag-ui-protocol>=0.1.19",
+- "mcp>=1.24.0",
+- "langfuse>=3.0.0",
++ "ag-ui-strands>=0.2.0,<0.3",
++ "ag-ui-protocol>=0.1.19,<1",
++ "mcp>=1.24.0,<2",
++ "langfuse>=3.0.0,<5",
+```
+
+`strands-agents` keeps `<2.0.0` and is tested up to 1.61. If your app pins a
+newer version of one of these, pip now reports the conflict instead of
+installing a combination that doesn't work.
+
 ## 0.27
 
 Questions are multiple choice only, tool approvals gain opt-in remembered

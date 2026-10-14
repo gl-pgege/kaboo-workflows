@@ -12,6 +12,7 @@ from collections.abc import Iterator
 import pytest
 from strands import Agent
 from strands.hooks.events import BeforeInvocationEvent
+from strands.types.content import Message
 
 from kaboo_workflows._context import HistoryExchange, set_history_exchange
 from kaboo_workflows.config.resolvers.config import (
@@ -26,7 +27,7 @@ from tests.factories import agent_def, app_config, delegate_orchestration
 from tests.fakes import FakeModel
 
 
-def _msg(text: str) -> dict:
+def _msg(text: str) -> Message:
     return {"role": "user", "content": [{"text": text}]}
 
 

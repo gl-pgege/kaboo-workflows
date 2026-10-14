@@ -15,13 +15,14 @@ import pytest
 from strands import Agent
 from strands.hooks import HookRegistry
 from strands.hooks.events import AfterInvocationEvent, BeforeInvocationEvent
+from strands.types.content import Message
 
 from kaboo_workflows._context import HistoryExchange, set_history_exchange
 from kaboo_workflows.hooks import HistoryHook
 from tests.fakes import FakeModel
 
 
-def _msg(text: str) -> dict:
+def _msg(text: str) -> Message:
     return {"role": "user", "content": [{"text": text}]}
 
 

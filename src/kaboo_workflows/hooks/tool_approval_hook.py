@@ -206,11 +206,12 @@ class _ApprovalAwareTool(AgentTool):
     async def stream(
         self, tool_use: ToolUse, invocation_state: dict[str, Any], **kwargs: Any
     ) -> ToolGenerator:
-        context = ToolContext(
-            tool_use=tool_use,
-            agent=invocation_state.get("agent"),
-            invocation_state=invocation_state,
-        )
+        agent = invocation_state.get("agent")
+        if agent is None:
+            async for event in self._inner.stream(tool_use, invocation_state, **kwargs):
+                yield event
+            return
+        context = ToolContext(tool_use=tool_use, agent=agent, invocation_state=invocation_state)
         name = f"{self._agent_name}:tool_approval:{tool_use.get('name', '')}"
         answer = _stored_answer(context, name)
         if answer is not None:
@@ -229,7 +230,7 @@ class _ApprovalAwareTool(AgentTool):
         if result is None:
             return
         request = tool_approval_request(result.tool_result)
-        if request is None or context.agent is None:
+        if request is None:
             yield result
             return
         try:
