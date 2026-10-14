@@ -1,0 +1,34 @@
+x-model: &m kaboo_workflows.testing:ScriptedModel
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: pricer, input: "raise the price"}
+        final_text: "Coordinator wrapped up."
+  pricer:
+    stream: {title: "Pricing"}
+    tools: ["tests.fakes.enforcing_tools:set_price"]
+    interrupt:
+      tool_approvals: true
+      ask_user: false
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: set_price, input: {store: "summit", sku: "A1", price: 10}}
+        final_text: "Pricer finished."
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: pricer, description: "Changes prices"}
+
+entry: team

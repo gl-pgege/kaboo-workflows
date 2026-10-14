@@ -196,6 +196,9 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
                 if tool["toolUseId"] == tool_use_id:
                     tool["status"] = status
                     tool["toolResult"] = result
+                    approval = event.data.get("approval")
+                    if isinstance(approval, dict):
+                        tool["approval"] = approval
                     break
     elif event.type == EventType.TOKEN:
         if group in groups:
@@ -255,6 +258,31 @@ class ActivityRegistry:
         with self._lock:
             state = self._state_for(thread_id)
             return _update_activity_state(state, event)
+
+    def skip_waiting(self, thread_id: str) -> bool:
+        """Close what *thread_id* was waiting on, because the person moved on.
+
+        A message sent while a request waits starts a new turn; the groups that
+        paused on it never resume. Their waiting tools are marked ``skipped``
+        (with the decision, as the gate records it) and the groups completed, so
+        no card keeps asking. Returns ``True`` when anything changed.
+        """
+        with self._lock:
+            state = self._states.get(thread_id)
+            if state is None:
+                return False
+            changed = False
+            for group in state["groups"].values():
+                if group.get("status") != "interrupted":
+                    continue
+                group["status"] = "completed"
+                group.pop("interrupt", None)
+                for tool in group["tools"]:
+                    if tool.get("status") == "running":
+                        tool["status"] = "skipped"
+                        tool["approval"] = {"decision": "skipped", "by": "person"}
+                changed = True
+            return changed
 
     def apply_usage(self, thread_id: str, event: StreamEvent) -> bool:
         """Fold only an ``AGENT_COMPLETE`` event's token usage into the per-run rollup.

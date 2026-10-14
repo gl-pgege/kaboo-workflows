@@ -118,4 +118,5 @@ nav:
       - testing: api/testing.md
       - types: api/types.md
   - Troubleshooting: troubleshooting.md
+  - Upgrading: upgrading.md
   - Ecosystem: https://gl-pgege.github.io/kaboo-docs/

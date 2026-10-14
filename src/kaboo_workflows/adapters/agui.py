@@ -59,6 +59,7 @@ from kaboo_workflows._context import (
     Reference,
     ResponseBudget,
     SessionExchange,
+    get_session_exchange,
     set_activity_context,
     set_auth_context,
     set_forwarded_props,
@@ -103,6 +104,7 @@ from kaboo_workflows.wire import EventQueue
 
 from . import _strands_bridge as bridge
 from ._activity import ActivityRegistry
+from ._interrupts import approval_descriptors, build_resume_responses
 from ._interrupts import map_strands_interrupt_to_agui as _map_strands_interrupt_to_agui
 from ._interrupts import tool_call_id_from_interrupt_id as _tool_call_id_from_interrupt_id
 from ._multiagent import StrandsMultiAgent
@@ -165,36 +167,7 @@ def _maybe_inject_interrupt_outcome(
     )
 
 
-def _build_resume_responses(
-    strands_agent: Any, resume_entries: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Map AG-UI resume entries onto the coordinator's pending interrupts."""
-    lookup: dict[str, Any] = {}
-    for entry in resume_entries:
-        interrupt_id = entry.get("interruptId", "")
-        status = entry.get("status", "resolved")
-        payload = entry.get("payload")
-        if status == "resolved":
-            lookup[interrupt_id] = payload if payload is not None else {"status": "approved"}
-        else:
-            lookup[interrupt_id] = {"status": "cancelled"}
-
-    responses: list[dict[str, Any]] = []
-    # Only the still-unresolved interrupts need a response; strands keeps
-    # already-resolved ones in its state and does not expect them re-addressed.
-    for intr_id in bridge.pending_interrupts(strands_agent, unresolved_only=True):
-        if intr_id in lookup:
-            user_resp = lookup[intr_id]
-        else:
-            # No resume entry addressed this interrupt. Never silently approve —
-            # default to a safe rejection so an unhandled approval can't execute.
-            logger.warning("resume did not address interrupt %s; defaulting to cancelled", intr_id)
-            user_resp = {"status": "cancelled"}
-        responses.append({"interruptResponse": {"interruptId": intr_id, "response": user_resp}})
-    return responses
-
-
-_ABANDONED_RESULT = "[interrupted: superseded by a new user message]"
+_ABANDONED_RESULT = "Skipped: the person sent a message instead of answering."
 _ERROR_RESULT = "[tool call did not complete: run error]"
 
 
@@ -395,6 +368,23 @@ def _parse_resume_entries(input_data: RunAgentInput) -> list[dict[str, Any]] | N
         }
         for entry in raw_resume
     ]
+
+
+def _skips_into_new_message(
+    input_data: RunAgentInput, resume_entries: list[dict[str, Any]]
+) -> bool:
+    """Whether the person skipped every open request to send a new message.
+
+    An AG-UI client must address every pending interrupt before it can send
+    anything, so a message sent while requests are waiting arrives as a resume
+    that cancels all of them and ends with the new user message. That is a new
+    turn, not a resume: the requests close as skipped and the agent answers the
+    message (see the supersede handling in the endpoint).
+    """
+    if not all(entry.get("status") == "cancelled" for entry in resume_entries):
+        return False
+    messages = input_data.messages or []
+    return bool(messages) and getattr(messages[-1], "role", None) == "user"
 
 
 def _drop_replayed_tool_results(
@@ -602,6 +592,10 @@ def _enrich_session_snapshot(agui_event: Any) -> None:
     state = session_state_snapshot()
     if state is None:
         return
+    exchange = get_session_exchange()
+    agent = exchange.agent if exchange is not None else None
+    pending = bridge.pending_interrupts(agent) if agent is not None else {}
+    state["approvals"] = approval_descriptors(pending.values())
     snapshot["kaboo_session"] = state
     logger.debug("kaboo_session write-back | %s", state.get("interrupt_state", {}).get("activated"))
 
@@ -1030,6 +1024,10 @@ def _add_kaboo_endpoint(
         resume_entries = _parse_resume_entries(input_data)
         if resume_entries:
             _drop_replayed_tool_results(input_data, resume_entries)
+            if _skips_into_new_message(input_data, resume_entries):
+                logger.debug("thread=<%s> | requests skipped for a new message", thread_id)
+                input_data.resume = None
+                resume_entries = None
         turn_id = _resolve_turn_id(
             thread_id, input_data.run_id, is_resume=resume_entries is not None
         )
@@ -1145,6 +1143,7 @@ def _add_kaboo_endpoint(
                 if last_role == "user":
                     logger.debug("multiagent: new user turn with stale interrupt; clearing")
                     agui_agent.deactivate_interrupts(thread_id)
+                    registry.skip_waiting(thread_id)
                 else:
                     pending = agui_agent.pending_interrupts(thread_id, unresolved_only=True)
                     if pending:
@@ -1239,7 +1238,9 @@ def _add_kaboo_endpoint(
                 await release()
                 return StreamingResponse(error_gen(), media_type=encoder.get_content_type())
 
-            responses = _build_resume_responses(strands_agent, resume_entries)
+            responses = build_resume_responses(
+                bridge.pending_interrupts(strands_agent), resume_entries
+            )
             logger.debug("resume thread=%s responses=%d", thread_id, len(responses))
 
             async def consume_resume() -> None:
@@ -1317,6 +1318,8 @@ def _add_kaboo_endpoint(
         # rebalance the frontend store), collapses HITL interrupt-resolution
         # duplicates, and surfaces any residual (foreign/unrecoverable) imbalance.
         repairs = normalize_client_transcript(input_data, close_dangling=superseded)
+        if superseded:
+            registry.skip_waiting(thread_id)
         if repairs.backfill_ids:
             logger.debug("closed abandoned tool calls on supersede: %s", repairs.backfill_ids)
         if repairs.collapsed:

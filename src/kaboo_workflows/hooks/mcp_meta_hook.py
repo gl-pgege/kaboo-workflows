@@ -100,6 +100,11 @@ class _MetaCallTool(AgentTool):
         self._meta = meta
 
     @property
+    def mcp_tool(self) -> Any:
+        """The wrapped MCP tool definition, so its annotations stay visible."""
+        return self._inner.mcp_tool
+
+    @property
     @override
     def tool_name(self) -> str:
         return self._inner.tool_name

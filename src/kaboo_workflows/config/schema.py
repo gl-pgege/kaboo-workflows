@@ -239,25 +239,75 @@ class MCPClientDef(BaseModel):
         return self
 
 
+ApprovalScope = Literal["once", "thread", "always"]
+
+
+class InterruptToolDef(BaseModel):
+    """One entry of ``interrupt.tools``: the tools it matches and its overrides.
+
+    ``name`` is a tool name or an ``fnmatch`` glob (``merchant___*``).
+    ``remember`` overrides the agent's ``interrupt.remember`` for these tools.
+    ``subject`` is an import spec for ``(tool_name, tool_input) -> {key, label}
+    | str | None`` that decides what a remembered decision covers; ``None`` from
+    it means the call needs no approval.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    remember: ApprovalScope | None = None
+    subject: str | None = None
+
+
 class InterruptDef(BaseModel):
     """Interrupt configuration for an agent.
 
-    ``tools`` lists tool names that require user approval before execution.
-    An empty list means no tool-gate (use ``ask_user`` only).
+    ``tools`` lists the tools that wait for the person's approval before they
+    run: names, ``fnmatch`` globs, or :class:`InterruptToolDef` objects. An
+    empty list means no tool gate (``ask_user`` only).
+
+    ``skip_read_only`` lets tools annotated ``readOnlyHint: true`` run without
+    asking. Tools without annotations follow MCP's defaults and count as not
+    read-only.
+
+    ``remember`` is the widest decision a person may make: ``once`` (the
+    default) asks every time, ``thread`` adds "allow for this chat", ``always``
+    adds "always allow". Scopes beyond ``once`` are only offered when the host
+    remembers decisions (it sends ``forwardedProps.kaboo_grants``).
 
     ``ask_user`` controls whether the built-in ``ask_user`` tool is injected,
     allowing the agent to proactively ask the user questions at any time.
     Defaults to ``True`` when interrupt is enabled.
 
-    ``ttl_seconds`` optionally stamps an ``expiresAt`` timestamp onto every
-    gate interrupt this agent raises (AG-UI ``Interrupt.expiresAt``), so
-    clients can render a countdown and servers can expire unanswered
-    approvals. ``None`` (default) emits no expiry.
+    ``ttl_seconds`` optionally gives every approval this agent raises a
+    deadline (``expiresAt`` in the request's metadata). The agent enforces it:
+    an approval answered after the deadline does not run the call. ``None``
+    (default) lets approvals wait indefinitely, like questions.
+
+    ``tool_approvals`` lets tools ask for approval themselves: a tool whose
+    service enforces approvals replies ``kaboo_approval`` instead of running,
+    the run pauses with an approval request, and the tool is called once more
+    if the person approves (see :class:`~kaboo_workflows.hooks.ToolApprovalHook`).
+    Off by default; with it off, such a reply reaches the model unchanged.
     """
 
-    tools: list[str] = Field(default_factory=list)
+    tools: list[InterruptToolDef] = Field(default_factory=list)
+    skip_read_only: bool = False
+    remember: ApprovalScope = "once"
     ask_user: bool = True
     ttl_seconds: int | None = Field(default=None, gt=0)
+    tool_approvals: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _expand_tool_names(cls, data: Any) -> Any:
+        """Accept a bare tool name or glob as shorthand for ``{name: ...}``."""
+        if isinstance(data, dict) and isinstance(data.get("tools"), list):
+            data = {
+                **data,
+                "tools": [{"name": t} if isinstance(t, str) else t for t in data["tools"]],
+            }
+        return data
 
 
 class StreamDef(BaseModel):

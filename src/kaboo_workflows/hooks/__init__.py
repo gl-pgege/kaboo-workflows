@@ -7,7 +7,7 @@ from .continuation_hook import CONTINUATION_TYPE, ContinuationHook
 from .event_publisher import EventPublisher
 from .forwarded_props_hook import ForwardedPropsHook
 from .history_hook import HistoryHook, HistoryPolicy
-from .interrupt_hook import InterruptHook
+from .interrupt_hook import APPROVAL_SCOPES, GRANTS_PROP, GateRule, InterruptHook
 from .max_calls_guard import MaxToolCallsGuard
 from .mcp_meta_hook import MCPCallMetaHook
 from .reference_hook import ReferenceHook
@@ -17,15 +17,19 @@ from .session_state_hook import (
     session_state_snapshot,
 )
 from .stop_guard import MultiAgentStopGuard, StopGuard, stop_guard_from_event
+from .tool_approval_hook import TOOL_APPROVAL_KEY, ToolApprovalHook
 from .tool_attachments_hook import ToolAttachmentsHook
 from .tool_name_sanitizer import ToolNameSanitizer
 
 __all__ = [
+    "APPROVAL_SCOPES",
     "CONTINUATION_TYPE",
+    "GRANTS_PROP",
     "ContextHook",
     "ContinuationHook",
     "EventPublisher",
     "ForwardedPropsHook",
+    "GateRule",
     "HistoryHook",
     "HistoryPolicy",
     "InterruptHook",
@@ -35,6 +39,8 @@ __all__ = [
     "ReferenceHook",
     "SessionStateHook",
     "StopGuard",
+    "TOOL_APPROVAL_KEY",
+    "ToolApprovalHook",
     "ToolAttachmentsHook",
     "ToolNameSanitizer",
     "restore_session_state",

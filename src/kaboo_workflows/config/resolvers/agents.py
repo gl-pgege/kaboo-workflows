@@ -9,8 +9,9 @@ from strands import Agent
 
 from ...exceptions import ConfigurationError
 from ...hooks.context_hook import ContextHook
-from ...hooks.interrupt_hook import InterruptHook
+from ...hooks.interrupt_hook import GateRule, InterruptHook
 from ...hooks.reference_hook import ReferenceHook
+from ...hooks.tool_approval_hook import ToolApprovalHook
 from ...hooks.tool_attachments_hook import ToolAttachmentsHook
 from ...tools.ask_user import ask_user
 from ...tools.references import fetch_attachment, list_references
@@ -27,9 +28,27 @@ if TYPE_CHECKING:
     from strands.session.session_manager import SessionManager
     from strands.tools.mcp import MCPClient as StrandsMCPClient
 
-    from ..schema import AgentDef, AttachmentsDef, SessionManagerDef
+    from ..schema import AgentDef, AttachmentsDef, InterruptToolDef, SessionManagerDef
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_gate_rule(agent_name: str, tool_def: InterruptToolDef) -> GateRule:
+    """Turn one ``interrupt.tools`` entry into a :class:`GateRule`.
+
+    Raises:
+        TypeError: If ``subject`` does not resolve to a callable.
+    """
+    subject = None
+    if tool_def.subject is not None:
+        subject = load_object(tool_def.subject, target="approval subject")
+        if not callable(subject):
+            raise TypeError(
+                f"Agent '{agent_name}': approval subject {tool_def.subject!r} for "
+                f"'{tool_def.name}' must be a callable (tool_name, tool_input), "
+                f"got {type(subject).__name__}."
+            )
+    return GateRule(pattern=tool_def.name, remember=tool_def.remember, subject=subject)
 
 
 def build_agent_from_def(
@@ -143,11 +162,15 @@ def build_agent_from_def(
         if interrupt.tools:
             hooks.append(
                 InterruptHook(
-                    tools=interrupt.tools,
+                    tools=[_resolve_gate_rule(name, t) for t in interrupt.tools],
                     agent_name=name,
                     ttl_seconds=interrupt.ttl_seconds,
+                    skip_read_only=interrupt.skip_read_only,
+                    remember=interrupt.remember,
                 )
             )
+        if interrupt.tool_approvals:
+            hooks.append(ToolApprovalHook(agent_name=name))
         if interrupt.ask_user:
             tools.append(ask_user)
 

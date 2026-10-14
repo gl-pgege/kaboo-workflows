@@ -67,6 +67,7 @@ def restore_session_state(agent: Any) -> bool:
     if exchange is None:
         return False
     exchange.agent = agent
+    exchange.publishes_approvals = True
     if not exchange.resuming:
         return False
     state = exchange.inbound.get("interrupt_state")

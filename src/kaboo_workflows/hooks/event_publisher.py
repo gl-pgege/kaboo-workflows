@@ -38,6 +38,7 @@ from .._context import get_delegation_id, get_run_id, get_thread_id, get_turn_id
 from ..telemetry import current_trace_id
 from ..types import EventType, StreamEvent
 from .cost_tracking import pop_cost_box, push_cost_box
+from .interrupt_hook import APPROVALS_STATE_KEY
 from .tool_attachments_hook import unpack_attachments
 
 logger = logging.getLogger(__name__)
@@ -387,20 +388,22 @@ class EventPublisher(HookProvider):
             tool_use_id,
             status,
         )
+        data: dict[str, Any] = {
+            "tool_name": raw_name,
+            "tool_label": tool_label,
+            "tool_use_id": tool_use_id,
+            "status": status,
+            "error": str(event.exception) if event.exception else None,
+            "tool_result": _extract_result_text(event.result, self._max_result_len),
+        }
+        approvals = (getattr(event, "invocation_state", None) or {}).get(APPROVALS_STATE_KEY)
+        if isinstance(approvals, dict) and tool_use_id in approvals:
+            data["approval"] = approvals[tool_use_id]
         self._callback(
             StreamEvent(
                 type=EventType.TOOL_END,
                 agent_name=self._agent_name,
-                data=self._enrich(
-                    {
-                        "tool_name": raw_name,
-                        "tool_label": tool_label,
-                        "tool_use_id": tool_use_id,
-                        "status": status,
-                        "error": str(event.exception) if event.exception else None,
-                        "tool_result": _extract_result_text(event.result, self._max_result_len),
-                    }
-                ),
+                data=self._enrich(data),
             ),
         )
 

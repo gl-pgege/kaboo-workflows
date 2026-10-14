@@ -1,0 +1,13 @@
+agents:
+  assistant:
+    stream: {title: "Assistant"}
+    tools: ["tests.fakes.enforcing_tools:set_price"]
+    model:
+      provider: kaboo_workflows.testing:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - {tool: set_price, input: {store: "summit", sku: "A1", price: 10}}
+        final_text: "It needs approval first."
+
+entry: assistant

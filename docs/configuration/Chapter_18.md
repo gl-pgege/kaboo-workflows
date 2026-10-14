@@ -61,8 +61,8 @@ agents:
                                    # ~ opts this agent out of the global one
     stream: null                   # {group, title} — how this agent's output is
                                    # labelled in the event stream (Chapter 15)
-    interrupt: null                # InterruptDef, or true for defaults (Chapter 6):
-                                   # {tools: [], ask_user: true, ttl_seconds: null}
+    interrupt: null                # InterruptDef (below), or true for the defaults:
+                                   # {tools: [], ask_user: true}
     history: null                  # true/false, or a HistoryDef (below); falls back
                                    # to the root history: default
     context: null                  # ContextDef (below): what the model is sent
@@ -70,6 +70,32 @@ agents:
     output_schema: null            # Import path to a Pydantic model the agent must
                                    # return (module.path:Model)
 ```
+
+## InterruptDef
+
+```yaml
+agents:
+  name:
+    interrupt:
+      tools: []                    # Tools that wait for the person's approval before
+                                   # running: names, fnmatch globs, or objects:
+                                   #   {name, remember: once | thread | always,
+                                   #    subject: module.path:fn}
+      skip_read_only: false        # Let tools annotated readOnlyHint: true run
+      remember: once               # Widest decision a person may make:
+                                   # once | thread | always
+      ask_user: true               # Grant the built-in multiple-choice ask_user
+      ttl_seconds: null            # Approval deadline (metadata.expiresAt), enforced
+                                   # by the agent; null waits indefinitely
+      tool_approvals: false        # Let tools ask for approval themselves with a
+                                   # kaboo_approval reply
+```
+
+Scopes wider than `once` are offered only when the host remembers decisions
+(`forwardedProps.kaboo_grants`). See
+[Human-in-the-loop](../workflows/human-in-the-loop.md#approving-tool-calls), and
+[Tools that enforce their own approvals](../workflows/human-in-the-loop.md#tools-that-enforce-their-own-approvals)
+for `tool_approvals`.
 
 ## HistoryDef
 

@@ -12,7 +12,7 @@ agents:
       model_id: scripted
       params:
         script:
-          - {tool: ask_user, input: {question: "Which market should I focus on?"}}
+          - {tool: ask_user, input: {question: "Which market should I focus on?", options: ["AI", "Cloud"]}}
           - {handoff: writer, message: "Write it up."}
   writer:
     stream: {title: "Writing"}

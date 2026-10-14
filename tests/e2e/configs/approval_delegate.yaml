@@ -1,0 +1,34 @@
+x-model: &m kaboo_workflows.testing:ScriptedModel
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: filer, input: "file the report"}
+        final_text: "Coordinator wrapped up."
+  filer:
+    stream: {title: "Filing"}
+    tools: ["tests.fakes.gated_tools:submit_report"]
+    interrupt:
+      tools: [submit_report]
+      ask_user: false
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: submit_report, input: {title: "Q3 draft"}}
+        final_text: "Filer finished."
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: filer, description: "Files reports"}
+
+entry: team

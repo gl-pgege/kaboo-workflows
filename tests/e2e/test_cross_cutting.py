@@ -94,6 +94,31 @@ async def test_ask_user_interrupt_then_resume(case: str) -> None:
     assert expected in r2.text(), f"{case}: expected {expected!r} in {r2.text()!r}"
 
 
+async def test_a_free_text_question_is_refused_and_the_model_asks_with_options() -> None:
+    pipe = Pipeline(str(CONFIGS / "ask_multiple_choice.yaml"))
+
+    r1 = await pipe.turn("help me focus", thread_id="q1", run_id="r1")
+    outcome = r1.run_outcome()
+    assert getattr(outcome, "type", None) == "interrupt"
+    question = (outcome.interrupts[0].metadata or {})["questions"][0]
+    assert question["options"] == ["AI", "Cloud"]
+
+    r2 = await pipe.turn(
+        thread_id="q1",
+        run_id="r2",
+        resume=[
+            {
+                "interruptId": outcome.interrupts[0].id,
+                "status": "resolved",
+                "payload": {"Which market should I focus on?": "Robotics"},
+            }
+        ],
+    )
+    assert not r2.errored() and r2.finished()
+    results = r2.of_type(AGUIEventType.TOOL_CALL_RESULT)
+    assert any("Robotics" in r.content for r in results)
+
+
 async def test_approval_survives_a_restart_of_the_service() -> None:
     """A gate paused in one process is resumable in the next.
 

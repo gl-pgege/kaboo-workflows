@@ -17,7 +17,6 @@ from ag_ui.core import EventType, RunAgentInput
 from strands import Agent
 from strands.interrupt import Interrupt
 from strands.multiagent import GraphBuilder, Swarm
-from strands.multiagent.base import MultiAgentBase
 from strands.multiagent.graph import Graph
 
 from kaboo_workflows._context import HistoryExchange
@@ -197,7 +196,12 @@ async def test_paused_gate_is_parked_per_thread(monkeypatch):
     descriptor = finished.outcome.interrupts[0]
     assert descriptor.id == GATE_ID
     assert descriptor.tool_call_id == "tc-9"
-    assert descriptor.expires_at == "2099-01-01T00:00:00Z"
+    assert descriptor.expires_at is None
+    assert descriptor.metadata["expiresAt"] == "2099-01-01T00:00:00Z"
+
+    snapshot = next(it for it in items if getattr(it, "type", None) == EventType.STATE_SNAPSHOT)
+    approvals = snapshot.snapshot["kaboo_session"]["approvals"]
+    assert [a["interruptId"] for a in approvals] == [GATE_ID]
 
     assert runner.is_interrupt_active("t1")
     assert GATE_ID in runner.pending_interrupts("t1")
@@ -293,26 +297,6 @@ def test_extract_user_task_returns_latest_user_message():
         ]
     )
     assert ma._extract_user_task(cast(RunAgentInput, input_data)) == "second"
-
-
-def test_build_resume_responses_maps_pending_interrupts(monkeypatch):
-    orchestrator = object()
-    monkeypatch.setattr(
-        ma.bridge, "pending_interrupts", lambda o, unresolved_only=True: {"i1": object()}
-    )
-    responses = ma._build_resume_responses(
-        cast(MultiAgentBase, orchestrator),
-        [{"interruptId": "i1", "status": "resolved", "payload": {"ok": True}}],
-    )
-    assert responses == [{"interruptResponse": {"interruptId": "i1", "response": {"ok": True}}}]
-
-
-def test_build_resume_responses_defaults_unaddressed_to_cancelled(monkeypatch):
-    monkeypatch.setattr(
-        ma.bridge, "pending_interrupts", lambda o, unresolved_only=True: {"i1": object()}
-    )
-    responses = ma._build_resume_responses(cast(MultiAgentBase, object()), [])
-    assert responses[0]["interruptResponse"]["response"] == {"status": "cancelled"}
 
 
 def test_result_text_extracts_node_agent_text():

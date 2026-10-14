@@ -12,7 +12,7 @@ agents:
       model_id: scripted
       params:
         script:
-          - {tool: ask_user, input: {question: "How wide should the scope be?"}}
+          - {tool: ask_user, input: {question: "How wide should the scope be?", options: ["Narrow", "Broad"]}}
         final_text: "Outline ready."
   editor:
     stream: {title: "Editing"}

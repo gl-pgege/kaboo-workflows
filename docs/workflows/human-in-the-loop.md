@@ -1,8 +1,10 @@
 # Human-in-the-loop
 
-Set `interrupt: true` on an agent to grant it the built-in `ask_user` tool. When
-the agent calls it, the run pauses and the question surfaces to the client; on
-resume the same call returns the user's answer.
+An agent can pause a run for the person in two ways, both on the same
+mechanism: it **asks a question** with the built-in `ask_user` tool, or a
+**gated tool waits for approval** before it runs. The run resumes with the
+person's answer — minutes or days later, on any replica — and the agent carries
+on mid-thought.
 
 ```
 review_team (delegate):
@@ -31,6 +33,194 @@ entry: review_team
 
 Full runnable project: [`examples/18_hitl`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/18_hitl).
 
+## Questions are multiple choice
+
+`ask_user` asks one or more questions, each with two or more options — like
+the question cards in Cursor:
+
+- `multiple` makes a question multi-select.
+- The person can always pick **Other** and answer in their own words; the card
+  adds it, so the agent never lists "Other".
+- A question without enough options is refused with a tool error that teaches
+  the rule, so the model asks again properly instead of reaching the person.
+
+```{.python notest}
+ask_user(question="Which market?", options=["AI", "Cloud", "IoT"])
+ask_user(questions=[
+    {"question": "Which market?", "options": ["AI", "Cloud"]},
+    {"question": "Which sectors?", "options": ["B2B", "B2C"], "multiple": True},
+])
+```
+
+The answer comes back as a `{question: answer}` map: a string, a list for a
+multi-select question, or the person's own words for Other. A skipped question
+returns "The person skipped this question." App-specific inputs — a file or a
+data source — are not questions: raise your own request kind
+([Ask the user](../recipes/asking-the-user.md)).
+
+## Approving tool calls
+
+`interrupt.tools` lists the tools that wait for the person's approval *before
+they run*:
+
+```yaml
+agents:
+  merchant:
+    interrupt:
+      tools:
+        - "merchant___*"                          # a glob
+        - { name: delete_store, remember: once }  # a per-tool override
+      skip_read_only: true
+      remember: thread
+      ttl_seconds: 3600
+      ask_user: false
+```
+
+- **`tools`** — names, `fnmatch` globs, or `{name, remember, subject}` objects.
+  The first match applies; `ask_user` is never gated.
+- **`skip_read_only`** — tools annotated `readOnlyHint: true` run without
+  asking. Tools without annotations follow MCP's defaults and count as not
+  read-only. MCP servers declare annotations; localcore-gateway and AgentCore
+  Gateway relay them for MCP server targets.
+- **`remember`** — the widest decision a person may make: `once` (the default),
+  `thread` ("Allow for this chat") or `always` ("Always allow").
+- **`subject`** — an import spec, `(tool_name, tool_input) -> {key, label} |
+  str | None`, deciding what a remembered decision covers. By default it is the
+  whole tool; return `None` when a call needs no approval. Include the resource
+  the call acts on (an account, a store, a recipient's domain), so a remembered
+  decision never reaches further than what the person saw: `store:summit/catalog`
+  rather than the tool name.
+- **`ttl_seconds`** — an optional deadline. It travels in the request's
+  `metadata.expiresAt` (never AG-UI's own `expiresAt`, which makes the client
+  refuse the thread) and the agent enforces it: an approval answered after the
+  deadline does not run the call. Without it, approvals wait like questions.
+
+An approval request's `metadata` carries `tool_name`, `tool_input`, `subject`
+(`key`, `label`), `scopes` (what the person may choose), with a deadline
+`expiresAt`, and `request` when a tool asked for the approval itself
+([below](#tools-that-enforce-their-own-approvals)).
+
+## Answers
+
+On pause the run finishes with an `interrupt` outcome listing the open requests
+(each with an `id`). The client resumes by answering each of them:
+
+| The person… | Resume entry | The agent |
+|---|---|---|
+| approves | `{"status": "resolved", "payload": {"status": "approved", "scope"?: "once" \| "thread" \| "always", "tool_input"?: {...}}}` | runs the call, with the person's edit if given |
+| denies | `{"status": "resolved", "payload": {"status": "cancelled", "reason"?: "..."}}` | cancels it; the model reads "Declined: <reason>" |
+| answers a question | `{"status": "resolved", "payload": {"<question>": "<answer>"}}` | returns the answers to the model |
+| skips | `{"status": "cancelled"}` | cancels it; the model reads "Skipped: …" |
+
+Only an `approved` answer runs a gated call; anything else does not. A request
+the resume leaves out counts as skipped, never as approved. A denial is sent as
+`cancelled` so an agent that predates denial reasons cannot mistake it for an
+approval.
+
+## Remembered approvals
+
+"Allow for this chat" and "Always allow" are opt-in on both sides:
+
+- **The agent** offers them when its `remember` allows, and only when the host
+  remembers decisions: the host sends `forwardedProps.kaboo_grants`, and the run
+  publishes its open requests in `kaboo_session.approvals` (on by default; see
+  `runtime.persist_session_state`).
+- **The host** saves the person's decision and sends the permissions on every
+  run as `kaboo_grants: [{tool, subject, scope}]`. A call matching one runs
+  without asking. kaboo-runtime does this when given a grant store.
+
+The agent never stores a decision itself. The person's own answer on a request
+wins over a permission that answer created, so an edit still applies. The
+tool's activity entry records how each gated call was decided:
+`approval: {decision, by: "person" | "permission", scope?, reason?}`.
+
+## Tools that enforce their own approvals
+
+Some tools can't be judged by name. A generic tool such as `run_mutation` does
+a different thing on every call, and only its service knows which account,
+store, kind of change or item a call touches. Such a service decides, asks and
+remembers, and the agent only pauses for it. Whoever enforces approvals also
+remembers them.
+
+```yaml
+agents:
+  merchant:
+    interrupt:
+      tool_approvals: true   # tools may ask the person to approve a call
+```
+
+When a call isn't covered, the tool runs nothing and returns a normal (not
+error) result whose structured content, or JSON text, is a `kaboo_approval`
+reply:
+
+```json
+{
+  "kaboo_approval": {
+    "request": "apr_7Qm2",
+    "subject": {"key": "store:summit/catalog", "label": "catalog changes in Summit Outfitters"},
+    "scopes": ["once", "thread"],
+    "message": "Update the price of 3 variants"
+  }
+}
+```
+
+Return it as an object (structured content). It must not be an error result:
+gateways such as localcore-gateway reduce an error to its text and drop its
+structured content. A tool that returns the reply as a JSON string still works:
+FastMCP wraps a string result in `{"result": "..."}`, and that is read too.
+
+- **The run pauses** with the same approval request a gated call raises, plus
+  `request`. The reply never reaches the model; the call shows as waiting.
+- **The person approves:** the tool is called once more, with their edits if
+  any, and its result goes to the model. If the tool asks again, the model
+  reads "Still needs approval", so the agent can't loop.
+- **The person denies or skips, or the request expires:** the tool is not
+  called again, and the model reads the usual note.
+- **With `tool_approvals` off,** the reply reaches the model unchanged. Nothing
+  ran either way.
+- **Before the run continues,** the host tells the tool's service about the
+  decision. kaboo-runtime does this in `onDecision`, and never stores a
+  decision that carries a `request`. The service, not the agent, decides
+  whether the second call runs.
+
+`scopes` always include `once`. `subject`, `message` and `expiresAt` are
+optional; without a subject the request covers the tool. Don't also list such
+a tool under `interrupt.tools`, or the person is asked twice.
+
+### Checklist for the service
+
+The agent and the host only carry a request ID. The service is the only one
+that can make it mean anything:
+
+1. **IDs:** create random, unguessable request IDs (at least 128 bits) on the
+   server.
+2. **Binding:** when you create a request, bind it to the person, the
+   conversation, the resource (such as the store) and the exact call (a hash of
+   the resource and the arguments).
+3. **Who may decide:** accept decisions only from the host, over an
+   authenticated server-to-server call, never from the browser or the agent.
+4. **Which decisions count:** honour a decision only if it's for a request you
+   created, for the same person and conversation, still pending, and the first
+   one. Ignore anything else.
+5. **What a decision grants:** only a scope the request offered, for the
+   subject it named. An edited call must keep the same subject.
+6. **Check again at execution:** the call must match its approval, and normal
+   permissions still apply, since roles can change while a request waits.
+7. **Waiting and expiry:** a pending request may wait forever but authorizes
+   nothing. Remembered approvals expire and can be revoked.
+8. **No secrets:** IDs and labels only, because requests are stored in the
+   thread and shown on the card.
+9. **Audit:** record every decision: who, what, which scope, when.
+
+## The person can move on
+
+A question or approval waits with no time limit. If the person sends a message
+instead of answering, what was waiting is **skipped**: the open calls close as
+"Skipped: the person sent a message instead of answering", their activity cards
+close, and the agent answers the new message (and can ask again). This holds
+for a plain new message and for the AG-UI form — a resume that cancels every
+open request and ends with the new message, which kaboo-react sends.
+
 ## Key behaviours
 
 - **Interrupts bubble up.** A gate fired by a nested sub-agent surfaces to the
@@ -49,36 +239,6 @@ frontend:
 ```bash
 OPENROUTER_API_KEY=... uv run kaboo-serve examples/18_hitl/config.yaml
 ```
-
-## Tool gates and expiry
-
-Beyond `ask_user`, `interrupt.tools` lists tool names that pause for approval
-*before executing*. `interrupt.ttl_seconds` optionally stamps an `expiresAt`
-ISO-8601 timestamp onto every gate interrupt (AG-UI `Interrupt.expiresAt`), so
-clients can render a countdown and servers can expire unanswered approvals —
-kaboo itself never auto-expires; enforcement stays with the caller.
-
-```yaml
-agents:
-  field_agent:
-    interrupt:
-      tools: [transition_work_item, delete_work_item]
-      ask_user: false
-      ttl_seconds: 86400   # each gate carries expiresAt = now + 24h
-```
-
-## Resume protocol
-
-On pause, the run finishes with an `interrupt` outcome listing the pending
-interrupts (each with an `id`). The client resumes by sending, per interrupt,
-either `{"status": "resolved", "payload": ...}` or `{"status": "cancelled"}`
-(see [errors & rejection](errors-and-rejection.md)).
-
-For tool gates, a resolved payload of `{"status": "approved", "tool_input":
-{...}}` executes the gated call with the user's edited arguments instead of
-the agent's — approving a subset of a bulk operation is one resume, not a
-round-trip through the model. A payload of `{"status": "cancelled"}` rejects
-the call just like a cancelled entry.
 
 ## A gate outlives the process that opened it
 
@@ -116,6 +276,25 @@ once, the state travels on `kaboo_session`, a different replica can pick it up
 
 ## Proven by
 
+- `tests/e2e/test_approvals.py` — a gated call waits and the host is told what
+  it waits on; wider scopes only with a host that remembers; approval runs the
+  call; a remembered permission runs it without asking; a denial does not run it
+  and the agent hears why; a skip does not run it; the decision is recorded on
+  the tool's activity entry; a message sent while a request waits starts a new
+  turn.
+- `tests/runtime/test_approval_gate.py` — matching, scopes, subjects, answers,
+  deadlines and the host-facing descriptors.
+- `tests/e2e/test_tool_approvals.py` — a tool's reply pauses the run with the
+  tool's own request (every reply shape); approving calls the tool exactly once
+  more, with edits; a denial or skip never calls it again; an approval the
+  service never heard of doesn't loop; a decision for the chat covers only the
+  store it named; the reply never reaches the model and a forged request
+  changes nothing; with the flag off the reply reaches the model; a sub-agent's
+  decision is recorded on its activity entry.
+- `tests/runtime/test_tool_approvals.py` — reading replies, and which tools the
+  hook wraps.
+- `tests/runtime/test_ask_user.py` and
+  `tests/e2e/test_cross_cutting.py::test_a_free_text_question_is_refused_and_the_model_asks_with_options`.
 - `tests/e2e/test_cross_cutting.py::test_a_full_response_pauses_the_run_and_the_next_one_finishes_it`
   (the budget pauses an ungated tool call and the resume completes it, once).
 - `tests/e2e/test_cross_cutting.py::test_ask_user_interrupt_then_resume`

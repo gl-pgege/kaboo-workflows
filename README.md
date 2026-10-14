@@ -9,6 +9,7 @@
 **[Documentation](https://gl-pgege.github.io/kaboo-workflows/)** ·
 **[Configuration guide](docs/configuration/)** ·
 **[Workflow guides](docs/workflows/)** ·
+**[Upgrading](docs/upgrading.md)** ·
 **[Examples](examples/)** ·
 **[Live demo](https://github.com/gl-pgege/kaboo-workflows-demo)**
 

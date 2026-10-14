@@ -103,6 +103,10 @@ Every change ends in the tests/docs that prove it (see Definition of Done):
   globber test drives every one).
 - **Change docs** — if README/docs changed, run `uv run just docs-llms` so the
   AI layer stays current (`tests/contract/test_llms.py` enforces this).
+- **Change behaviour users rely on** — add an entry under the coming release in
+  `docs/upgrading.md`: who is affected, the code before and after (old code in
+  `diff` fences), and when a deprecated form goes away. Breaking commits carry a
+  `BREAKING CHANGE:` footer pointing to it.
 
 ---
 
@@ -115,6 +119,7 @@ Every change ends in the tests/docs that prove it (see Definition of Done):
 - [ ] new public symbol has a Google-style docstring + an autodoc page
 - [ ] new example has a passing load/e2e test; new workflow guide has a proof
 - [ ] `llms.txt` / `llms-full.txt` regenerated if docs changed
+- [ ] a user-visible change (config, wire format, wording the model reads) has a `docs/upgrading.md` entry, with the code before and after
 - [ ] smallest reasonable change; no secrets; no out-of-scope edits
 
 ---

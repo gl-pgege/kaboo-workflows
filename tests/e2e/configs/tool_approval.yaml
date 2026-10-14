@@ -1,0 +1,19 @@
+models:
+  chat:
+    provider: kaboo_workflows.testing:ScriptedModel
+    model_id: scripted
+    params:
+      script:
+        - {tool: set_price, input: {store: "summit", sku: "A1", price: 10}}
+      final_text: "Done."
+
+agents:
+  assistant:
+    stream: {title: "Assistant"}
+    model: chat
+    tools: ["tests.fakes.enforcing_tools:set_price"]
+    interrupt:
+      tool_approvals: true
+      ask_user: false
+
+entry: assistant

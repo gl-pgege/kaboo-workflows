@@ -37,7 +37,10 @@ from ag_ui.core import (
     TextMessageStartEvent,
 )
 
+from kaboo_workflows._context import get_session_exchange
+
 from . import _strands_bridge as bridge
+from ._interrupts import approval_descriptors, build_resume_responses
 from ._interrupts import map_strands_interrupt_to_agui as _map_strands_interrupt_to_agui
 
 if TYPE_CHECKING:
@@ -156,9 +159,14 @@ class StrandsMultiAgent:
         # Install this thread's interrupt state for the duration of the run;
         # it is parked again (or discarded once settled) in the finally below.
         bridge.swap_interrupt_state(self.orchestrator, self._parked_interrupts.pop(thread_id, None))
+        session_exchange = get_session_exchange()
+        if session_exchange is not None:
+            session_exchange.publishes_approvals = True
         try:
             if resume_entries is not None:
-                task: Any = _build_resume_responses(self.orchestrator, resume_entries)
+                task: Any = build_resume_responses(
+                    bridge.pending_interrupts(self.orchestrator), resume_entries
+                )
             else:
                 task = _extract_user_task(input_data)
             logger.info("multiagent.consume task=%r", task)
@@ -227,16 +235,20 @@ class StrandsMultiAgent:
                     TextMessageEndEvent(type=AGUIEventType.TEXT_MESSAGE_END, message_id=message_id)
                 )
 
+            paused = bridge.is_interrupt_active(self.orchestrator)
+            pending = (
+                bridge.pending_interrupts(self.orchestrator, unresolved_only=True) if paused else {}
+            )
+
             # History write-back so members' client-driven transcripts persist.
             await exchange.settle()
-            snapshot = _history_snapshot(input_data, exchange)
+            snapshot = _state_snapshot(input_data, exchange, approval_descriptors(pending.values()))
             if snapshot is not None:
                 await merged.put(
                     StateSnapshotEvent(type=AGUIEventType.STATE_SNAPSHOT, snapshot=snapshot)
                 )
 
-            if bridge.is_interrupt_active(self.orchestrator):
-                pending = bridge.pending_interrupts(self.orchestrator, unresolved_only=True)
+            if paused:
                 agui_interrupts = [
                     _map_strands_interrupt_to_agui(intr) for intr in pending.values()
                 ]
@@ -311,49 +323,31 @@ def _extract_user_task(input_data: RunAgentInput) -> str:
     return ""
 
 
-def _build_resume_responses(
-    orchestrator: MultiAgentBase, resume_entries: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Map AG-UI resume entries onto the orchestrator's pending interrupts.
-
-    Produces ``[{"interruptResponse": {"interruptId", "response"}}, ...]`` which
-    is a valid ``MultiAgentInput`` — ``stream_async`` feeds it to
-    ``_interrupt_state.resume(task)``.
-    """
-    lookup: dict[str, Any] = {}
-    for entry in resume_entries:
-        interrupt_id = entry.get("interruptId", "")
-        status = entry.get("status", "resolved")
-        payload = entry.get("payload")
-        if status == "resolved":
-            lookup[interrupt_id] = payload if payload is not None else {"status": "approved"}
-        else:
-            lookup[interrupt_id] = {"status": "cancelled"}
-
-    responses: list[dict[str, Any]] = []
-    for intr_id in bridge.pending_interrupts(orchestrator, unresolved_only=True):
-        if intr_id in lookup:
-            user_resp = lookup[intr_id]
-        else:
-            logger.warning("resume did not address interrupt %s; defaulting to cancelled", intr_id)
-            user_resp = {"status": "cancelled"}
-        responses.append({"interruptResponse": {"interruptId": intr_id, "response": user_resp}})
-    return responses
-
-
-def _history_snapshot(
-    input_data: RunAgentInput, exchange: HistoryExchange
+def _state_snapshot(
+    input_data: RunAgentInput,
+    exchange: HistoryExchange,
+    approvals: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Build a STATE_SNAPSHOT payload carrying this run's ``kaboo_history``.
+    """Build a STATE_SNAPSHOT payload: this run's ``kaboo_history`` and approvals.
+
+    ``kaboo_session`` carries only ``approvals`` here: an orchestrator's paused
+    gate stays in this process (see :class:`StrandsMultiAgent`), so there is no
+    interrupt state to hand the host. Approvals the client still holds from an
+    earlier pause are cleared once the run no longer waits on them.
 
     Returns ``None`` when there is nothing to persist so we don't emit an empty
-    snapshot on turns without sub-agent history.
+    snapshot on turns without sub-agent history or approvals.
     """
     merged_history = exchange.written_back()
-    if not merged_history:
+    inbound = input_data.state if isinstance(input_data.state, dict) else {}
+    carried = isinstance(inbound.get("kaboo_session"), dict)
+    if not merged_history and not approvals and not carried:
         return None
-    base = dict(input_data.state) if isinstance(input_data.state, dict) else {}
-    base["kaboo_history"] = merged_history
+    base = dict(inbound)
+    if merged_history:
+        base["kaboo_history"] = merged_history
+    if approvals or carried:
+        base["kaboo_session"] = {"approvals": approvals}
     return base
 
 

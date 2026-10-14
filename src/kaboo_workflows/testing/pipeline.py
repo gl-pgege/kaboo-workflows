@@ -36,9 +36,9 @@ from .._context import (
 )
 from ..adapters import _strands_bridge as bridge
 from ..adapters._activity import ActivityRegistry
+from ..adapters._interrupts import build_resume_responses
 from ..adapters._multiagent import StrandsMultiAgent
 from ..adapters.agui import (
-    _build_resume_responses,
     _build_session,
     _consume_run,
     _drop_replayed_tool_results,
@@ -355,7 +355,7 @@ class Pipeline:
                 # The endpoint answers RUN_ERROR / RESUME_NO_SESSION here; in-process
                 # the equivalent is refusing to drive a run with nothing to resume.
                 raise LookupError("no resumable agent state for thread")
-            responses = _build_resume_responses(strands_agent, resume)
+            responses = build_resume_responses(bridge.pending_interrupts(strands_agent), resume)
             with bridge.resume_prompt_override(strands_agent, responses):
                 await _consume_run(agui, input_data, merged, exchange)
         else:

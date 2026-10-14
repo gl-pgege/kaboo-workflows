@@ -1,0 +1,17 @@
+agents:
+  assistant:
+    stream: {title: "Assistant"}
+    tools: ["tests.fakes.gated_tools:submit_report"]
+    interrupt:
+      tools: [submit_report]
+      remember: thread
+      ask_user: false
+    model:
+      provider: kaboo_workflows.testing:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - {tool: submit_report, input: {title: "Q3 draft"}}
+        final_text: "Filed."
+
+entry: assistant

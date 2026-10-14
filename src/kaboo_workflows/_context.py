@@ -123,11 +123,17 @@ class SessionExchange:
     than a copy of the state because an interrupt *pauses* a run: the state we
     need is whatever it holds once the run has stopped, which is later than any
     hook fires.
+
+    ``publishes_approvals`` says whether this run writes the approvals it is
+    waiting on to ``kaboo_session.approvals``, where a host reads them to match
+    the person's decisions. Without it a host cannot remember a decision, so
+    the tool gate offers only ``once``.
     """
 
     inbound: dict[str, Any] = field(default_factory=dict)
     agent: Any = None
     resuming: bool = False
+    publishes_approvals: bool = False
 
 
 _current_session: contextvars.ContextVar[SessionExchange | None] = contextvars.ContextVar(
