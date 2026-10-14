@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -314,7 +314,7 @@ def get_turn_id() -> str | None:
 
 
 @contextlib.contextmanager
-def delegation_context(tool_use_id: str | None) -> Iterator[None]:
+def delegation_context(tool_use_id: str | None) -> Generator[None]:
     """Bind the delegating tool-call id for the wrapped node invocation.
 
     A coordinator delegates to a sub-agent by calling a tool; that tool call has

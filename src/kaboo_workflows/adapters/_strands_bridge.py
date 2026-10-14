@@ -17,7 +17,7 @@ import inspect
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
     from ag_ui_strands import StrandsAgent
 
@@ -154,7 +154,7 @@ def deactivate_interrupts(strands_agent: Any) -> None:
 
 
 @contextlib.contextmanager
-def resume_prompt_override(strands_agent: Any, responses: list[dict[str, Any]]) -> Iterator[None]:
+def resume_prompt_override(strands_agent: Any, responses: list[dict[str, Any]]) -> Generator[None]:
     """Route the next ag-ui-strands run through interrupt *responses*.
 
     ``ag_ui_strands.StrandsAgent.run()`` has no resume entry point — it always

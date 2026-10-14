@@ -110,7 +110,7 @@ from ._interrupts import tool_call_id_from_interrupt_id as _tool_call_id_from_in
 from ._multiagent import StrandsMultiAgent
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 
     AuthVerifier = Callable[[Request], Principal | None | Awaitable[Principal | None]]
     """User-supplied inbound auth verifier.
@@ -1701,7 +1701,7 @@ def create_agui_app(
         )
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         logger.info("AG-UI server starting — MCP lifecycle already active")
         try:
             yield
