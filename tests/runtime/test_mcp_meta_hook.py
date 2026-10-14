@@ -43,7 +43,7 @@ def _mcp_tool(client: RecordingMCPClient) -> MCPAgentTool:
     spec = MCPTool(
         name="list_work_items",
         description="List work items",
-        inputSchema={"type": "object", "properties": {}},
+        input_schema={"type": "object", "properties": {}},
     )
     return MCPAgentTool(spec, cast(MCPClient, client))
 

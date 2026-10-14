@@ -2,7 +2,7 @@
 #
 # The AgentCore Gateway is just an MCP server: point an mcp_clients entry at its
 # /mcp URL. Outbound auth is declared with `auth:` — kaboo-workflows attaches the
-# right httpx.Auth for the transport (a dedicated client for streamable-http, or
+# right httpx2.Auth for the transport (a dedicated client for streamable-http, or
 # the `auth` kwarg for SSE). Swap the strategy per client without code changes.
 
 models:

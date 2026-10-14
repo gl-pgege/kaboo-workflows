@@ -31,7 +31,7 @@ mcp_clients:
       prefix: calc                # tools: calc_add, calc_multiply, calc_percentage
 ```
 
-`server.py` subclasses `MCPServer` and uses FastMCP's `@mcp.tool()` decorator.
+`server.py` subclasses `MCPServer` and uses the MCP SDK server's `@mcp.tool()` decorator.
 The `create()` factory is called by kaboo-workflows with `params` from YAML.
 On `load()`, kaboo-workflows starts the server, connects the client, and on exit
 `mcp_lifecycle.stop()` tears everything down — you never manage threads or sockets.

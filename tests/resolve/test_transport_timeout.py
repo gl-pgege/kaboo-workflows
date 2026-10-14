@@ -1,14 +1,14 @@
-"""Transport ``timeout`` option: scalar/dict httpx timeouts on streamable-http.
+"""Transport ``timeout`` option: scalar/dict httpx2 timeouts on streamable-http.
 
 Long-running MCP tools (minutes of silence on the POST response stream) need
-the read timeout raised above httpx's 5s default; ``transport_options.timeout``
+the read timeout raised above httpx2's 5s default; ``transport_options.timeout``
 is the YAML-reachable knob, honored both by the plain transport factory and by
 the dedicated client the declarative ``auth:`` wiring builds.
 """
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 
 from kaboo_workflows.auth import apply_auth_to_transport_options, build_auth
 from kaboo_workflows.mcp.transports import _httpx_timeout
@@ -38,7 +38,7 @@ def test_auth_wiring_folds_timeout_into_the_dedicated_client() -> None:
         transport="streamable-http",
     )
     client = opts["http_client"]
-    assert isinstance(client, httpx.AsyncClient)
+    assert isinstance(client, httpx2.AsyncClient)
     assert client.timeout.read == 840
     assert "timeout" not in opts
     assert opts["terminate_on_close"] is False
@@ -47,4 +47,4 @@ def test_auth_wiring_folds_timeout_into_the_dedicated_client() -> None:
 def test_auth_wiring_without_timeout_keeps_httpx_defaults() -> None:
     auth = build_auth("static", {"token": "tok"})
     opts = apply_auth_to_transport_options({}, auth, transport="streamable-http")
-    assert opts["http_client"].timeout == httpx.Timeout(5.0)
+    assert opts["http_client"].timeout == httpx2.Timeout(5.0)

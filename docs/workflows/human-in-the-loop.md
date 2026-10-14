@@ -167,7 +167,8 @@ reply:
 Return it as an object (structured content). It must not be an error result:
 gateways such as localcore-gateway reduce an error to its text and drop its
 structured content. A tool that returns the reply as a JSON string still works:
-FastMCP wraps a string result in `{"result": "..."}`, and that is read too.
+the MCP Python SDK's server wraps a string result in `{"result": "..."}`, and
+that is read too.
 
 - **The run pauses** with the same approval request a gated call raises, plus
   `request`. The reply never reaches the model; the call shows as waiting.

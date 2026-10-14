@@ -8,7 +8,7 @@ these strategies: it belongs to whatever sits between the agent and the service.
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 import pytest
 
 from kaboo_workflows._context import (
@@ -20,11 +20,11 @@ from kaboo_workflows._context import (
 from kaboo_workflows.auth import build_auth
 
 
-def _request() -> httpx.Request:
-    return httpx.Request("POST", "http://service.internal/mcp")
+def _request() -> httpx2.Request:
+    return httpx2.Request("POST", "http://service.internal/mcp")
 
 
-def _apply(auth: httpx.Auth) -> httpx.Request:
+def _apply(auth: httpx2.Auth) -> httpx2.Request:
     flow = auth.sync_auth_flow(_request())
     request = next(flow)
     flow.close()

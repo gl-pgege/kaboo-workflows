@@ -147,8 +147,8 @@ places its cache points itself. Cache points are never written back.
 `cache_config` caches the whole conversation instead: strands puts the cache
 point at the end of the latest user message on every request, so each turn of
 a tool loop reads everything before it from the cache. Set it as a mapping on a
-Bedrock model, beside `cache_prompt` and `cache_tools`, for three cache points
-of the four Bedrock allows:
+Bedrock model; `system_prompt_ttl` and `tools_ttl` add the system prompt and the
+tool list, for three cache points of the four Bedrock allows:
 
 ```yaml
 models:
@@ -156,12 +156,13 @@ models:
     provider: bedrock
     model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
     params:
-      cache_prompt: default
-      cache_tools: default
-      cache_config: {strategy: auto}
+      cache_config: {strategy: auto, system_prompt_ttl: true, tools_ttl: true}
 ```
 
-A key other than `strategy` and `ttl` fails when the config loads.
+The keys are those of strands' `CacheConfig` (`strategy`, `ttl`,
+`system_prompt_ttl`, `tools_ttl`, `cache_key`); any other key fails when the
+config loads. strands deprecates the older `cache_prompt` and `cache_tools`
+params in their favor.
 
 The run's usage in the activity stream (`usageByRun`) carries `cacheHitRate`,
 the share of the prompt read from the cache, for any run that read or wrote it:

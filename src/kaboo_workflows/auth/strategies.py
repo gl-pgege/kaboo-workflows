@@ -1,6 +1,6 @@
 """Outbound MCP authentication strategies.
 
-Each strategy is an :class:`httpx.Auth` flow that stamps a downstream bearer
+Each strategy is an :class:`httpx2.Auth` flow that stamps a downstream bearer
 credential onto every MCP HTTP request. Wire one into an MCP client via
 ``transport_options`` (``http_client`` for streamable-http, ``auth`` for SSE) or
 declaratively via the ``auth:`` field on an ``mcp_clients:`` entry.
@@ -24,7 +24,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-import httpx
+import httpx2
 
 from .._context import get_auth_context, get_forwarded_props, get_run_id, get_thread_id
 
@@ -71,7 +71,7 @@ def _context_value(source: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-class _BearerAuth(httpx.Auth):
+class _BearerAuth(httpx2.Auth):
     """Apply a bearer token (resolved per request) to the outgoing request.
 
     Subclasses implement :meth:`_token`. Strategies that mint tokens with
@@ -93,7 +93,7 @@ class _BearerAuth(httpx.Auth):
     async def _token_async(self) -> str | None:
         return self._token()
 
-    def _apply(self, request: httpx.Request, token: str | None) -> None:
+    def _apply(self, request: httpx2.Request, token: str | None) -> None:
         if not token:
             return
         value = f"{self.scheme} {token}" if self.scheme else token
@@ -101,14 +101,14 @@ class _BearerAuth(httpx.Auth):
             request.headers[name] = value
 
     def sync_auth_flow(
-        self, request: httpx.Request
-    ) -> Generator[httpx.Request, httpx.Response, None]:
+        self, request: httpx2.Request
+    ) -> Generator[httpx2.Request, httpx2.Response, None]:
         self._apply(request, self._token())
         yield request
 
     async def async_auth_flow(
-        self, request: httpx.Request
-    ) -> AsyncGenerator[httpx.Request, httpx.Response]:
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         self._apply(request, await self._token_async())
         yield request
 
@@ -153,7 +153,7 @@ class RelayTokenAuth(_BearerAuth):
         principal = get_auth_context()
         return principal.token if principal else None
 
-    def _apply(self, request: httpx.Request, token: str | None) -> None:
+    def _apply(self, request: httpx2.Request, token: str | None) -> None:
         super()._apply(request, token)
         for name, source in self.context_headers.items():
             value = _context_value(source)
@@ -238,7 +238,7 @@ class M2MClientCredentialsAuth(_BearerAuth):
         if self._audience:
             data["audience"] = self._audience
         data.update(self._extra)
-        resp = httpx.post(self._token_url, data=data)
+        resp = httpx2.post(self._token_url, data=data)
         resp.raise_for_status()
         payload = resp.json()
         return payload["access_token"], time.time() + float(payload.get("expires_in", 3600))
@@ -268,7 +268,7 @@ _STRATEGIES: dict[str, type[_BearerAuth]] = {
 }
 
 
-def build_auth(strategy: str, params: dict[str, Any] | None = None) -> httpx.Auth:
+def build_auth(strategy: str, params: dict[str, Any] | None = None) -> httpx2.Auth:
     """Build an outbound MCP auth strategy from a name + params.
 
     Args:
@@ -276,7 +276,7 @@ def build_auth(strategy: str, params: dict[str, Any] | None = None) -> httpx.Aut
         params: Constructor keyword arguments for the strategy.
 
     Returns:
-        A configured :class:`httpx.Auth` instance.
+        A configured :class:`httpx2.Auth` instance.
 
     Raises:
         ValueError: If ``strategy`` is not a known strategy name.
@@ -292,14 +292,14 @@ def build_auth(strategy: str, params: dict[str, Any] | None = None) -> httpx.Aut
 
 def apply_auth_to_transport_options(
     options: dict[str, Any] | None,
-    auth: httpx.Auth,
+    auth: httpx2.Auth,
     *,
     transport: str,
 ) -> dict[str, Any]:
     """Return ``transport_options`` with *auth* wired in for the given transport.
 
     SSE accepts an ``auth`` kwarg directly. Streamable-http has no ``auth``
-    kwarg, so the auth rides a dedicated ``httpx.AsyncClient`` (folding in any
+    kwarg, so the auth rides a dedicated ``httpx2.AsyncClient`` (folding in any
     ``headers`` and ``timeout`` the caller set, with the same semantics as
     :func:`~kaboo_workflows.mcp.transports.streamable_http_transport`). A
     user-provided ``http_client`` / ``auth`` is left untouched.
@@ -316,5 +316,5 @@ def apply_auth_to_transport_options(
         kwargs: dict[str, Any] = {"auth": auth, "headers": headers or None}
         if timeout is not None:
             kwargs["timeout"] = _httpx_timeout(timeout)
-        opts["http_client"] = httpx.AsyncClient(**kwargs)
+        opts["http_client"] = httpx2.AsyncClient(**kwargs)
     return opts

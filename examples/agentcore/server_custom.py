@@ -24,7 +24,7 @@ import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-import httpx
+import httpx2
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
@@ -71,7 +71,7 @@ async def invocations(request: Request) -> StreamingResponse:
         url=GATEWAY_URL,
         transport="streamable-http",
         transport_options={
-            "http_client": httpx.AsyncClient(auth=RelayTokenAuth(token=workload_token))
+            "http_client": httpx2.AsyncClient(auth=RelayTokenAuth(token=workload_token))
         },
     )
 

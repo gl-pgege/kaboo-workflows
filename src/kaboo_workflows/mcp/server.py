@@ -1,16 +1,17 @@
 """Abstract MCP server base class.
 
 Subclasses implement :meth:`_register_tools` to add tools on the
-underlying ``FastMCP`` instance.  The base handles lifecycle —
+underlying MCP SDK server (``mcp.server.mcpserver.MCPServer``, called
+``FastMCP`` before mcp 2).  The base handles lifecycle —
 start in a background daemon thread, readiness signaling via
 ``threading.Event``, and graceful shutdown.
 
 Graceful shutdown
 -----------------
-The server bypasses ``FastMCP.run()`` — which creates a local
+The server bypasses the SDK server's ``run()`` — which creates a local
 ``uvicorn.Server`` that is inaccessible after the call — and instead
-obtains the Starlette ASGI app via ``FastMCP.streamable_http_app()`` /
-``FastMCP.sse_app()``, then creates and manages its own
+obtains the Starlette ASGI app via ``streamable_http_app()`` /
+``sse_app()``, then creates and manages its own
 ``uvicorn.Server``.  This gives us access to
 ``uvicorn.Server.should_exit`` for clean shutdown from any thread.
 
@@ -21,7 +22,7 @@ subprocess — there is no server to manage here.
 Example::
 
     class PostgresServer(MCPServer):
-        def _register_tools(self, mcp: FastMCP) -> None:
+        def _register_tools(self, mcp: SdkMCPServer) -> None:
             mcp.tool()(my_query_func)
 
 
@@ -47,7 +48,7 @@ from .transports import DEFAULT_TRANSPORT, MCP_SERVER_TRANSPORT
 
 if TYPE_CHECKING:
     import uvicorn
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer as SdkMCPServer
 
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ class MCPServer(ABC):
         """Initialize the MCPServer.
 
         Subclasses implement ``_register_tools()`` to register tools on the
-        ``FastMCP`` instance.  The base class manages background-thread
+        SDK server instance.  The base class manages background-thread
         lifecycle and readiness signaling.
 
         Args:
@@ -81,14 +82,15 @@ class MCPServer(ABC):
             host: Bind address for the HTTP transport.
             port: Bind port for the HTTP transport.
             transport: MCP server transport type (``streamable-http`` or ``sse``).
-            server_params: Extra keyword arguments forwarded to ``FastMCP()``.
+            server_params: Extra keyword arguments forwarded to the SDK
+                server's constructor (``mcp.server.mcpserver.MCPServer``).
         """
         self.name = name
         self.host = host
         self.port = port
         self.transport = transport
         self.server_params = server_params or {}
-        self._mcp: FastMCP | None = None
+        self._mcp: SdkMCPServer | None = None
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
         self._error: BaseException | None = None
@@ -108,35 +110,27 @@ class MCPServer(ABC):
 
     # -- server creation -------------------------------------------- #
 
-    def create_server(self) -> FastMCP:
-        """Build the ``FastMCP`` instance and register tools.
+    def create_server(self) -> SdkMCPServer:
+        """Build the SDK server instance and register tools.
 
         The result is cached — calling twice returns the same instance.
         """
         if self._mcp is not None:
             return self._mcp
 
-        from mcp.server.fastmcp import FastMCP as _FastMCP
+        from mcp.server.mcpserver import MCPServer as _SdkMCPServer
 
-        mcp = _FastMCP(
-            self.name,
-            host=self.host,
-            port=self.port,
-            stateless_http=True,
-            json_response=True,
-            log_level="WARNING",
-            **self.server_params,
-        )
+        mcp = _SdkMCPServer(self.name, log_level="WARNING", **self.server_params)
         self._register_tools(mcp)
         self._mcp = mcp
         return mcp
 
     # -- lifecycle -------------------------------------------------- #
 
-    def _get_asgi_app(self, mcp: FastMCP) -> Any:
+    def _get_asgi_app(self, mcp: SdkMCPServer) -> Any:
         """Return the Starlette ASGI app for the current transport.
 
-        Calls the corresponding public method on ``FastMCP`` which lazily
+        Calls the corresponding public method on the SDK server, which lazily
         initialises the session manager and returns a ``Starlette``
         instance.
 
@@ -144,9 +138,9 @@ class MCPServer(ABC):
             ValueError: If the transport type is not supported.
         """
         if self.transport == "streamable-http":
-            return mcp.streamable_http_app()
+            return mcp.streamable_http_app(**self._transport_options())
         if self.transport == "sse":
-            return mcp.sse_app()
+            return mcp.sse_app(host=self.host)
         raise ValueError(
             f"Unsupported server transport: {self.transport!r}. "
             "MCPServer only supports 'streamable-http' and 'sse'. "
@@ -157,17 +151,23 @@ class MCPServer(ABC):
     def run(self) -> None:
         """Start the server blocking (for standalone CLI usage).
 
-        In the main thread ``FastMCP.run()`` installs signal handlers so
-        that Ctrl-C triggers a graceful uvicorn shutdown.
+        In the main thread the SDK server's ``run()`` installs signal
+        handlers so that Ctrl-C triggers a graceful uvicorn shutdown.
         """
         mcp = self.create_server()
-        mcp.run(transport=self.transport)
+        if self.transport == "streamable-http":
+            mcp.run(transport="streamable-http", port=self.port, **self._transport_options())
+        else:
+            mcp.run(transport="sse", host=self.host, port=self.port)
+
+    def _transport_options(self) -> dict[str, Any]:
+        return {"host": self.host, "stateless_http": True, "json_response": True}
 
     def start(self) -> None:
         """Start the server in a background daemon thread.
 
-        Creates its own ``uvicorn.Server`` instead of delegating to
-        ``FastMCP.run()``.  This keeps a reference to the server so that
+        Creates its own ``uvicorn.Server`` instead of delegating to the SDK
+        server's ``run()``.  This keeps a reference to the server so that
         :meth:`stop` can trigger a graceful shutdown via
         ``uvicorn.Server.should_exit``.
         """
@@ -268,8 +268,8 @@ class MCPServer(ABC):
     # -- extension point -------------------------------------------- #
 
     @abstractmethod
-    def _register_tools(self, mcp: FastMCP) -> None:
-        """Register tools, routes, and resources on the FastMCP instance."""
+    def _register_tools(self, mcp: SdkMCPServer) -> None:
+        """Register tools, routes, and resources on the SDK server instance."""
         ...
 
 
@@ -285,7 +285,7 @@ def create_mcp_server(
     """Create an MCP server from a list of callables — no subclassing needed.
 
     Each callable (sync or async) is registered as a tool on the underlying
-    ``FastMCP`` instance.  For advanced use (custom state, routes, resources),
+    SDK server.  For advanced use (custom state, routes, resources),
     subclass :class:`MCPServer` directly.
 
     Example::
@@ -306,7 +306,7 @@ def create_mcp_server(
         host: Bind address (default ``127.0.0.1``).
         port: Bind port (default ``8000``).
         transport: Server transport type (``streamable-http`` or ``sse``).
-        server_params: Extra kwargs forwarded to ``FastMCP()``.
+        server_params: Extra kwargs forwarded to the SDK server's constructor.
 
     Returns:
         A ready-to-use :class:`MCPServer` instance.
@@ -314,7 +314,7 @@ def create_mcp_server(
     tool_fns = list(tools)
 
     class _FactoryServer(MCPServer):
-        def _register_tools(self, mcp: FastMCP) -> None:
+        def _register_tools(self, mcp: SdkMCPServer) -> None:
             for fn in tool_fns:
                 mcp.tool()(fn)
 

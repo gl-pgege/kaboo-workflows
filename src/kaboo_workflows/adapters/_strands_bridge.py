@@ -173,19 +173,36 @@ def resume_prompt_override(strands_agent: Any, responses: list[dict[str, Any]]) 
     then the only record of the turn that paused — overwriting it with an empty
     list leaves the model no tool call to resume, so it starts the turn over.
 
-    DEPENDS ON strands internal: ``Agent.stream_async`` / ``Agent.messages``.
+    ag-ui-strands 1.x runs its own resume protocol and refuses a run whose
+    interrupt state is active but which carries no ``resume`` of its own. kaboo
+    answers the interrupts itself, so the state reads as inactive to those
+    checks and is reactivated the moment strands receives the responses.
+
+    DEPENDS ON strands internal: ``Agent.stream_async`` / ``Agent.messages`` /
+    ``_InterruptState.activated``.
     """
     original_stream = strands_agent.stream_async
     saved_messages = list(strands_agent.messages) if strands_agent.messages else []
+    istate = get_interrupt_state(strands_agent)
+    hidden = istate is not None and getattr(istate, "activated", False) is True
+    reactivated = False
 
     async def _resume_stream(prompt: Any = None, **kwargs: Any) -> Any:
+        nonlocal reactivated
+        if hidden and istate is not None:
+            istate.activated = True
+            reactivated = True
         if saved_messages:
             strands_agent.messages = saved_messages
         async for evt in original_stream(responses, **kwargs):
             yield evt
 
+    if hidden and istate is not None:
+        istate.activated = False
     strands_agent.stream_async = _resume_stream
     try:
         yield
     finally:
         strands_agent.stream_async = original_stream
+        if hidden and istate is not None and not reactivated:
+            istate.activated = True

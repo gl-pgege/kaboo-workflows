@@ -1,6 +1,6 @@
 # MCP Module — Developer Guide
 
-This module manages the full lifecycle of [Model Context Protocol](https://modelcontextprotocol.io/) servers and clients within kaboo-workflows.  It bridges the gap between the low-level `mcp` Python SDK (which provides `FastMCP` and transport primitives) and the strands agent framework (which consumes `MCPClient` as a tool provider).
+This module manages the full lifecycle of [Model Context Protocol](https://modelcontextprotocol.io/) servers and clients within kaboo-workflows.  It bridges the gap between the low-level `mcp` Python SDK (which provides its server class, `mcp.server.mcpserver.MCPServer` — `FastMCP` before mcp 2 — and transport primitives) and the strands agent framework (which consumes `MCPClient` as a tool provider).
 
 The kaboo-workflows config layer resolves YAML declarations into the objects defined here; this module knows nothing about YAML — it only deals with constructed Python objects and their lifecycle.
 
@@ -10,13 +10,13 @@ The kaboo-workflows config layer resolves YAML declarations into the objects def
 
 **Responsibility:** Define, build, start, and **gracefully stop** MCP tool servers.
 
-`MCPServer` is an abstract base class.  Subclasses implement `_register_tools(mcp)` to register tool functions, custom routes, or resources on the underlying `FastMCP` instance.  Everything else — thread management, readiness probing, and shutdown — is handled by the base.
+`MCPServer` is an abstract base class.  Subclasses implement `_register_tools(mcp)` to register tool functions, custom routes, or resources on the underlying SDK server instance.  Everything else — thread management, readiness probing, and shutdown — is handled by the base.
 
 `create_mcp_server(name, tools=[...])` is a convenience factory that creates an `MCPServer` without subclassing.  It's used by YAML configs that list plain callables.
 
-### Why we bypass `FastMCP.run()`
+### Why we bypass the SDK server's `run()`
 
-`FastMCP.run(transport="streamable-http")` internally does:
+The SDK server's `run(transport="streamable-http")` internally does:
 
 ```python
 async def run_streamable_http_async(self):
@@ -27,7 +27,7 @@ async def run_streamable_http_async(self):
 
 The `uvicorn.Server` instance is a **local variable** — it is never stored on `self`.  When running in a background thread, uvicorn cannot install signal handlers (Python restricts `signal.signal()` to the main thread), so there is no way to trigger shutdown from outside.
 
-Our solution: call `FastMCP.streamable_http_app()` (or `sse_app()`) ourselves to get the Starlette ASGI app, then create and hold our own `uvicorn.Server`.  This gives us access to `uvicorn.Server.should_exit` — a boolean that uvicorn's main loop polls every 100 ms.  Setting it from any thread triggers graceful shutdown (stop accepting -> drain -> exit).
+Our solution: call the SDK server's `streamable_http_app()` (or `sse_app()`) ourselves to get the Starlette ASGI app, then create and hold our own `uvicorn.Server`.  This gives us access to `uvicorn.Server.should_exit` — a boolean that uvicorn's main loop polls every 100 ms.  Setting it from any thread triggers graceful shutdown (stop accepting -> drain -> exit).
 
 ### Shutdown sequence
 
@@ -45,7 +45,7 @@ Only HTTP transports (`streamable-http`, `sse`) are supported for `MCPServer`.  
 
 ### Subclass contract
 
-Subclasses only need to implement `_register_tools(mcp: FastMCP)`.  Override `run()` for blocking-mode customisation (e.g. the Postgres server adds `finally: close_pools()`).  Override `stop()` if you need cleanup after the server thread exits (e.g. closing database pools).
+Subclasses only need to implement `_register_tools(mcp)`, which receives the SDK server instance.  Override `run()` for blocking-mode customisation (e.g. the Postgres server adds `finally: close_pools()`).  Override `stop()` if you need cleanup after the server thread exits (e.g. closing database pools).
 
 ---
 
@@ -75,7 +75,7 @@ Each factory captures its configuration in a closure and returns a zero-argument
 
 Three factories corresponding to the three MCP transport types:
 
-- **`streamable_http_transport(url, headers=, http_client=)`** — wraps `mcp.client.streamable_http.streamable_http_client`.  Supports pre-configured `httpx.AsyncClient` for custom auth/TLS.
+- **`streamable_http_transport(url, headers=, http_client=)`** — wraps `mcp.client.streamable_http.streamable_http_client`.  Supports pre-configured `httpx2.AsyncClient` for custom auth/TLS.
 - **`sse_transport(url, headers=, timeout=, auth=)`** — wraps `mcp.client.sse.sse_client`.
 - **`stdio_transport(command, env=, cwd=)`** — wraps `mcp.client.stdio.stdio_client`.
 

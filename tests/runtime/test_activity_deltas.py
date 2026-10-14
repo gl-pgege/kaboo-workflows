@@ -23,6 +23,11 @@ from kaboo_workflows.types import EventType, StreamEvent
 from kaboo_workflows.wire import EventQueue
 
 
+def _wire_patch(event: object) -> list[dict]:
+    """The patch as a client receives it: plain JSON Patch operations."""
+    return event.model_dump(mode="json", by_alias=True, exclude_none=True)["patch"]  # ty: ignore[unresolved-attribute]
+
+
 def _queue(maxsize: int = 1000) -> EventQueue:
     return EventQueue(asyncio.Queue(maxsize=maxsize), entry_name="main")
 
@@ -103,7 +108,7 @@ async def test_applying_the_patches_reproduces_the_tree() -> None:
 
     client = emitted[0].content
     for event in emitted[1:]:
-        client = jsonpatch.JsonPatch(event.patch).apply(client)
+        client = jsonpatch.JsonPatch(_wire_patch(event)).apply(client)
 
     assert client == pump.registry.snapshot("t1")
     assert client["groups"]["g1"]["timeline"] == [{"type": "text", "text": "one two three four"}]
@@ -144,7 +149,7 @@ async def test_a_patch_is_far_smaller_than_the_tree_it_updates() -> None:
         await pump.stop()
 
     tree = len(json.dumps(emitted[-1].content))
-    patch = len(json.dumps(follow_up[0].patch))
+    patch = len(json.dumps(_wire_patch(follow_up[0])))
 
     assert tree > 20_000
     assert patch < 500, f"patch was {patch} bytes against a {tree} byte tree"

@@ -16,6 +16,11 @@ EDITOR = "orchestrator.edit_dashboard"
 REVIEWER = f"{EDITOR}.quality_reviewer"
 
 
+def _wire_patch(event: object) -> list[dict]:
+    """The patch as a client receives it: plain JSON Patch operations."""
+    return event.model_dump(mode="json", by_alias=True, exclude_none=True)["patch"]  # ty: ignore[unresolved-attribute]
+
+
 def _start(
     tool_call_id: str,
     run_id: str,
@@ -157,7 +162,7 @@ async def test_the_client_patch_reproduces_the_move() -> None:
 
     assert snapshot.type == AGUIEventType.ACTIVITY_SNAPSHOT
     assert delta.type == AGUIEventType.ACTIVITY_DELTA
-    client = jsonpatch.JsonPatch(delta.patch).apply(snapshot.content)
+    client = jsonpatch.JsonPatch(_wire_patch(delta)).apply(snapshot.content)
     assert client == registry.snapshot("t1")
     assert client["groups"][EDITOR]["toolCallId"] == "tc-2"
     archived_key, _ = _by_call(client["groups"], "tc-1")

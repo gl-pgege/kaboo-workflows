@@ -2,7 +2,7 @@
 
 Inbound identity is carried by :class:`~kaboo_workflows._context.Principal`
 (read via :func:`~kaboo_workflows._context.get_auth_context`). Outbound MCP auth
-is expressed with the :class:`httpx.Auth` strategies below.
+is expressed with the :class:`httpx2.Auth` strategies below.
 """
 
 from __future__ import annotations

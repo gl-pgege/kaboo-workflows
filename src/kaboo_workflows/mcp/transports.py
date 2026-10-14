@@ -97,8 +97,8 @@ def sse_transport(
         headers: Optional HTTP headers.
         timeout: HTTP timeout in seconds (default: 5).
         sse_read_timeout: Timeout waiting for SSE events in seconds (default: 300).
-        auth: Optional httpx.Auth instance (e.g., OAuth provider).
-        httpx_client_factory: Optional factory for creating httpx client.
+        auth: Optional httpx2.Auth instance (e.g., OAuth provider).
+        httpx_client_factory: Optional factory for creating httpx2 client.
 
     Returns:
         Transport callable for strands MCPClient.
@@ -134,17 +134,17 @@ def sse_transport(
 
 
 def _httpx_timeout(timeout: float | int | dict[str, float] | None) -> Any:
-    """Build an ``httpx.Timeout`` from a scalar or per-phase dict.
+    """Build an ``httpx2.Timeout`` from a scalar or per-phase dict.
 
     A scalar applies to every phase (connect/read/write/pool). A dict names
     phases explicitly (e.g. ``{"connect": 5, "read": 840}``); unnamed phases
-    keep httpx's 5s default.
+    keep httpx2's 5s default.
     """
-    import httpx
+    import httpx2
 
     if isinstance(timeout, dict):
-        return httpx.Timeout(5.0, **timeout)
-    return httpx.Timeout(timeout)
+        return httpx2.Timeout(5.0, **timeout)
+    return httpx2.Timeout(timeout)
 
 
 def streamable_http_transport(
@@ -158,19 +158,19 @@ def streamable_http_transport(
     """Create a streamable HTTP transport callable.
 
     For full control (auth, custom TLS, etc.), pass a pre-configured
-    ``httpx.AsyncClient`` via ``http_client``. When ``http_client`` is
+    ``httpx2.AsyncClient`` via ``http_client``. When ``http_client`` is
     provided, ``headers`` and ``timeout`` are ignored (configure both on the
     client directly).
 
     Args:
         url: HTTP endpoint URL (e.g., "http://localhost:8000/mcp").
         headers: Optional HTTP headers. Ignored when ``http_client`` is provided.
-        http_client: Optional pre-configured ``httpx.AsyncClient``.
+        http_client: Optional pre-configured ``httpx2.AsyncClient``.
         terminate_on_close: Send DELETE to close session (default: True).
-        timeout: Optional httpx timeout for the dedicated client this factory
+        timeout: Optional httpx2 timeout for the dedicated client this factory
             builds: a number of seconds applied to every phase, or a dict of
-            httpx phases (``connect`` / ``read`` / ``write`` / ``pool``).
-            Long-running tools need ``read`` raised above httpx's 5s default.
+            httpx2 phases (``connect`` / ``read`` / ``write`` / ``pool``).
+            Long-running tools need ``read`` raised above httpx2's 5s default.
             Ignored when ``http_client`` is provided.
 
     Returns:
@@ -197,12 +197,12 @@ def streamable_http_transport(
                 terminate_on_close=captured_terminate_on_close,
             )
         if captured_headers or captured_timeout is not None:
-            import httpx
+            import httpx2
 
             kwargs: dict[str, Any] = {"headers": captured_headers}
             if captured_timeout is not None:
                 kwargs["timeout"] = _httpx_timeout(captured_timeout)
-            client = httpx.AsyncClient(**kwargs)
+            client = httpx2.AsyncClient(**kwargs)
             return streamable_http_client(
                 url=url,
                 http_client=client,

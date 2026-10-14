@@ -91,18 +91,23 @@ def test_a_bedrock_cache_config_mapping_becomes_the_strands_setting():
             model_id="anthropic.claude",
             params={
                 "region_name": "us-east-1",
-                "cache_prompt": "default",
-                "cache_tools": "default",
-                "cache_config": {"strategy": "auto", "ttl": "1h"},
+                "cache_config": {
+                    "strategy": "auto",
+                    "ttl": "1h",
+                    "system_prompt_ttl": True,
+                    "tools_ttl": True,
+                },
             },
         )
     )
 
-    assert model.get_config()["cache_config"] == CacheConfig(strategy="auto", ttl="1h")
+    assert model.get_config()["cache_config"] == CacheConfig(
+        strategy="auto", ttl="1h", system_prompt_ttl=True, tools_ttl=True
+    )
 
 
 def test_a_bedrock_cache_config_with_an_unknown_key_fails_at_startup():
-    with pytest.raises(ValueError, match="strategy and ttl"):
+    with pytest.raises(ValueError, match="fields of strands' CacheConfig"):
         create_model(
             "bedrock", "anthropic.claude", region_name="us-east-1", cache_config={"mode": "auto"}
         )

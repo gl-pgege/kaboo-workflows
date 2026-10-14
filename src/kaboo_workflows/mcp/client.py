@@ -52,7 +52,7 @@ def create_mcp_client(
             ``httpx_client_factory``
 
             **streamable-http**: ``headers``, ``http_client`` (pre-configured
-            ``httpx.AsyncClient``), ``terminate_on_close``
+            ``httpx2.AsyncClient``), ``terminate_on_close``
 
         **kwargs: Additional kwargs forwarded to strands MCPClient
             (startup_timeout, tool_filters, prefix, elicitation_callback,

@@ -57,7 +57,7 @@ def _bedrock_cache_config(cache_config: Mapping[str, Any]) -> Any:
         return CacheConfig(**cache_config)
     except TypeError as err:
         raise ValueError(
-            f"A bedrock model's cache_config takes strategy and ttl only: {err}"
+            f"A bedrock model's cache_config takes the fields of strands' CacheConfig: {err}"
         ) from None
 
 

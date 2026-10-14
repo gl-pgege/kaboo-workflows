@@ -7,7 +7,7 @@ bottom is called by kaboo-workflows with the params from YAML.
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as SdkMCPServer
 
 from kaboo_workflows.mcp import MCPServer
 
@@ -15,11 +15,11 @@ from kaboo_workflows.mcp import MCPServer
 class CalculatorServer(MCPServer):
     """A simple arithmetic tool server that runs as a background HTTP process."""
 
-    def _register_tools(self, mcp: FastMCP) -> None:
-        """Register all tools with the FastMCP instance.
+    def _register_tools(self, mcp: SdkMCPServer) -> None:
+        """Register all tools with the MCP SDK server instance.
 
         This method is called once when the server starts.
-        Use FastMCP's @mcp.tool() decorator to expose functions.
+        Use the SDK's @mcp.tool() decorator to expose functions.
         """
 
         @mcp.tool()

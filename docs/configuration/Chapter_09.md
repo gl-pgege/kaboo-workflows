@@ -45,11 +45,11 @@ The `type` field points to a factory function that returns an `MCPServer` instan
 
 ```{.python notest}
 # server.py
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as SdkMCPServer
 from kaboo_workflows.mcp import MCPServer
 
 class CalculatorServer(MCPServer):
-    def _register_tools(self, mcp: FastMCP) -> None:
+    def _register_tools(self, mcp: SdkMCPServer) -> None:
         @mcp.tool()
         def add(a: float, b: float) -> float:
             """Add two numbers."""
@@ -153,7 +153,7 @@ Available options vary by transport:
 ### Timeouts on `streamable-http`
 
 `timeout` takes either a number of seconds applied to every phase, or a dict
-naming httpx phases individually. **Phases you do not name keep httpx's 5s
+naming httpx2 phases individually. **Phases you do not name keep httpx2's 5s
 default**, which is the trap: a tool that streams for minutes needs `read`
 raised explicitly.
 
@@ -287,7 +287,7 @@ rejected when the client is built:
 
 ### How it reaches the wire
 
-For `streamable-http`, the strategy is attached to a dedicated `httpx.AsyncClient`
+For `streamable-http`, the strategy is attached to a dedicated `httpx2.AsyncClient`
 built for that MCP client; for `sse` it becomes `transport_options.auth`. Either
 way the token is resolved **per request**, not once at parse time. If the
 strategy resolves to no token — `relay` with no principal in context, most often
@@ -362,7 +362,7 @@ agents:
 > - For development, managed servers (Mode 1) are the most convenient — everything starts and stops with your script.
 > - For production, prefer remote URLs (Mode 2) — deploy MCP servers independently and connect agents to them.
 > - Server transport defaults to `streamable-http`. You can also use `sse` for older MCP servers.
-> - MCP servers support `server_params` which are forwarded to FastMCP constructor — useful for `stateless_http`, `json_response`, etc.
+> - MCP servers support `server_params`, which are forwarded to the MCP SDK server's constructor (`mcp.server.mcpserver.MCPServer`) — useful for `instructions`, `debug`, etc. Managed `streamable-http` servers are always stateless with JSON responses.
 
 ---
 

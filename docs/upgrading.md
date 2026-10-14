@@ -10,6 +10,112 @@ for an approval. Features that span the stack light up once every piece is
 upgraded — see
 [Upgrading the stack](https://gl-pgege.github.io/kaboo-docs/start-here/#upgrading-the-stack).
 
+## 0.28
+
+kaboo-workflows moves to the AG-UI 1.0 generation of `ag-ui-protocol` and
+`ag-ui-strands`, and to `mcp` 2.
+
+### Dependencies
+
+**Who:** apps that pin any of these packages themselves.
+
+```diff
+- "strands-agents>=1.44.0,<2.0.0",
+- "mcp>=1.24.0,<2",
+- "ag-ui-strands>=0.2.0,<0.3",
+- "ag-ui-protocol>=0.1.19,<1",
++ "strands-agents>=1.55.0,<2.0.0",
++ "mcp>=2.0.0,<3",
++ "httpx2>=2.5.0,<3",
++ "ag-ui-strands>=1.0.1,<2",
++ "ag-ui-protocol>=1.0.0,<2",
+```
+
+Tested with strands-agents 1.61, mcp 2.1, ag-ui-strands 1.0.1 and
+ag-ui-protocol 1.0.0. Approvals and questions resume exactly as before:
+kaboo-workflows answers them itself rather than through ag-ui-strands' own
+interrupt protocol.
+
+### AG-UI activity deltas carry typed patch operations
+
+**Who:** code that reads `ag_ui.core` events in Python, such as tests that
+inspect the activity stream.
+
+`ag-ui-protocol` 1.0 types `ActivityDeltaEvent.patch` as JSON Patch operation
+models instead of dicts. What goes over the wire is unchanged; read the patch as
+a client receives it:
+
+```diff
+- ops = event.patch
++ ops = event.model_dump(mode="json", by_alias=True, exclude_none=True)["patch"]
+```
+
+### Custom MCP servers get the SDK's `MCPServer`
+
+**Who:** anyone who subclasses `kaboo_workflows.mcp.MCPServer` or sets
+`server_params`.
+
+mcp 2 renamed `FastMCP` to `MCPServer` in `mcp.server.mcpserver`, and
+`_register_tools` receives that class. Its `tool()` decorator is unchanged.
+
+```diff
+- from mcp.server.fastmcp import FastMCP
++ from mcp.server.mcpserver import MCPServer as SdkMCPServer
+  from kaboo_workflows.mcp import MCPServer
+
+  class CalculatorServer(MCPServer):
+-     def _register_tools(self, mcp: FastMCP) -> None:
++     def _register_tools(self, mcp: SdkMCPServer) -> None:
+          @mcp.tool()
+          def add(a: float, b: float) -> float: ...
+```
+
+`server_params` still reach the server's constructor, which no longer takes
+`host`, `port`, `stateless_http` or `json_response`. kaboo-workflows passes the
+host and port from the server's definition, and serves `streamable-http`
+stateless with JSON responses as before.
+
+### MCP clients take `httpx2`
+
+**Who:** anyone who passes `transport_options.http_client` or
+`transport_options.auth` in code, or writes their own auth for an MCP client.
+YAML `auth:` settings need no change.
+
+mcp 2 makes its HTTP requests with `httpx2`, so a client or auth you pass must
+come from it. kaboo-workflows' `RelayTokenAuth`, `StaticTokenAuth` and
+`M2MClientCredentialsAuth` are `httpx2.Auth` strategies now.
+
+```diff
+- import httpx
++ import httpx2
+
+- transport_options={"http_client": httpx.AsyncClient(auth=RelayTokenAuth())}
++ transport_options={"http_client": httpx2.AsyncClient(auth=RelayTokenAuth())}
+```
+
+Other code of yours that uses the `mcp` package directly follows mcp's own 2.0
+migration.
+
+### Bedrock prompt caching settings
+
+**Who:** Bedrock models that set `cache_prompt` or `cache_tools`.
+
+strands deprecates both in favor of `cache_config` fields. They still work, with
+a warning:
+
+```diff
+  params:
+-   cache_prompt: default
+-   cache_tools: default
+-   cache_config: {strategy: auto}
++   cache_config: {strategy: auto, system_prompt_ttl: true, tools_ttl: true}
+```
+
+### Question `input_type` is removed in 0.29
+
+The deprecated `input_type` and question `type` (see 0.27) still work in 0.28,
+and are removed in 0.29.
+
 ## 0.27.1
 
 **Who:** anyone who installed 0.27.0 fresh, or pins one of these packages
@@ -67,7 +173,7 @@ Update prompts the same way:
 +   Ask with ask_user, offering options; set multiple when several can apply.
 ```
 
-**Deprecated, removed in 0.28:** `input_type` and a question's `type` of
+**Deprecated, removed in 0.29:** `input_type` and a question's `type` of
 `radio` or `checkbox` still work, as single and multi-select, and log a
 deprecation warning. `text` is refused. Question requests also still carry
 `type` for kaboo-react before 0.10.

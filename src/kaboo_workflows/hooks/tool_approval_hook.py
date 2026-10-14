@@ -52,8 +52,8 @@ def tool_approval_request(result: Any) -> dict[str, Any] | None:
     content block, or a text block's JSON is an object with a
     ``kaboo_approval`` key; a gateway may keep only one of them. A reply a tool
     returned as a JSON string is read too, inside the ``{"result": ...}``
-    object FastMCP wraps string results in. Error results never count, because
-    gateways such as lcgw reduce an error to its text.
+    object the MCP Python SDK's server wraps string results in. Error results
+    never count, because gateways such as lcgw reduce an error to its text.
 
     Args:
         result: A strands tool result.

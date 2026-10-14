@@ -116,7 +116,7 @@ def _apply_client_auth(
 
     Builds the strategy from :class:`~kaboo_workflows.config.schema.MCPClientAuthDef`
     and attaches it for the effective transport (``auth`` for SSE, a dedicated
-    ``httpx.AsyncClient`` for streamable-http). Returns the options unchanged
+    ``httpx2.AsyncClient`` for streamable-http). Returns the options unchanged
     when the client declares no ``auth:``.
     """
     options = dict(client_def.transport_options or {})

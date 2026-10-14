@@ -1243,9 +1243,11 @@ def _add_kaboo_endpoint(
             )
             logger.debug("resume thread=%s responses=%d", thread_id, len(responses))
 
+            run_input = input_data.model_copy(update={"resume": None})
+
             async def consume_resume() -> None:
                 with bridge.resume_prompt_override(strands_agent, responses):
-                    await _consume_run(agui_agent, input_data, merged, exchange)
+                    await _consume_run(agui_agent, run_input, merged, exchange)
 
             return StreamingResponse(
                 _sse_response(

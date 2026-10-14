@@ -14,9 +14,10 @@ models:
     provider: bedrock
     model_id: us.anthropic.claude-sonnet-5
     params:
-      cache_prompt: default        # the system prompt
-      cache_tools: default         # the tool list
-      cache_config: {strategy: auto}   # the conversation up to the last message
+      cache_config:
+        strategy: auto             # the conversation up to the last message
+        system_prompt_ttl: true    # the system prompt
+        tools_ttl: true            # the tool list
       max_tokens: 32000
 ```
 
