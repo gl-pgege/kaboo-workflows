@@ -1,4 +1,4 @@
-# Publish to PyPI — triggered by pushing a version tag (v*.*.*).
+# Publish to PyPI — run by hand on a version tag (Actions → Publish → Run workflow).
 # Uses Trusted Publishing (OIDC — no API tokens required).
 #
 # One-time setup on PyPI:
@@ -12,11 +12,7 @@
 name: Publish
 
 on:
-  push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
-      - "v[0-9]+.[0-9]+.[0-9]+.post*"
-      - "v[0-9]+.[0-9]+.[0-9]+rc*"
+  workflow_dispatch:
 
 permissions:
   contents: read

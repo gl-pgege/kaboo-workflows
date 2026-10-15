@@ -135,8 +135,8 @@ To send us a pull request:
 - The docs site is built with MkDocs Material + mkdocstrings and deployed by
   `.github/workflows/pages.yml`. A maintainer must enable Pages once: repo
   **Settings → Pages → Source = "GitHub Actions"**.
-- Releases are documented in **[RELEASING.md](RELEASING.md)** (PyPI Trusted
-  Publisher + tag-push flow).
+- Releases are documented in **[RELEASING.md](RELEASING.md)** (a local
+  `twine upload`, then the tag is pushed).
 
 ## Security Issue Notifications
 

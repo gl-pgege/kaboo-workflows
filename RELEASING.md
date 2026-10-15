@@ -22,11 +22,11 @@ uploads to TestPyPI.
 
 ### About `.github/workflows/publish.yml`
 
-That workflow publishes via PyPI Trusted Publishing on a `v*.*.*` tag push, and
-it is how releases up to `v0.11.0` were made. It has not run since, and
-`v0.12.0` onward were uploaded locally. It is still armed, so pushing a tag may
-start a run; if one does and the version is already uploaded, PyPI rejects the
-duplicate and the workflow simply fails. Nothing is at risk either way.
+That workflow publishes via PyPI Trusted Publishing, and it is how releases up to
+`v0.11.0` were made; `v0.12.0` onward were uploaded locally. It runs only when
+started by hand on a tag, so pushing a tag no longer starts it. PyPI has no
+Trusted Publisher for `gl-pgege/kaboo-workflows` (a run fails with
+`invalid-publisher`), so set one up as its header describes before relying on it.
 
 ### Enable GitHub Pages (one-time)
 
