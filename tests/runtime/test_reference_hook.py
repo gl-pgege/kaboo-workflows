@@ -18,8 +18,6 @@ from strands.hooks.events import BeforeInvocationEvent, BeforeModelCallEvent
 
 from kaboo_workflows._context import (
     Reference,
-    request_inline,
-    set_inline_requests,
     set_references,
 )
 from kaboo_workflows.hooks import ReferenceHook
@@ -29,10 +27,8 @@ from tests.fakes import FakeModel
 @pytest.fixture(autouse=True)
 def _isolate_refs() -> Iterator[None]:
     set_references(None)
-    set_inline_requests(set())
     yield
     set_references(None)
-    set_inline_requests(None)
 
 
 @pytest.fixture
@@ -153,34 +149,3 @@ def test_reference_mode_does_not_inject_media(agent: Agent) -> None:
     _fire_model(hook, agent)
 
     assert all("image" not in b for b in agent.messages[-1]["content"])
-
-
-def test_reference_mode_injects_fetch_requested_media(agent: Agent) -> None:
-    # fetch_attachment records the id; the hook materializes it into the user
-    # message (media can't ride a tool-role message on OpenAI-compat providers).
-    png = base64.b64encode(b"\x89PNG\r\n").decode()
-    set_references([_file_ref(id="img_1", name="a.png", mime_type="image/png", value=png)])
-    agent.messages = [{"role": "user", "content": [{"text": "hi"}]}]
-
-    hook = ReferenceHook(enabled=True, inline=False, tool_enabled=True)
-    _fire_before(hook, agent)
-    request_inline("img_1")
-    _fire_model(hook, agent)
-
-    content = agent.messages[-1]["content"]
-    assert content[0]["image"]["format"] == "png"
-
-
-def test_fetch_requested_media_injected_only_once(agent: Agent) -> None:
-    png = base64.b64encode(b"\x89PNG\r\n").decode()
-    set_references([_file_ref(id="img_1", name="a.png", mime_type="image/png", value=png)])
-    agent.messages = [{"role": "user", "content": [{"text": "hi"}]}]
-
-    hook = ReferenceHook(enabled=True, inline=False, tool_enabled=True)
-    _fire_before(hook, agent)
-    request_inline("img_1")
-    _fire_model(hook, agent)
-    _fire_model(hook, agent)
-
-    images = [b for b in agent.messages[-1]["content"] if "image" in b]
-    assert len(images) == 1

@@ -64,7 +64,6 @@ from kaboo_workflows._context import (
     set_auth_context,
     set_forwarded_props,
     set_history_exchange,
-    set_inline_requests,
     set_references,
     set_response_budget,
     set_session_exchange,
@@ -1095,10 +1094,6 @@ def _add_kaboo_endpoint(
         set_forwarded_props(
             input_data.forwarded_props if isinstance(input_data.forwarded_props, dict) else {}
         )
-        # On-demand media the model fetches via fetch_attachment is materialized
-        # into a user message (not a tool result) so it works across providers.
-        # Bind the shared set here so the run task and its tool threads share it.
-        set_inline_requests(set())
 
         # Build the session last, so anything it starts — notably MCP clients,
         # whose relay strategy snapshots contextvars at start — sees the

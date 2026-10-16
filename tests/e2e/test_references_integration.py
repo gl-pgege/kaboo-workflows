@@ -2,7 +2,8 @@
 
 Drives a real ``Agent`` with a recording model and the ReferenceHook wired as
 ``build_agent_from_def`` would, then asserts the manifest reaches the model's
-system prompt and inline media reaches its messages — the observable end of the
+system prompt, inline media reaches its messages, and a fetched file reaches it
+inside the ``fetch_attachment`` result — the observable end of the
 parse -> context -> hook pipeline.
 """
 
@@ -17,7 +18,8 @@ from strands import Agent
 
 from kaboo_workflows._context import Reference, set_references
 from kaboo_workflows.hooks import ReferenceHook
-from tests.fakes import FakeModel
+from kaboo_workflows.tools import fetch_attachment
+from tests.fakes import FakeModel, LocalBedrockModel
 
 
 class RecordingModel(FakeModel):
@@ -93,3 +95,32 @@ def test_inline_media_reaches_the_model_messages_in_a_real_run():
     first_batch = model.message_batches[0]
     blocks = [b for msg in first_batch for b in msg.get("content", []) if isinstance(b, dict)]
     assert any("image" in b for b in blocks)
+
+
+def test_fetched_image_reaches_the_model_inside_the_tool_result():
+    model = LocalBedrockModel(tool="fetch_attachment", tool_input='{"reference_id": "img_1"}')
+    agent = Agent(
+        model=model,
+        system_prompt="Base.",
+        tools=[fetch_attachment],
+        hooks=[ReferenceHook(enabled=True, inline=False, tool_enabled=True)],
+    )
+    set_references(
+        [
+            Reference(
+                kind="file",
+                id="img_1",
+                name="a.png",
+                transport="attachment",
+                mime_type="image/png",
+                source="data",
+                value=_b64(b"\x89PNG\r\n"),
+            )
+        ]
+    )
+
+    agent("Open the image.")
+
+    tool_turn = model.calls[1][-1]
+    assert "toolResult" in tool_turn["content"][0]
+    assert any("image" in block for block in tool_turn["content"][0]["toolResult"]["content"])

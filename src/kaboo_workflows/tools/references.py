@@ -5,7 +5,7 @@ on a file attachment the user referenced:
 
 - :func:`list_references` — enumerate every reference this run (any kind).
 - :func:`fetch_attachment` — resolve one **file** attachment to text (for text-
-  like types) or an inlined media ``ContentBlock`` (for images/documents/video).
+  like types) or a media ``ContentBlock`` in its result (for images/documents/video).
 
 Custom object kinds (tables, dashboards, …) are deliberately **not** resolvable
 here — they are pointers the app resolves with its own MCP tool. There is no
@@ -25,7 +25,7 @@ from typing import Any
 
 from strands import tool
 
-from .._context import Reference, get_references, request_inline
+from .._context import Reference, get_references
 from .fetching import _MAX_FETCH_BYTES, fetch_reference_bytes
 
 __all__ = [
@@ -171,10 +171,9 @@ def fetch_attachment(reference_id: str) -> dict:
     """Fetch a file attachment's contents by its id.
 
     Text-like files (txt, md, csv, html, json, xml) are returned as text.
-    Images, PDFs/office docs, and video are placed into the conversation as
-    media the model can see directly — the tool confirms in text and the file
-    appears in context on the next turn. Non-file references (custom entities)
-    are not fetchable here — resolve those with the tool provided for their kind.
+    Images, PDFs/office docs, and video are returned as media in this result,
+    so you can read them directly. Non-file references (custom entities) are
+    not fetchable here — resolve those with the tool provided for their kind.
 
     Args:
         reference_id: The reference id from the manifest / ``list_references``.
@@ -208,22 +207,11 @@ def fetch_attachment(reference_id: str) -> dict:
     if _is_text_mime(ref.mime_type):
         return {"status": "success", "content": [{"text": raw.decode("utf-8", "replace")}]}
 
-    # Media (image/document/video) can't be returned in a tool-role message on
-    # OpenAI-compatible providers, so route it through the same user-message
-    # injection the ``inline`` policy uses (works across providers). The tool
-    # itself returns only text — the file lands in context before the next turn.
-    if _content_block(ref, raw) is not None:
-        request_inline(ref.id)
+    block = _content_block(ref, raw)
+    if block is not None:
         return {
             "status": "success",
-            "content": [
-                {
-                    "text": (
-                        f"Loaded '{ref.name}' ({ref.mime_type or 'file'}). It is now "
-                        "included in the conversation — read it directly to answer."
-                    )
-                }
-            ],
+            "content": [{"text": f"Loaded '{ref.name}' ({ref.mime_type or 'file'})."}, block],
         }
 
     return {

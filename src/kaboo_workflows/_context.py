@@ -235,16 +235,6 @@ _current_references: contextvars.ContextVar[list[Reference] | None] = contextvar
     "kaboo_references", default=None
 )
 
-# Reference ids the model asked to inline via ``fetch_attachment``. This is a
-# shared, mutable set bound once per request (like :class:`HistoryExchange`) so
-# a tool running in a worker thread and the ReferenceHook running on the agent
-# task mutate/read the *same* object. Media (images, PDFs, …) can't be returned
-# in a tool-role message on OpenAI-compatible providers, so the tool records the
-# id here and the hook materializes it into a user message instead.
-_current_inline_requests: contextvars.ContextVar[set[str] | None] = contextvars.ContextVar(
-    "kaboo_inline_requests", default=None
-)
-
 # The AG-UI request's forwardedProps: the host-to-runtime side channel for
 # per-run context (run-scoped credentials, per-run agent config, …). Bound once
 # per request like references; read by host tools/hooks via
@@ -402,30 +392,6 @@ def set_forwarded_props(props: dict[str, Any] | None) -> None:
 def get_forwarded_props() -> dict[str, Any]:
     """Return the current request's forwarded props (empty dict when none)."""
     return _current_forwarded_props.get() or {}
-
-
-def set_inline_requests(requests: set[str] | None) -> None:
-    """Bind the current request's on-demand inline-media request set.
-
-    Call at the start of each request handler, before creating the run task, so
-    every task inherits the *same* mutable set. ``fetch_attachment`` adds a
-    reference id here when the model asks to read a media attachment; the
-    :class:`~kaboo_workflows.hooks.ReferenceHook` then materializes it into a
-    user message before the next model call.
-    """
-    _current_inline_requests.set(requests)
-
-
-def get_inline_requests() -> set[str]:
-    """Return the current request's inline-media request set (empty when none)."""
-    return _current_inline_requests.get() or set()
-
-
-def request_inline(reference_id: str) -> None:
-    """Record that the model asked to inline the given attachment reference."""
-    requests = _current_inline_requests.get()
-    if requests is not None:
-        requests.add(reference_id)
 
 
 @dataclass

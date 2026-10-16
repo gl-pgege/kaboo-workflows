@@ -145,8 +145,8 @@ class LocalBedrockModel(BedrockModel):
 
     Skips ``BedrockModel.__init__``, so no boto client is created and nothing
     reaches AWS, while code that checks for a Bedrock model still sees one.
-    With ``tool`` it calls that tool on its first turn, so one invocation makes
-    two model calls.
+    With ``tool`` it calls that tool (with ``tool_input``) on its first turn, so
+    one invocation makes two model calls.
     """
 
     def __init__(
@@ -154,6 +154,7 @@ class LocalBedrockModel(BedrockModel):
         model_id: str = "us.anthropic.claude-sonnet-4-6-v1:0",
         *,
         tool: str | None = None,
+        tool_input: str = '{"key": "k"}',
         cache_config: Any = None,
     ) -> None:
         """Store the reported config and the optional first-turn tool."""
@@ -161,6 +162,7 @@ class LocalBedrockModel(BedrockModel):
         if cache_config is not None:
             self.config["cache_config"] = cache_config
         self._tool = tool
+        self._tool_input = tool_input
         self.calls: list[list[dict[str, Any]]] = []
 
     async def stream(
@@ -172,7 +174,7 @@ class LocalBedrockModel(BedrockModel):
         if self._tool is not None and len(self.calls) == 1:
             start = {"toolUse": {"name": self._tool, "toolUseId": "bedrock-call-1"}}
             yield {"contentBlockStart": {"start": start}}
-            yield {"contentBlockDelta": {"delta": {"toolUse": {"input": '{"key": "k"}'}}}}
+            yield {"contentBlockDelta": {"delta": {"toolUse": {"input": self._tool_input}}}}
             yield {"contentBlockStop": {}}
             yield {"messageStop": {"stopReason": "tool_use"}}
         else:

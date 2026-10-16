@@ -14,8 +14,6 @@ import pytest
 
 from kaboo_workflows._context import (
     Reference,
-    get_inline_requests,
-    set_inline_requests,
     set_references,
 )
 from kaboo_workflows.tools.references import (
@@ -28,10 +26,8 @@ from kaboo_workflows.tools.references import (
 @pytest.fixture(autouse=True)
 def _isolate_refs() -> Iterator[None]:
     set_references(None)
-    set_inline_requests(set())
     yield
     set_references(None)
-    set_inline_requests(None)
 
 
 def _data(raw: bytes) -> str:
@@ -83,9 +79,7 @@ def test_fetch_text_attachment_returns_decoded_text():
     assert out["content"][0]["text"] == "file body"
 
 
-def test_fetch_media_attachment_returns_text_and_queues_inline():
-    # Media can't ride a tool-role message on OpenAI-compatible providers, so
-    # the tool returns a text ack and queues the file for user-message injection.
+def test_fetch_media_attachment_returns_the_media_in_its_result():
     set_references(
         [
             Reference(
@@ -101,9 +95,7 @@ def test_fetch_media_attachment_returns_text_and_queues_inline():
     )
     out = _call(fetch_attachment, reference_id="img")
     assert out["status"] == "success"
-    assert "text" in out["content"][0]
-    assert "a.png" in out["content"][0]["text"]
-    assert "img" in get_inline_requests()
+    assert any(block.get("image", {}).get("format") == "png" for block in out["content"])
 
 
 def test_fetch_unknown_id_errors():

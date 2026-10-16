@@ -31,7 +31,6 @@ else:
 
 from .._context import (
     Reference,
-    get_inline_requests,
     get_references,
     get_run_id,
     get_thread_id,
@@ -41,7 +40,6 @@ logger = logging.getLogger(__name__)
 
 _BASE_PROMPT_ATTR = "_kaboo_base_system_prompt"
 _INLINE_DONE_ATTR = "_kaboo_inline_injected"
-_FETCHED_ATTR = "_kaboo_fetched_injected"
 
 
 def build_manifest(references: list[Reference], *, tool_enabled: bool) -> str:
@@ -98,12 +96,12 @@ class ReferenceHook(HookProvider):
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
         """Register manifest (before-invocation) + inline media (before-model) callbacks.
 
-        The before-model callback also serves ``fetch_attachment`` requests
-        (media the model asked to read), so it is registered whenever the agent
-        is inline **or** has the reference tools available.
+        The before-model callback is registered only for ``inline`` agents; media
+        the model fetches with ``fetch_attachment`` comes back in that tool's
+        result, so it needs no injection.
         """
         registry.add_callback(BeforeInvocationEvent, self._on_before_invocation)
-        if self._inline or self._tool_enabled:
+        if self._inline:
             registry.add_callback(BeforeModelCallEvent, self._on_before_model)
 
     def _interrupt_active(self, agent: Any) -> bool:
@@ -145,24 +143,21 @@ class ReferenceHook(HookProvider):
         )
 
     def _on_before_model(self, event: BeforeModelCallEvent) -> None:
-        """Materialize media into a user message before the model call.
+        """Materialize an ``inline`` agent's media into a user message before the model call.
 
         Runs at ``BeforeModelCallEvent`` (after :class:`HistoryHook` has seeded
         ``agent.messages`` at ``BeforeInvocationEvent``), so the media survives
-        seeding. For ``inline`` agents all supported media is injected once per
-        invocation; for tool-enabled agents any file the model fetched via
-        ``fetch_attachment`` is injected on demand. Never runs mid-interrupt.
+        seeding. All supported media is injected once per invocation. Never runs
+        mid-interrupt.
         """
         if not self._enabled or self._interrupt_active(event.agent):
             return
         references = get_references()
         if not references:
             return
-        if self._inline and not getattr(event.agent, _INLINE_DONE_ATTR, False):
+        if not getattr(event.agent, _INLINE_DONE_ATTR, False):
             if self._inject_inline(event.agent, references):
                 setattr(event.agent, _INLINE_DONE_ATTR, True)
-        if self._tool_enabled:
-            self._inject_requested(event.agent, references)
 
     def _inject_inline(self, agent: Any, references: list[Reference]) -> bool:
         """Prepend resolved media ``ContentBlock``s for an ``inline`` agent.
@@ -175,29 +170,6 @@ class ReferenceHook(HookProvider):
         from ..tools.references import resolve_inline_blocks
 
         return self._inject_blocks(agent, resolve_inline_blocks(references))
-
-    def _inject_requested(self, agent: Any, references: list[Reference]) -> None:
-        """Inject media the model fetched via ``fetch_attachment`` into context.
-
-        ``fetch_attachment`` can't return media in a tool-role message on
-        OpenAI-compatible providers, so it records the reference id and this
-        hook materializes it into a user message (the cross-provider-safe path).
-        Each id is injected at most once per agent, tracked on the agent so
-        re-invocation doesn't duplicate it.
-        """
-        requested = get_inline_requests()
-        if not requested:
-            return
-        injected: set[str] = getattr(agent, _FETCHED_ATTR, None) or set()
-        pending = requested - injected
-        if not pending:
-            return
-
-        from ..tools.references import resolve_inline_blocks
-
-        refs = [r for r in references if r.id in pending]
-        if self._inject_blocks(agent, resolve_inline_blocks(refs)):
-            setattr(agent, _FETCHED_ATTR, injected | pending)
 
     def _inject_blocks(self, agent: Any, blocks: list[dict[str, Any]]) -> bool:
         """Prepend media ``ContentBlock``s to the latest user turn.

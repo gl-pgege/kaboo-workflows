@@ -23,7 +23,6 @@ from .._context import (
     set_activity_context,
     set_forwarded_props,
     set_history_exchange,
-    set_inline_requests,
     set_references,
     set_session_exchange,
 )
@@ -174,7 +173,6 @@ class EvalPipeline:
         exchange = HistoryExchange()
         set_history_exchange(exchange)
         set_forwarded_props(item.forwarded_props or {})
-        set_inline_requests(set())
 
         input_data = RunAgentInput(
             thread_id=thread_id,

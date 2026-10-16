@@ -10,6 +10,32 @@ for an approval. Features that span the stack light up once every piece is
 upgraded — see
 [Upgrading the stack](https://gl-pgege.github.io/kaboo-docs/start-here/#upgrading-the-stack).
 
+## 0.28.1
+
+**Who:** agents with `attachments: { tool: true }` whose model opens a picture,
+PDF or video with `fetch_attachment`, and code that reads that tool's result.
+
+`fetch_attachment` now returns the file in its own result. Before, the tool
+returned only text and the `ReferenceHook` added the file to the latest user
+message, which is the one holding the tool's result, so the file came before
+it. Bedrock refuses a tool call that isn't followed directly by its result, and
+OpenAI's Chat Completions API got the file as a user message between the call
+and its result, so the run failed right after the fetch. strands formats a file
+in a tool result for each provider: Bedrock takes pictures, PDFs and video in
+the result, and on OpenAI and Ollama pictures reach the model too.
+
+```diff
+  fetch_attachment("img_1")
+- {"status": "success", "content": [{"text": "Loaded 'a.png' (image/png). It is now included in the conversation — read it directly to answer."}]}
++ {"status": "success", "content": [{"text": "Loaded 'a.png' (image/png)."}, {"image": {"format": "png", "source": {"bytes": b"..."}}}]}
+```
+
+Two providers can't show the model a file in a tool result: strands sends one
+to Gemini as JSON inside the function response, and keeps a PDF inside the
+tool message on OpenAI's Chat Completions API, which takes only text there. An
+agent on either that has to look at files should use `attachments: { inline: true }`,
+which puts them in the person's message instead.
+
 ## 0.28
 
 kaboo-workflows moves to the AG-UI 1.0 generation of `ag-ui-protocol` and
