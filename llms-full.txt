@@ -7565,9 +7565,11 @@ that is read too.
   decision that carries a `request`. The service, not the agent, decides
   whether the second call runs.
 
-`scopes` always include `once`. `subject`, `message` and `expiresAt` are
-optional; without a subject the request covers the tool. Don't also list such
-a tool under `interrupt.tools`, or the person is asked twice.
+`scopes` always include `once`, even when the tool lists only wider ones: the
+person can always approve just the one call, so the service must accept `once`
+too. `subject`, `message` and `expiresAt` are optional; without a subject the
+request covers the tool. Don't also list such a tool under `interrupt.tools`,
+or the person is asked twice.
 
 ### Checklist for the service
 
@@ -7583,9 +7585,13 @@ that can make it mean anything:
    authenticated server-to-server call, never from the browser or the agent.
 4. **Which decisions count:** honour a decision only if it's for a request you
    created, for the same person and conversation, still pending, and the first
-   one. Ignore anything else.
+   one. A repeat of the decision already taken changes nothing and must not
+   fail: when the host refuses one decision of a resume, the person answers
+   again and every decision of that resume is sent again. Ignore anything else.
 5. **What a decision grants:** only a scope the request offered, for the
-   subject it named. An edited call must keep the same subject.
+   subject it named. kaboo offers `once` on every request on top of the scopes
+   your reply lists, so accept `once` too. An edited call must keep the same
+   subject.
 6. **Check again at execution:** the call must match its approval, and normal
    permissions still apply, since roles can change while a request waits.
 7. **Waiting and expiry:** a pending request may wait forever but authorizes
