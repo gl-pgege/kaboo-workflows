@@ -760,6 +760,12 @@ The tree keeps one copy of everything it describes: a group's `tools` own its
 tool calls and its `timeline` refers to them by `toolUseId`, and the timeline's
 text entries are the only copy of its streamed prose.
 
+A group names the run that opened it (`runId`), its turn (`turnId`) and every
+run that streamed into it (`runIds`). A turn paused for an approval or a
+question resumes in a new run, which carries on in the turn's groups, so a
+client that keys anything by run (a reply, a version the run made) finds its
+turn through `runIds`.
+
 ### Runs larger than one response
 
 Some hosts cap how much a single HTTP response may carry — AWS AgentCore closes
@@ -7497,6 +7503,11 @@ Only an `approved` answer runs a gated call; anything else does not. A request
 the resume leaves out counts as skipped, never as approved. A denial is sent as
 `cancelled` so an agent that predates denial reasons cannot mistake it for an
 approval.
+
+The resume is a new run of the same turn: the turn id is unchanged, and the run
+joins the `runIds` of the groups it carries on in
+([concepts](../concepts.md#serving-the-ag-ui-event-stream)), so a client shows
+both runs as one turn.
 
 ## Remembered approvals
 

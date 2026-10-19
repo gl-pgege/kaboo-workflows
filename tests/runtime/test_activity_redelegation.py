@@ -25,6 +25,7 @@ def _start(
     tool_call_id: str,
     run_id: str,
     *,
+    turn_id: str | None = None,
     group: str = EDITOR,
     agent: str = "edit_dashboard",
     parent: str = "orchestrator",
@@ -40,7 +41,7 @@ def _start(
             "parent_group": parent,
             "tool_call_id": tool_call_id,
             "run_id": run_id,
-            "turn_id": run_id,
+            "turn_id": turn_id or run_id,
             "task": task,
             "thread_id": "t1",
         },
@@ -113,6 +114,22 @@ def test_a_resume_of_the_same_delegation_reuses_its_group() -> None:
     assert groups[EDITOR]["status"] == "active"
     assert "interrupt" not in groups[EDITOR]
     assert groups[EDITOR]["timeline"] == [{"type": "text", "text": "Waiting for approval."}]
+
+
+def test_a_resume_adds_its_run_to_the_turns_group() -> None:
+    reg = ActivityRegistry()
+    reg.apply("t1", _start("tc-1", "run-1"))
+    reg.apply("t1", _event(EventType.AGENT_START, run_id="run-1", turn_id="run-1"))
+    reg.apply("t1", _event(EventType.INTERRUPT, interrupt_id="i-1", name="approve"))
+
+    reg.apply("t1", _event(EventType.AGENT_START, run_id="run-2", turn_id="run-1"))
+    reg.apply("t1", _event(EventType.INTERRUPT, interrupt_id="i-2", name="approve"))
+    reg.apply("t1", _start("tc-1", "run-3", turn_id="run-1"))
+    reg.apply("t1", _event(EventType.AGENT_START, run_id="run-3", turn_id="run-1"))
+
+    group = reg.snapshot("t1")["groups"][EDITOR]
+    assert group["runId"] == group["turnId"] == "run-1"
+    assert group["runIds"] == ["run-1", "run-2", "run-3"]
 
 
 def test_groups_nested_under_the_old_delegation_move_with_it() -> None:

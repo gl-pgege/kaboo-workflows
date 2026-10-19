@@ -96,6 +96,19 @@ def _archive_group(groups: dict[str, Any], group: str, tool_call_id: str) -> Non
         groups[rename(key)] = value
 
 
+def _note_run(group: dict[str, Any], run_id: str | None) -> None:
+    """Add a run that resumed *group* to its ``runIds``.
+
+    A turn paused for an approval or a question resumes in a new run, which
+    reopens the turn's groups; ``runId`` stays the run that opened the group.
+    """
+    if not run_id:
+        return
+    runs = group.setdefault("runIds", [group["runId"]] if group.get("runId") else [])
+    if run_id not in runs:
+        runs.append(run_id)
+
+
 def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
     """Mutate *state* based on an incoming kaboo StreamEvent.
 
@@ -127,16 +140,19 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
         if previous_call_id and tool_call_id and previous_call_id != tool_call_id:
             _archive_group(groups, group, previous_call_id)
             existing = None
+        run_id = event.data.get("run_id")
         if existing is not None:
             existing["status"] = "active"
             existing.pop("interrupt", None)
+            _note_run(existing, run_id)
         else:
             groups[group] = {
                 "title": event.data.get("stream_title", ""),
                 "agentName": event.data.get("agent_name", ""),
                 "parentGroup": event.data.get("parent_group"),
                 "toolCallId": event.data.get("tool_call_id"),
-                "runId": event.data.get("run_id"),
+                "runId": run_id,
+                "runIds": [run_id] if run_id else [],
                 "turnId": event.data.get("turn_id"),
                 "traceId": event.data.get("trace_id"),
                 "task": event.data.get("task"),
@@ -162,6 +178,7 @@ def _update_activity_state(state: dict[str, Any], event: StreamEvent) -> bool:
         if group in groups:
             groups[group]["status"] = "active"
             groups[group].pop("interrupt", None)
+            _note_run(groups[group], event.data.get("run_id"))
     elif event.type == EventType.STREAM_GROUP_END:
         if group in groups:
             groups[group]["status"] = event.data.get("status", "completed")

@@ -144,6 +144,21 @@ async def test_the_decision_is_recorded_on_the_tool_activity_entry() -> None:
     assert tool["approval"] == {"decision": "approved", "by": "person", "scope": "once"}
 
 
+async def test_the_resumed_run_joins_the_runs_of_the_turns_groups() -> None:
+    pipe = Pipeline(str(CONFIGS / "approval_delegate.yaml"))
+    gate = _gate(await pipe.turn("file it", thread_id="a8", run_id="r1"))
+
+    r2 = await pipe.turn(
+        thread_id="a8",
+        run_id="r2",
+        resume=[{"interruptId": gate.id, "status": "resolved", "payload": {"status": "approved"}}],
+    )
+
+    assert r2.groups
+    for group in r2.groups.values():
+        assert (group["runId"], group["runIds"]) == ("r1", ["r1", "r2"])
+
+
 class _StubRequest:
     """Only what the endpoint reads from a request when no auth verifier is set."""
 

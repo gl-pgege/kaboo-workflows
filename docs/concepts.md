@@ -87,6 +87,12 @@ The tree keeps one copy of everything it describes: a group's `tools` own its
 tool calls and its `timeline` refers to them by `toolUseId`, and the timeline's
 text entries are the only copy of its streamed prose.
 
+A group names the run that opened it (`runId`), its turn (`turnId`) and every
+run that streamed into it (`runIds`). A turn paused for an approval or a
+question resumes in a new run, which carries on in the turn's groups, so a
+client that keys anything by run (a reply, a version the run made) finds its
+turn through `runIds`.
+
 ### Runs larger than one response
 
 Some hosts cap how much a single HTTP response may carry — AWS AgentCore closes

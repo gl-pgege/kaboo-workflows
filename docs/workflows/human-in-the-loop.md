@@ -117,6 +117,11 @@ the resume leaves out counts as skipped, never as approved. A denial is sent as
 `cancelled` so an agent that predates denial reasons cannot mistake it for an
 approval.
 
+The resume is a new run of the same turn: the turn id is unchanged, and the run
+joins the `runIds` of the groups it carries on in
+([concepts](../concepts.md#serving-the-ag-ui-event-stream)), so a client shows
+both runs as one turn.
+
 ## Remembered approvals
 
 "Allow for this chat" and "Always allow" are opt-in on both sides:
