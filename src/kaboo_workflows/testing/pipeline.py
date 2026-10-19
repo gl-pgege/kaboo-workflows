@@ -39,8 +39,8 @@ from ..adapters._activity import ActivityRegistry
 from ..adapters._interrupts import build_resume_responses
 from ..adapters._multiagent import StrandsMultiAgent
 from ..adapters.agui import (
-    _build_session,
     _consume_run,
+    _ConversationSessions,
     _drop_replayed_tool_results,
     _make_session_resolver,
     _parse_session_state,
@@ -237,7 +237,7 @@ class Pipeline:
                 self.base_raw, self.infra, session_config_key=session_config_key
             )
         )
-        self._session: Any = None
+        self._conversations = _ConversationSessions(self.app_config, self.infra)
 
     def _resolve_session(self, input_data: RunAgentInput) -> Any:
         """Return the session that serves ``input_data``.
@@ -250,13 +250,11 @@ class Pipeline:
 
         Returns:
             A per-turn session when configs are submitted per run, otherwise the
-            one shared session.
+            conversation's own session, as the endpoint serves it.
         """
         if self._resolver is not None:
             return self._resolver(input_data)
-        if self._session is None:
-            self._session = _build_session(self.app_config, self.infra)
-        return self._session
+        return self._conversations(input_data)
 
     async def turn(
         self,

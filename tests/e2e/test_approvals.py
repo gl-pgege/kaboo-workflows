@@ -144,6 +144,20 @@ async def test_the_decision_is_recorded_on_the_tool_activity_entry() -> None:
     assert tool["approval"] == {"decision": "approved", "by": "person", "scope": "once"}
 
 
+async def test_a_delegate_paused_in_one_conversation_still_works_in_another() -> None:
+    # Two people ask the same service at once. The first conversation's filer
+    # waits for approval; the second's must run its own call rather than be
+    # handed the first one's pause.
+    pipe = Pipeline(str(CONFIGS / "approval_delegate.yaml"))
+    _gate(await pipe.turn("file it", thread_id="c1", run_id="r1"))
+
+    r2 = await pipe.turn("file it", thread_id="c2", run_id="r2")
+
+    _gate(r2)
+    filer = [g for g in r2.groups.values() if g["agentName"] == "filer"]
+    assert [t["toolName"] for g in filer for t in g["tools"]] == ["submit_report"]
+
+
 async def test_the_resumed_run_joins_the_runs_of_the_turns_groups() -> None:
     pipe = Pipeline(str(CONFIGS / "approval_delegate.yaml"))
     gate = _gate(await pipe.turn("file it", thread_id="a8", run_id="r1"))

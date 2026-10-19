@@ -5612,6 +5612,9 @@ app = create_agui_app(
 
 - **`session_config_key`** lets each run bring its own workflow, layered over
   the base config — see [Compose a workflow per run](per-run-workflows.md).
+  Without it, the service serves its own config, and each conversation gets its
+  own agents the first time it runs (the 256 most recent are kept), so one
+  person's sub-agent paused on a question never turns up in another's chat.
 - **`allowed_mcp_hosts`** bounds what a submitted workflow's MCP clients may
   connect to. Set it whenever workflows are authored anywhere but your
   repository: an arbitrary URL needs no code to exfiltrate data.

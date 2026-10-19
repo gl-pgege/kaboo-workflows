@@ -25,6 +25,7 @@ import inspect
 import logging
 import mimetypes
 import uuid
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1537,6 +1538,40 @@ def _build_session(
     )
 
 
+class _ConversationSessions:
+    """A fixed-config process's sessions, one per conversation.
+
+    Agents hold a conversation's working state, among it a delegate's messages
+    and the question or approval it is paused on, so two conversations must
+    never run on the same objects. A thread gets its own session the first time
+    it runs and keeps it, so a pause resumes warm. Beyond ``limit`` the least
+    recently used are dropped; a dropped conversation resumes cold, as it would
+    after a restart, from what its turns carry.
+    """
+
+    def __init__(self, app_config: AppConfig, infra: ResolvedInfra, *, limit: int = 256) -> None:
+        self._app_config = app_config
+        self._infra = infra
+        self._limit = limit
+        self._sessions: OrderedDict[str, AguiSession] = OrderedDict()
+
+    def __call__(self, input_data: RunAgentInput) -> AguiSession:
+        thread_id = input_data.thread_id or bridge.DEFAULT_THREAD
+        session = self._sessions.get(thread_id)
+        if session is None:
+            session = _build_session(self._app_config, self._infra, session_id=thread_id)
+            self._sessions[thread_id] = session
+            while len(self._sessions) > self._limit:
+                self._sessions.popitem(last=False)
+        else:
+            self._sessions.move_to_end(thread_id)
+        return session
+
+    def kept(self) -> list[AguiSession]:
+        """The sessions still held, for closing their queues at shutdown."""
+        return list(self._sessions.values())
+
+
 def _make_session_resolver(
     base_raw: dict,
     infra: ResolvedInfra,
@@ -1596,8 +1631,9 @@ def create_agui_app(
 ) -> FastAPI:
     """Create a FastAPI app serving AG-UI SSE from a YAML config.
 
-    By default the process serves one config: it is loaded here, its agents are
-    built once, and every run uses them.
+    By default the process serves one config: it is loaded and checked here, and
+    each conversation gets its own agents the first time it runs, keeping them
+    for its later turns, so no two conversations share a sub-agent's state.
 
     Setting ``session_config_key`` makes the service behave like a function
     instead. Each run submits its own config in ``forwardedProps`` under that key,
@@ -1676,14 +1712,13 @@ def create_agui_app(
 
     resolve_session: Callable[[RunAgentInput], AguiSession]
     static_session: AguiSession | None = None
+    conversations: _ConversationSessions | None = None
     if session_config_key is None:
         # One config for the process: build it here so a broken config fails at
-        # startup rather than on the first request.
+        # startup rather than on the first request. Each conversation then runs
+        # on its own session.
         static_session = _build_session(app_config, infra)
-        fixed = static_session
-
-        def resolve_session(_input: RunAgentInput) -> AguiSession:
-            return fixed
+        resolve_session = conversations = _ConversationSessions(app_config, infra)
     else:
         resolve_session = _make_session_resolver(
             base_raw,
@@ -1701,6 +1736,8 @@ def create_agui_app(
             logger.info("AG-UI server shutting down — stopping MCP lifecycle")
             if static_session is not None:
                 await static_session.event_queue.close()
+            for session in conversations.kept() if conversations is not None else []:
+                await session.event_queue.close()
             infra.mcp_lifecycle.stop()
 
     app = FastAPI(title="kaboo-workflows", lifespan=lifespan)
