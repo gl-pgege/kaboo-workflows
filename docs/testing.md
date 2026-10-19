@@ -206,7 +206,8 @@ asyncio.run(main())
 
 `TurnResult.groups` is the activity tree a chat UI renders: one group per
 agent stream, nested under the group that called it. The entry agent's own
-stream is the chat reply, so it has no group.
+stream is the chat reply, so its group is flagged `inlineChatOwner` and never
+drawn as a card; it holds the entry's tool calls for the UI to label.
 
 ```python
 import asyncio
@@ -240,8 +241,9 @@ async def main() -> None:
     result = await run_pipeline(CONFIG, "What was revenue last quarter?")
 
     assert result.text() == "Revenue was 42M."
-    assert result.agent_names() == {"researcher"}
-    assert result.group_ids() == ["coordinator.researcher"]
+    assert result.agent_names() == {"team", "researcher"}
+    assert result.group_ids() == ["coordinator.researcher", "team"]
+    assert result.group("team")["inlineChatOwner"]
 
 
 asyncio.run(main())

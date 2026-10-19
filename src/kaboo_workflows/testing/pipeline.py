@@ -333,11 +333,11 @@ class Pipeline:
                 if not isinstance(ev, StreamEvent):
                     continue
                 tid = ev.data.get("thread_id") or bridge.DEFAULT_THREAD
-                if ev.agent_name != entry_name:
+                if ev.agent_name != entry_name or session.entry_inline:
                     self.registry.apply(tid, ev)
                 else:
-                    # Mirror the endpoint pump: the entry agent's stream is not
-                    # rendered, but its completions count toward the run total.
+                    # Mirror the endpoint pump: a swarm or graph entry's stream is
+                    # not rendered, but its completions count toward the run total.
                     self.registry.apply_usage(tid, ev)
 
         pump_task = asyncio.create_task(pump())

@@ -153,10 +153,23 @@ async def test_composition(name: str) -> None:
         assert all(r.groups[g].get("toolCallId") for g in gids), f"{agent} missing toolCallId"
 
 
-async def test_plain_has_no_activity_groups() -> None:
-    # A plain entry agent owns the chat bubble directly; it is never a card.
+async def test_a_plain_entrys_only_group_is_the_chat_it_owns() -> None:
+    # A plain entry agent owns the chat bubble directly. Its group only enriches
+    # its tool rows and is flagged inline_chat_owner, so it is never a card.
     r = await run_pipeline(str(CONFIGS / "plain.yaml"), "hi")
-    assert r.groups == {}
+    assert [g["inlineChatOwner"] for g in r.groups.values()] == [True]
+
+
+async def test_a_delegate_entrys_own_tool_calls_land_in_the_chat_it_owns() -> None:
+    # The coordinator's text is the chat reply, like a plain entry's, so its own
+    # tool calls (the delegations included) are in its inline group: a client
+    # can anchor a question there and see every group of the turn.
+    r = await run_pipeline(str(CONFIGS / "delegate.yaml"), "go")
+    owners = [g for g in r.groups.values() if g["inlineChatOwner"]]
+    assert len(owners) == 1
+    assert [t["toolName"] for t in owners[0]["tools"]] == ["worker_a", "worker_b"]
+    workers = [g for g in r.groups.values() if g["agentName"] in ("worker_a", "worker_b")]
+    assert all(g["toolCallId"] and not g["inlineChatOwner"] for g in workers)
 
 
 async def test_delegate_two_levels_of_nesting() -> None:

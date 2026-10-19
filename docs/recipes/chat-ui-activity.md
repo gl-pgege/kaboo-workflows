@@ -16,7 +16,10 @@ change (`activity_deltas`). Each group is one card in the UI:
 - **its text**, its token usage, and any [structured output](structured-outputs.md);
 - **its children**, for agents it delegated to.
 
-The entry agent has no card: its stream *is* the chat reply.
+The entry agent has no card: its stream *is* the chat reply. Its own tool calls
+still arrive, in a group flagged `inlineChatOwner`, whether it is a plain agent
+or a delegate's coordinator, so the client can label those rows, draw a question
+at its call and see every group of a turn, without drawing that group.
 
 ## Name the cards
 

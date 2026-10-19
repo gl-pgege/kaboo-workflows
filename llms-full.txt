@@ -4937,7 +4937,10 @@ change (`activity_deltas`). Each group is one card in the UI:
 - **its text**, its token usage, and any [structured output](structured-outputs.md);
 - **its children**, for agents it delegated to.
 
-The entry agent has no card: its stream *is* the chat reply.
+The entry agent has no card: its stream *is* the chat reply. Its own tool calls
+still arrive, in a group flagged `inlineChatOwner`, whether it is a plain agent
+or a delegate's coordinator, so the client can label those rows, draw a question
+at its call and see every group of a turn, without drawing that group.
 
 ## Name the cards
 
@@ -6630,7 +6633,8 @@ asyncio.run(main())
 
 `TurnResult.groups` is the activity tree a chat UI renders: one group per
 agent stream, nested under the group that called it. The entry agent's own
-stream is the chat reply, so it has no group.
+stream is the chat reply, so its group is flagged `inlineChatOwner` and never
+drawn as a card; it holds the entry's tool calls for the UI to label.
 
 ```python
 import asyncio
@@ -6664,8 +6668,9 @@ async def main() -> None:
     result = await run_pipeline(CONFIG, "What was revenue last quarter?")
 
     assert result.text() == "Revenue was 42M."
-    assert result.agent_names() == {"researcher"}
-    assert result.group_ids() == ["coordinator.researcher"]
+    assert result.agent_names() == {"team", "researcher"}
+    assert result.group_ids() == ["coordinator.researcher", "team"]
+    assert result.group("team")["inlineChatOwner"]
 
 
 asyncio.run(main())

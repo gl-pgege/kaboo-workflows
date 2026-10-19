@@ -81,7 +81,7 @@ from kaboo_workflows.config import (
 )
 from kaboo_workflows.config.resolvers import resolve_session_manager
 from kaboo_workflows.config.resolvers.agents import get_agent_hook_providers
-from kaboo_workflows.config.resolvers.config import _resolve_chat_output, _resolve_chat_owner
+from kaboo_workflows.config.resolvers.config import _resolve_chat_output
 from kaboo_workflows.hooks import (
     ContinuationHook,
     ForwardedPropsHook,
@@ -1502,22 +1502,19 @@ def _build_session(
         # raised on the clone that actually executes. Inert without a budget.
         forwarded_hooks = [ContinuationHook(), *forwarded_hooks]
 
-        # A plain-agent entry (not a delegate) also forwards its EventPublisher so
-        # its own tool calls land in the activity stream and enrich the inline tool
-        # rows (labels, formatted results, error status) — otherwise those rows
-        # render bare from the raw AG-UI message. The publisher goes FIRST so
-        # TOOL_START is emitted before any HITL gate interrupts, registering the
-        # tool in run 1 so its result updates on resume. Its group is flagged
-        # inline_chat_owner so the UI enriches the rows but never draws a card.
+        # The entry agent, plain or a delegate's coordinator, also forwards its
+        # EventPublisher so its own tool calls land in the activity stream and
+        # enrich the inline tool rows (labels, formatted results, error status,
+        # the anchor a question is drawn at) — otherwise those rows render bare
+        # from the raw AG-UI message, and a turn the entry handled alone has no
+        # group at all. The publisher goes FIRST so TOOL_START is emitted before
+        # any HITL gate interrupts, registering the tool in run 1 so its result
+        # updates on resume. Its group is flagged inline_chat_owner so the UI
+        # enriches the rows but never draws a card: its text is the chat reply.
         entry_pub = getattr(entry, "_kaboo_event_publisher", None)
         if entry_pub is not None:
-            if _resolve_chat_owner(app_config) is None:
-                entry_pub.mark_inline_chat_owner()
-                entry_inline = True
-            # Forwarded even for a delegate entry (entry_inline False): its
-            # events stay excluded from group rendering, but AGENT_COMPLETE
-            # carries the manager's token usage, which the activity pump folds
-            # into the per-run rollup so run totals include the entry agent.
+            entry_pub.mark_inline_chat_owner()
+            entry_inline = True
             forwarded_hooks = [entry_pub, *forwarded_hooks]
 
         agui_agent = StrandsAgent(
