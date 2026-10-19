@@ -8,11 +8,14 @@ Key Features:
     - Automatic tool name resolution from agent_id or node id
     - Message content preservation from single-agent and multi-agent results
     - Native strands interrupt propagation via tool_context.interrupt()
+    - Calls to one node made in the same step take turns instead of failing
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from typing import TYPE_CHECKING, Any, cast
 
 from strands import Agent
@@ -31,6 +34,32 @@ logger = logging.getLogger(__name__)
 
 _TOOL_RESULT_CONTENT_KEYS = ("document", "image", "json", "text")
 _DELEGATE_ATTR = "_kaboo_delegate"
+_TURN_LOCK_ATTR = "_kaboo_turn_lock"
+_THREAD_LOCK_ATTR = "_kaboo_thread_lock"
+
+
+def _turn_lock(node: Node) -> asyncio.Lock:
+    """The lock that has calls to ``node`` on the running loop take turns.
+
+    A node handles one call at a time (strands refuses a second with
+    ``ConcurrencyException``), so when a coordinator asks one delegate for two
+    things in the same step, the second call waits for the first.
+    """
+    loop = asyncio.get_running_loop()
+    held = getattr(node, _TURN_LOCK_ATTR, None)
+    if held is None or held[0] is not loop:
+        held = (loop, asyncio.Lock())
+        setattr(node, _TURN_LOCK_ATTR, held)
+    return held[1]
+
+
+def _thread_lock(node: Node) -> threading.Lock:
+    """The lock that has sync calls to ``node`` take turns, made when the node is wrapped."""
+    lock = getattr(node, _THREAD_LOCK_ATTR, None)
+    if lock is None:
+        lock = threading.Lock()
+        setattr(node, _THREAD_LOCK_ATTR, lock)
+    return lock
 
 
 def delegate_tool_names(agent: Agent) -> set[str]:
@@ -117,7 +146,8 @@ def _node_as_tool(
     """Shared implementation for :func:`node_as_tool` / :func:`node_as_async_tool`.
 
     Uses strands-native ``tool_context.interrupt()`` for human-in-the-loop; the
-    coordinator handles all interrupt state management automatically.
+    coordinator handles all interrupt state management automatically. Calls made
+    in the same step take turns, since a node handles one call at a time.
     """
     tool_name = _resolve_tool_name(node, name)
 
@@ -125,23 +155,27 @@ def _node_as_tool(
 
         @tool(name=tool_name, description=description, context=True)
         async def delegate(tool_context: ToolContext, input: str) -> dict[str, Any]:
-            with delegation_context(tool_context.tool_use.get("toolUseId")):
-                resume = _pending_interrupt_responses(node, tool_context)
-                result = await node.invoke_async(cast(Any, resume if resume is not None else input))
-                while (
-                    isinstance(result, AgentResult)
-                    and result.stop_reason == "interrupt"
-                    and result.interrupts
-                ):
-                    responses = _interrupt_responses_from_result(result, tool_context)
-                    result = await node.invoke_async(cast(Any, responses))
-                return _result_to_tool_result(result)
+            async with _turn_lock(node):
+                with delegation_context(tool_context.tool_use.get("toolUseId")):
+                    resume = _pending_interrupt_responses(node, tool_context)
+                    result = await node.invoke_async(
+                        cast(Any, resume if resume is not None else input)
+                    )
+                    while (
+                        isinstance(result, AgentResult)
+                        and result.stop_reason == "interrupt"
+                        and result.interrupts
+                    ):
+                        responses = _interrupt_responses_from_result(result, tool_context)
+                        result = await node.invoke_async(cast(Any, responses))
+                    return _result_to_tool_result(result)
 
     else:
+        lock = _thread_lock(node)
 
         @tool(name=tool_name, description=description, context=True)
         def delegate(tool_context: ToolContext, input: str) -> dict[str, Any]:
-            with delegation_context(tool_context.tool_use.get("toolUseId")):
+            with lock, delegation_context(tool_context.tool_use.get("toolUseId")):
                 resume = _pending_interrupt_responses(node, tool_context)
                 result = node(cast(Any, resume if resume is not None else input))
                 while (

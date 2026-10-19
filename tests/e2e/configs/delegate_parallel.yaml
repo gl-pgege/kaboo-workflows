@@ -1,0 +1,35 @@
+# Delegate called twice in one step: the coordinator hands the same worker two
+# parts at once, as two tool-uses in a single assistant turn.
+x-model: &m kaboo_workflows.testing:ScriptedModel
+
+agents:
+  coordinator:
+    stream: {title: "Coordinating"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - tools:
+              - {tool: worker, input: "do part A"}
+              - {tool: worker, input: "do part B"}
+        final_text: "Coordinator combined both parts."
+  worker:
+    stream: {title: "Worker"}
+    tools: ["tests.fakes.slow_tools:look_up"]
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: look_up, input: {topic: "the part"}}
+        final_text: "Part done."
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: worker, description: "Handles one part"}
+
+entry: team

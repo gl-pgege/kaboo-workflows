@@ -2496,6 +2496,8 @@ entry: team
 
 **How it works**: kaboo-workflows **forks** a new agent from the `entry_name` agent's blueprint (model, system_prompt, hooks, tools) and adds delegate tools for each connection. The original `coordinator` agent is **never mutated**. Each connection becomes an async tool that the coordinator can call.
 
+A sub-agent handles one call at a time, so when the coordinator calls the same one several times in a step, the calls take turns, each with its own card in the activity tree. For work that should run side by side, connect separate agents or use a [graph](#mode-graph).
+
 **Fields**:
 
 | Field | Type | Required | Description |

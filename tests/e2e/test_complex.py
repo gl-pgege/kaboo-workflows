@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from ag_ui.core import EventType as AGUIEventType
 
 from kaboo_workflows.testing import Pipeline, run_pipeline
 
@@ -49,6 +50,20 @@ async def test_delegate_three_levels_of_nesting() -> None:
     # top entry (coordinator) runs AS the orchestration and collapses, so it is a
     # path prefix rather than its own card — mirroring the 2-level nesting case.
     assert r.groups[verifier]["parentGroup"] in r.groups, "verifier orphaned"
+
+
+async def test_a_delegate_called_twice_in_one_step_takes_the_calls_in_turn() -> None:
+    # Two tool-uses for the same delegate in one assistant turn: the second waits
+    # for the first instead of failing with "Agent is already processing a
+    # request", and each call keeps its own card.
+    r = await run_pipeline(str(CONFIGS / "delegate_parallel.yaml"), "go")
+    assert r.finished() and not r.errored()
+    assert "Coordinator combined both parts." in r.text()
+
+    results = [event.content for event in r.of_type(AGUIEventType.TOOL_CALL_RESULT)]
+    assert len(results) == 2 and all("Part done." in result for result in results), results
+    workers = [g for g in r.groups.values() if g["agentName"] == "worker"]
+    assert len({g["toolCallId"] for g in workers}) == 2, workers
 
 
 # --- 3. Parallel top-level + nested parallelism ---------------------------
