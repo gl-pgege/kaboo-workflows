@@ -128,12 +128,19 @@ class SessionExchange:
     waiting on to ``kaboo_session.approvals``, where a host reads them to match
     the person's decisions. Without it a host cannot remember a decision, so
     the tool gate offers only ``once``.
+
+    ``restored`` records that this run has already applied ``inbound`` to an
+    agent. The client's state describes the gate the run *started* on; once
+    the resumed tools have run, a later invocation in the same run (a hook
+    sending the agent back, a continuation) must not restore it again, or the
+    answered gate comes back and its tools run a second time.
     """
 
     inbound: dict[str, Any] = field(default_factory=dict)
     agent: Any = None
     resuming: bool = False
     publishes_approvals: bool = False
+    restored: bool = False
 
 
 _current_session: contextvars.ContextVar[SessionExchange | None] = contextvars.ContextVar(

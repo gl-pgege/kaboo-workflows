@@ -7662,7 +7662,9 @@ resume — including one that has never seen the conversation. A resume therefor
 works after a restart, on a second replica, and when the session is rebuilt per
 run. Only a resume restores it: a new message supersedes the gate, on a fresh
 process as on a warm one, so a host that replays an older snapshot cannot bring
-back a gate already answered. Nothing to configure; see
+back a gate already answered. A run restores it once: when a hook sends the agent
+back for another pass in the same run, the answered gate stays answered and its
+tools don't run again. Nothing to configure; see
 [Chapter 7](../configuration/Chapter_07.md#pending-interrupts-survive-a-restart-without-a-store)
 for the switch that turns it off and why you would.
 
@@ -7714,6 +7716,9 @@ once, the state travels on `kaboo_session`, a different replica can pick it up
   (the resuming turn runs on a fresh process that never saw the question).
 - `tests/e2e/test_runtime_configs.py::test_approval_survives_the_session_being_rebuilt`
   (the same, within one process, when every run builds its own session).
+- `tests/runtime/test_session_state_hook.py::test_a_later_invocation_in_the_run_does_not_bring_back_the_answered_gate`
+  and `::test_the_adapter_and_the_hook_restore_once_between_them` (a run restores
+  the gate once, whichever of the adapter and the hook gets there first).
 
 # docs/workflows/multi-turn-history.md
 

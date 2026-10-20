@@ -58,21 +58,23 @@ def restore_session_state(agent: Any) -> bool:
 
     Returns whether anything was restored. Only a resume restores: a fresh run's
     message supersedes any gate the state still holds, and a host that replays an
-    older snapshot can hand over a gate already answered. Idempotent, so the
-    adapter can call it on the resume path — where the state is needed *before*
-    the run starts, to build the interrupt responses — and the hook can call it
-    again without either clobbering the other.
+    older snapshot can hand over a gate already answered. A run restores at most
+    once, so the adapter can call it on the resume path — where the state is
+    needed *before* the run starts, to build the interrupt responses — and the
+    hook can call it on every invocation without either clobbering the other, or
+    a later invocation bringing back the gate the run has since answered.
     """
     exchange = get_session_exchange()
     if exchange is None:
         return False
     exchange.agent = agent
     exchange.publishes_approvals = True
-    if not exchange.resuming:
+    if not exchange.resuming or exchange.restored:
         return False
     state = exchange.inbound.get("interrupt_state")
     if not _is_interrupt_state(state):
         return False
+    exchange.restored = True
     # A warm agent's own state is at least as fresh as the client's, since the
     # client got it from us. Restoring over it would let a stale snapshot
     # resurrect an answered gate, so only seed a clean agent.

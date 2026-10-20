@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 from ag_ui.core import RunAgentInput
-from strands.interrupt import Interrupt, _InterruptState
+from strands.interrupt import Interrupt, PendingToolExecution, _InterruptState
 
 from kaboo_workflows._context import SessionExchange, set_session_exchange
 from kaboo_workflows.adapters.agui import (
@@ -16,7 +16,7 @@ from kaboo_workflows.adapters.agui import (
     _enrich_session_snapshot,
     _parse_session_state,
 )
-from kaboo_workflows.hooks import SessionStateHook, session_state_snapshot
+from kaboo_workflows.hooks import SessionStateHook, restore_session_state, session_state_snapshot
 
 
 @pytest.fixture(autouse=True)
@@ -120,6 +120,58 @@ def test_no_snapshot_key_for_a_run_that_never_pauses():
     set_session_exchange(SessionExchange())
     SessionStateHook()._on_before_invocation(_event(_agent()))
     assert session_state_snapshot() is None
+
+
+def _paused_with_pending_tools() -> dict[str, Any]:
+    state = _InterruptState()
+    for index in range(2):
+        state.interrupts[f"int-{index}"] = Interrupt(
+            id=f"int-{index}", name="approval", reason=f"save picture {index}"
+        )
+    state.pending_tool_execution = PendingToolExecution(
+        assistant_message={
+            "role": "assistant",
+            "content": [
+                {"toolUse": {"toolUseId": f"tool-{index}", "name": "save", "input": {}}}
+                for index in range(2)
+            ],
+        },
+        completed_tool_results=[],
+    )
+    state.activate()
+    return state.to_dict()
+
+
+def test_a_later_invocation_in_the_run_does_not_bring_back_the_answered_gate():
+    """A hook that sends the agent back starts another invocation after the resumed tools ran."""
+    set_session_exchange(
+        SessionExchange(inbound={"interrupt_state": _paused_with_pending_tools()}, resuming=True)
+    )
+    agent = _agent()
+    hook = SessionStateHook()
+
+    hook._on_before_invocation(_event(agent))
+    assert agent._interrupt_state.pending_tool_execution is not None
+    agent._interrupt_state.end_tool_cycle()
+
+    hook._on_before_invocation(_event(agent))
+
+    assert agent._interrupt_state.activated is False
+    assert agent._interrupt_state.interrupts == {}
+    assert agent._interrupt_state.pending_tool_execution is None
+
+
+def test_the_adapter_and_the_hook_restore_once_between_them():
+    set_session_exchange(
+        SessionExchange(inbound={"interrupt_state": _paused_state()}, resuming=True)
+    )
+    agent = _agent()
+
+    assert restore_session_state(agent) is True
+    assert restore_session_state(agent) is False
+    agent._interrupt_state.deactivate()
+    assert restore_session_state(agent) is False
+    assert agent._interrupt_state.interrupts == {}
 
 
 def test_clears_a_resolved_gate_rather_than_replaying_it():
