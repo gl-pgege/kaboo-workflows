@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## v0.29.0 (2026-10-24)
+
+### BREAKING CHANGE
+
+- the kaboo.activity snapshots and deltas, the built-in
+ask_user and interrupt.ask_user, the kaboo_history and kaboo_session state
+keys, the continuation pause (ContinuationHook, response_budget), the
+activity_deltas option and kaboo's own Swarm and Graph bridge are removed.
+Clients read SUBAGENT_* events, register browser tools and answer approvals
+from native interrupts. Requires ag-ui-strands 1.0.2 or later; upgrade
+together with kaboo-runtime 0.8 and kaboo-react 0.12. See docs/upgrading.md.
+
+### Feat
+
+- carry sub-agents, questions, approvals and memory on AG-UI's own events
+- stream each sub-agent as SUBAGENT_STARTED, SUBAGENT_FINISHED or
+SUBAGENT_ERROR, with its text, reasoning and tool events tagged by
+subagentRunId, and its result, usage, tool labels, output schema name and
+trace id in the events' standard fields
+- client_tools let any agent, delegates included, call tools the browser
+runs, such as ask_user and request tools; the run ends with the calls in
+RUN_FINISHED.outcome.pendingToolCallIds and the browser's tool messages
+answer them
+- approvals are ag-ui-strands' native interrupts, with a responseSchema
+- keep every agent's transcript and pending state in the server-owned
+kaboo_sessions state through a Strands session repository
+- state_effects write tool results into a shared workspace as
+STATE_DELTA, and each agent reads its own workspace view
+- render_a2ui for the agents allowed it, with a surface's actions
+arriving as the person's next turn
+- GET /invocations/capabilities answers AG-UI AgentCapabilities
+
+### Perf
+
+- stop re-sending the whole transcript as MESSAGES_SNAPSHOT after every
+step, so a response grows with its turn rather than with the thread
+
 ## v0.28.4 (2026-10-19)
 
 ### Fix
