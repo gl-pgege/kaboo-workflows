@@ -18,13 +18,14 @@ from strands.hooks.events import BeforeToolCallEvent
 
 from kaboo_workflows._context import SessionExchange, set_forwarded_props, set_session_exchange
 from kaboo_workflows.adapters._interrupts import (
+    APPROVAL,
+    APPROVAL_RESPONSE_SCHEMA,
     approval_descriptors,
-    build_resume_responses,
-    map_strands_interrupt_to_agui,
+    lift_interrupt,
 )
 from kaboo_workflows.config.schema import InterruptDef
 from kaboo_workflows.hooks import GateRule, InterruptHook
-from kaboo_workflows.hooks.interrupt_hook import APPROVALS_STATE_KEY
+from kaboo_workflows.hooks.interrupt_hook import APPROVAL_NAME, APPROVALS_STATE_KEY
 
 
 class _Paused(Exception):
@@ -91,6 +92,7 @@ def test_a_matching_call_pauses_with_a_request_describing_it() -> None:
     request = event.requests[0]
     assert request["type"] == "approval"
     assert request["tool_name"] == "submit_report"
+    assert request["tool_use_id"] == "use-1"
     assert request["tool_input"] == {"id": "x"}
     assert request["subject"] == {"key": "submit_report", "label": "submit_report"}
     assert request["scopes"] == ["once"]
@@ -102,7 +104,6 @@ def test_a_matching_call_pauses_with_a_request_describing_it() -> None:
         ("merchant___*", "merchant___run_mutation", True),
         ("merchant___*", "shopper___run_mutation", False),
         ("submit_report", "submit_report", True),
-        ("*", "ask_user", False),
     ],
 )
 def test_names_and_globs_select_the_gated_calls(pattern: str, tool_name: str, gated: bool) -> None:
@@ -290,7 +291,7 @@ def test_the_persons_answer_wins_over_a_permission_it_created() -> None:
     event = _GateEvent("submit_report")
     answered = SimpleNamespace(
         id="v1:before_tool_call:use-1:abc",
-        name=":gate:submit_report",
+        name=APPROVAL_NAME,
         response={"status": "approved", "scope": "thread", "tool_input": {"id": "edited"}},
     )
     event.agent = SimpleNamespace(_interrupt_state=SimpleNamespace(interrupts={"i": answered}))
@@ -305,87 +306,78 @@ def _interrupt(interrupt_id: str, reason: Any = None) -> Any:
     return SimpleNamespace(id=interrupt_id, reason=reason or {"type": "approval"})
 
 
-def _responses(pending: dict[str, Any], entries: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        r["interruptResponse"]["interruptId"]: r["interruptResponse"]["response"]
-        for r in build_resume_responses(pending, entries)
-    }
-
-
-def test_resolved_answers_pass_through_and_a_bare_one_approves() -> None:
-    pending = {"a": _interrupt("a"), "b": _interrupt("b")}
-    out = _responses(
-        pending,
-        [
-            {
-                "interruptId": "a",
-                "status": "resolved",
-                "payload": {"status": "approved", "scope": "thread"},
-            },
-            {"interruptId": "b", "status": "resolved"},
-        ],
+@pytest.mark.parametrize(
+    ("answer", "decision"),
+    [
+        ({"response": {"status": "approved", "scope": "thread"}}, "approved"),
+        ({"response": {"status": "cancelled", "reason": "wrong title"}}, "denied"),
+        ({"cancelled": True}, "skipped"),
+        ({"response": None}, "skipped"),
+    ],
+)
+def test_answers_arrive_in_ag_ui_strands_envelope(answer: Any, decision: str) -> None:
+    event = _fire(
+        InterruptHook(tools=["submit_report"]), _GateEvent("submit_report", answer=answer)
     )
-    assert out == {"a": {"status": "approved", "scope": "thread"}, "b": {"status": "approved"}}
+    assert event.decision is not None and event.decision["decision"] == decision
+    assert bool(event.cancel_tool) is (decision != "approved")
 
 
-def test_cancelled_and_unaddressed_requests_are_skipped_never_approved() -> None:
-    pending = {"a": _interrupt("a"), "b": _interrupt("b")}
-    out = _responses(pending, [{"interruptId": "a", "status": "cancelled"}])
-    assert out["a"]["status"] == "cancelled" and out["a"]["skipped"] is True
-    assert out["b"]["status"] == "cancelled" and out["b"]["skipped"] is True
+def _answered(expires_at: str) -> _GateEvent:
+    event = _GateEvent("submit_report", answer={"response": {"status": "approved"}})
+    asked = SimpleNamespace(
+        id="v1:before_tool_call:use-1:abc",
+        name=APPROVAL_NAME,
+        reason={"type": "approval", "expiresAt": expires_at},
+        response={"response": {"status": "approved"}},
+    )
+    event.agent = SimpleNamespace(_interrupt_state=SimpleNamespace(interrupts={"i": asked}))
+    return event
 
 
 def test_an_expired_request_cannot_be_approved() -> None:
     past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
     future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
-    pending = {
-        "late": _interrupt("late", {"type": "approval", "expiresAt": past}),
-        "on_time": _interrupt("on_time", {"type": "approval", "expiresAt": future}),
-    }
-    approve = {"status": "resolved", "payload": {"status": "approved"}}
-    out = _responses(
-        pending, [{"interruptId": "late", **approve}, {"interruptId": "on_time", **approve}]
-    )
-    assert out["late"]["expired"] is True
-    assert out["on_time"] == {"status": "approved"}
+
+    late = _fire(InterruptHook(tools=["submit_report"], ttl_seconds=60), _answered(past))
+    on_time = _fire(InterruptHook(tools=["submit_report"], ttl_seconds=60), _answered(future))
+
+    assert late.cancel_tool and late.decision == {"decision": "expired", "by": "person"}
+    assert on_time.cancel_tool is False
 
 
-def test_the_deadline_stays_in_metadata_never_on_the_ag_ui_descriptor() -> None:
-    """The AG-UI client locks a thread once a descriptor's expiresAt passes."""
+def _published(name: str, reason: Any) -> Interrupt:
+    """An interrupt as ag-ui-strands publishes one kaboo raised."""
+    return Interrupt(id="v1:before_tool_call:use-1:abc", reason=name, metadata={"reason": reason})
+
+
+def test_a_published_approval_names_its_call_and_keeps_the_deadline_in_metadata() -> None:
+    """The AG-UI client locks a thread once an interrupt's own expiresAt passes."""
     reason = {
         "type": "approval",
         "message": "Agent wants to call submit_report",
         "tool_name": "submit_report",
         "tool_input": {"id": "x"},
+        "tool_use_id": "use-7",
         "expiresAt": "2026-07-24T12:00:00Z",
     }
-    descriptor = map_strands_interrupt_to_agui(_interrupt("v1:before_tool_call:use-1:abc", reason))
+    lifted = lift_interrupt(_published(APPROVAL_NAME, reason), {"use-7": "main.filer"}.get)
 
-    parsed = Interrupt.model_validate(descriptor)
-    assert parsed.expires_at is None
-    assert parsed.metadata is not None and parsed.metadata["expiresAt"] == "2026-07-24T12:00:00Z"
-    assert parsed.tool_call_id == "use-1"
-    assert parsed.reason == "tool_call"
+    assert lifted.reason == APPROVAL
+    assert lifted.message == "Agent wants to call submit_report"
+    assert lifted.tool_call_id == "use-7"
+    assert lifted.subagent_run_id == "main.filer"
+    assert lifted.response_schema == APPROVAL_RESPONSE_SCHEMA
+    assert lifted.expires_at is None
+    assert lifted.metadata == reason
 
 
-def test_a_custom_request_kind_reaches_the_ui_with_its_fields() -> None:
+def test_an_interrupt_kaboo_did_not_raise_keeps_its_reason_and_fields() -> None:
     reason = {"type": "files", "message": "Upload the Q3 workbook", "accept": [".xlsx"]}
-    descriptor = map_strands_interrupt_to_agui(_interrupt("v1:tool_call:use-9:abc", reason))
-    assert descriptor["metadata"] == reason
-    assert descriptor["message"] == "Upload the Q3 workbook"
-
-
-@pytest.mark.parametrize(
-    ("reason", "message"),
-    [
-        ({"type": "form", "questions": [{"prompt": "Pick a datasource"}]}, "Pick a datasource"),
-        ({"type": "form", "questions": []}, "Input required"),
-    ],
-)
-def test_a_form_descriptor_leads_with_its_first_question(reason: Any, message: str) -> None:
-    descriptor = map_strands_interrupt_to_agui(_interrupt("v1:tool_call:use-1:abc", reason))
-    assert descriptor["reason"] == "input_required"
-    assert descriptor["message"] == message
+    lifted = lift_interrupt(_published("files", reason), lambda _call: None)
+    assert lifted.reason == "files"
+    assert lifted.metadata == reason
+    assert lifted.tool_call_id is None
 
 
 def test_hosts_get_a_descriptor_per_open_approval() -> None:

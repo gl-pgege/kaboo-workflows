@@ -1,40 +1,52 @@
-"""Strands interrupts ↔ AG-UI: descriptors out, resume answers in.
+"""Strands interrupts ↔ AG-UI, on top of ag-ui-strands' native interrupts.
 
-One canonical home shared by the single-agent path (``agui.py``) and the
-multi-agent path (``_multiagent.py``), so every interrupt — whatever position
-in the pipeline raised it — reaches the frontend with the same shape and every
-answer is read back the same way:
+ag-ui-strands publishes every interrupt a run pauses on and applies the
+client's ``resume`` entries itself. kaboo adds what only it knows:
 
-- :func:`map_strands_interrupt_to_agui` builds the AG-UI descriptor: ``id``,
-  ``toolCallId`` (when tool-originated), ``reason``, ``message`` and the raw
-  ``metadata``.
-- :func:`build_resume_responses` turns the client's ``resume`` entries into
-  strands interrupt responses, enforcing deadlines and treating anything
-  unanswered as skipped.
+- :func:`lift_interrupt` reads kaboo's own reason off a published interrupt —
+  ``kaboo:approval`` — and fills the standard fields
+  from it: the tool call it is about (a delegate's own call, not the one that
+  delegated to it), the sub-agent run that made that call, the message and the
+  answer's schema. kaboo's fields stay in ``metadata``.
+- :func:`browser_resume_entries` turns the browser's answers to delegated
+  agents' browser tools into resume entries for the interrupts carrying them.
 - :func:`approval_descriptors` describes the approvals still waiting, for the
-  host (``kaboo_session.approvals``).
+  host (``kaboo_sessions.approvals``).
+
+A deadline stays in ``metadata.expiresAt`` and is never copied to AG-UI's own
+``expiresAt``: the AG-UI client refuses to resume a thread, or to send anything
+on it, once that field has passed. The gate enforces the deadline itself.
 """
 
 from __future__ import annotations
 
-import logging
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable, Iterable, Mapping
+from typing import Any
 
-if TYPE_CHECKING:
-    from collections.abc import Iterable
+from ag_ui.core import Interrupt, ResumeEntry
+from ag_ui_strands.frontend_tool_interrupt import wrap_frontend_tool_response
 
-logger = logging.getLogger(__name__)
+from ..tools._browser import browser_wait_call
 
-SKIPPED: dict[str, Any] = {"status": "cancelled", "skipped": True}
-"""Response for a request the person skipped or never answered.
+APPROVAL = "kaboo:approval"
+"""The reason an approval request is published with."""
 
-``cancelled`` keeps tools written against the plain ``{"status": "cancelled"}``
-contract working; ``skipped`` lets the gate tell a skip from a denial.
-"""
+APPROVAL_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "status": {"enum": ["approved", "cancelled"]},
+        "scope": {"enum": ["once", "thread", "always"]},
+        "reason": {"type": "string", "description": "Why the person declined."},
+        "tool_input": {
+            "type": "object",
+            "description": "The arguments the person approved instead.",
+        },
+    },
+    "required": ["status"],
+}
+"""What an approval's answer may hold. ``{"cancelled": true}`` resume entries are skips."""
 
-EXPIRED: dict[str, Any] = {"status": "cancelled", "expired": True}
-"""Response for a request answered after its ``expiresAt``."""
+_SKIPPED_BROWSER_CALL = "Skipped: the person moved on without answering."
 
 
 def tool_call_id_from_interrupt_id(interrupt_id: Any) -> str | None:
@@ -43,10 +55,7 @@ def tool_call_id_from_interrupt_id(interrupt_id: Any) -> str | None:
     Interrupts raised from a ``BeforeToolCallEvent`` hook use the id
     ``v1:before_tool_call:<toolUseId>:<uuid>`` while interrupts raised from
     inside a tool via ``ToolContext.interrupt`` use ``v1:tool_call:<toolUseId>:
-    <uuid>`` (see ``strands.hooks.events`` / ``strands.types.tools``). In both
-    cases the tool-use id is the third segment. Forwarding it lets the frontend
-    correlate the interrupt with its tool-call card so the answered Q&A can be
-    rendered inline in the transcript.
+    <uuid>``. In both cases the tool-use id is the third segment.
     """
     parts = str(interrupt_id).split(":")
     if len(parts) >= 4 and parts[1] in ("before_tool_call", "tool_call"):
@@ -54,118 +63,77 @@ def tool_call_id_from_interrupt_id(interrupt_id: Any) -> str | None:
     return None
 
 
-def map_strands_interrupt_to_agui(interrupt: Any) -> dict[str, Any]:
-    """Translate a strands ``Interrupt`` into an AG-UI interrupt descriptor.
-
-    A deadline stays in ``metadata.expiresAt`` and is never copied to AG-UI's
-    own ``expiresAt``: the AG-UI client refuses to resume a thread, or to send
-    anything on it, once that field has passed. The agent enforces the deadline
-    itself (see :func:`build_resume_responses`).
-    """
-    reason = getattr(interrupt, "reason", None)
-    agui_interrupt: dict[str, Any] = {"id": getattr(interrupt, "id", None)}
-
-    tool_call_id = tool_call_id_from_interrupt_id(agui_interrupt["id"])
-    if tool_call_id:
-        agui_interrupt["toolCallId"] = tool_call_id
-
-    if isinstance(reason, dict):
-        rtype = reason.get("type", "")
-        if rtype == "continuation":
-            # Not a question: the run filled its response budget and stopped at
-            # a tool boundary. The client resumes it immediately, with no
-            # prompt, so the turn carries on in the next response.
-            agui_interrupt["reason"] = "continuation"
-            agui_interrupt["message"] = reason.get("message", "Continuing")
-        elif rtype == "approval":
-            agui_interrupt["reason"] = "tool_call"
-            agui_interrupt["message"] = reason.get("message", "Approval required")
-        elif rtype == "form":
-            questions = reason.get("questions", [])
-            first = questions[0] if questions else None
-            if isinstance(first, dict):
-                first_q = str(first.get("question") or first.get("prompt") or "Input required")
-            elif first is not None:
-                first_q = str(first)
-            else:
-                first_q = "Input required"
-            agui_interrupt["reason"] = "input_required"
-            agui_interrupt["message"] = first_q
-        else:
-            agui_interrupt["reason"] = "confirmation"
-            agui_interrupt["message"] = reason.get("message", str(reason))
-        agui_interrupt["metadata"] = reason
-    else:
-        message = str(reason) if reason else "Agent requires input"
-        agui_interrupt["reason"] = "confirmation"
-        agui_interrupt["message"] = message
-        agui_interrupt["metadata"] = {"type": "approval", "message": message}
-
-    return agui_interrupt
+def kaboo_reason(interrupt: Any) -> dict[str, Any] | None:
+    """The reason kaboo raised a published interrupt with, when kaboo raised it."""
+    metadata = getattr(interrupt, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    raw = metadata.get("reason", metadata)
+    return raw if isinstance(raw, dict) else None
 
 
-def _is_expired(reason: Any, now: datetime) -> bool:
-    expires_at = reason.get("expiresAt") if isinstance(reason, dict) else None
-    if not isinstance(expires_at, str) or not expires_at:
-        return False
-    try:
-        deadline = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-    except ValueError:
-        logger.warning("expires_at=<%s> | unreadable interrupt deadline; ignoring it", expires_at)
-        return False
-    if deadline.tzinfo is None:
-        deadline = deadline.replace(tzinfo=timezone.utc)
-    return deadline <= now
-
-
-def build_resume_responses(
-    pending: dict[str, Any], resume_entries: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Map AG-UI resume entries onto the interrupts an agent is waiting on.
-
-    A ``resolved`` entry passes its payload through (a bare one approves). A
-    ``cancelled`` entry, and any waiting interrupt the client did not address,
-    becomes :data:`SKIPPED` — never a silent approval. An interrupt whose
-    deadline has passed answers :data:`EXPIRED`, whatever the client sent.
+def lift_interrupt(interrupt: Interrupt, run_of_call: Callable[[str], str | None]) -> Interrupt:
+    """Fill a published interrupt's standard fields from kaboo's reason.
 
     Args:
-        pending: The unresolved strands interrupts, keyed by id.
-        resume_entries: The client's ``resume`` entries
-            (``interruptId`` / ``status`` / ``payload``).
+        interrupt: The interrupt as ag-ui-strands published it.
+        run_of_call: The sub-agent run that made a tool call, by its id.
 
     Returns:
-        ``[{"interruptResponse": {"interruptId", "response"}}, ...]`` — a valid
-        strands resume input for an ``Agent`` or a ``MultiAgentBase``.
+        The interrupt to send, unchanged when kaboo did not raise it.
     """
-    answers: dict[str, Any] = {}
-    for entry in resume_entries:
-        interrupt_id = entry.get("interruptId", "")
-        if entry.get("status", "resolved") == "resolved":
-            payload = entry.get("payload")
-            answers[interrupt_id] = payload if payload is not None else {"status": "approved"}
-        else:
-            answers[interrupt_id] = dict(SKIPPED)
+    reason = kaboo_reason(interrupt)
+    if reason is None:
+        return interrupt
+    kind = reason.get("type")
+    if kind == "approval":
+        call = reason.get("tool_use_id") or tool_call_id_from_interrupt_id(interrupt.id)
+        update: dict[str, Any] = {
+            "reason": APPROVAL,
+            "message": reason.get("message") or "Approval required",
+            "response_schema": APPROVAL_RESPONSE_SCHEMA,
+            "metadata": reason,
+        }
+        if isinstance(call, str):
+            update["tool_call_id"] = call
+            if run := run_of_call(call):
+                update["subagent_run_id"] = run
+        return interrupt.model_copy(update=update)
+    return interrupt.model_copy(update={"metadata": reason})
 
-    now = datetime.now(timezone.utc)
-    responses: list[dict[str, Any]] = []
+
+def browser_resume_entries(
+    pending: Mapping[str, Any], answers: Mapping[str, tuple[str, bool]]
+) -> list[ResumeEntry]:
+    """Resume entries for the interrupts carrying delegated agents' browser tool calls.
+
+    Every such call gets an entry — the browser's answer, or a note that the
+    person moved on — because a resume must address every open interrupt.
+
+    Args:
+        pending: The paused agent's unresolved strands interrupts, by id.
+        answers: The browser's answers by call id: ``(content, is_error)``.
+    """
+    entries: list[ResumeEntry] = []
     for interrupt_id, interrupt in pending.items():
-        if interrupt_id in answers:
-            response = answers[interrupt_id]
-        else:
-            logger.warning(
-                "interrupt=<%s> | resume did not address it; treating it as skipped", interrupt_id
+        call = browser_wait_call(getattr(interrupt, "reason", None))
+        if call is None:
+            continue
+        content, is_error = answers.get(call, (_SKIPPED_BROWSER_CALL, True))
+        entries.append(
+            ResumeEntry(
+                interrupt_id=interrupt_id,
+                status="resolved",
+                payload=wrap_frontend_tool_response(content, is_error=is_error),
             )
-            response = dict(SKIPPED)
-        if _is_expired(getattr(interrupt, "reason", None), now):
-            response = dict(EXPIRED)
-        responses.append({"interruptResponse": {"interruptId": interrupt_id, "response": response}})
-    return responses
+        )
+    return entries
 
 
 def approval_descriptors(interrupts: Iterable[Any]) -> list[dict[str, Any]]:
     """Describe the approvals an agent is waiting on, for the host.
 
-    Written to ``kaboo_session.approvals`` so a host can match the person's
+    Written to ``kaboo_sessions.approvals`` so a host can match the person's
     decisions to what the agent actually asked — tool, subject, offered scopes
     and the proposed input, plus the ``request`` ID when a tool asked for the
     approval itself — without reading strands state.
@@ -184,7 +152,7 @@ def approval_descriptors(interrupts: Iterable[Any]) -> list[dict[str, Any]]:
         tool = reason.get("tool_name")
         descriptor: dict[str, Any] = {
             "interruptId": interrupt.id,
-            "toolCallId": tool_call_id_from_interrupt_id(interrupt.id),
+            "toolCallId": reason.get("tool_use_id") or tool_call_id_from_interrupt_id(interrupt.id),
             "tool": tool,
             "subject": reason.get("subject") or {"key": tool, "label": tool},
             "scopes": reason.get("scopes") or ["once"],

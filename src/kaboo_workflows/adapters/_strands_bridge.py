@@ -2,31 +2,23 @@
 
 Every function here reaches into a non-public attribute of a third-party
 package (``StrandsAgent._agents_by_thread``, ``Agent._interrupt_state``,
-``Agent.messages``, ``Agent.stream_async``). Concentrating them in one module
-means an upstream change breaks in exactly one place instead of being scattered
-across the adapter, and each seam is documented as "depends on internal".
-
-If ag-ui-strands ever grows a first-class resume entry point,
-:func:`resume_prompt_override` is the only thing that needs to change.
+``_build_strands_history``). Concentrating them in one module means an upstream
+change breaks in exactly one place instead of being scattered across the
+adapter, and each seam is documented as "depends on internal".
 """
 
 from __future__ import annotations
 
-import contextlib
 import inspect
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
-
     from ag_ui_strands import StrandsAgent
 
 DEFAULT_THREAD = "default"
 
-# Shared end-of-stream sentinel for the SSE merge queue. Both the Agent path
-# (``agui._consume_run``) and the multi-agent path (``_multiagent.consume``)
-# put this on the queue so ``agui._sse_response`` recognises completion
-# regardless of which runner produced the stream.
+# End-of-stream sentinel for the SSE merge queue: ``agui._consume_run`` puts it
+# on the queue so ``agui._sse_response`` recognises completion.
 STREAM_DONE = object()
 
 
@@ -85,6 +77,22 @@ async def ensure_thread_agent(agui_agent: StrandsAgent, input_data: Any) -> Any:
     return agent
 
 
+def seed_history(strands_agent: Any, input_data: Any) -> None:
+    """Give an agent seeded for a resume the conversation the client holds.
+
+    ag-ui-strands rebuilds an agent's history from the client's transcript on a
+    fresh run, but a resume continues from the agent's own checkpoint, so an
+    agent this process never ran must get that history first.
+
+    DEPENDS ON ag-ui-strands internal: ``_build_strands_history``.
+    """
+    from ag_ui_strands.agent import _build_strands_history
+
+    strands_agent.messages = _build_strands_history(
+        list(getattr(input_data, "messages", None) or [])
+    )
+
+
 def get_interrupt_state(strands_agent: Any) -> Any | None:
     """Return the agent's interrupt state.
 
@@ -111,10 +119,7 @@ def pending_interrupts(strands_agent: Any, *, unresolved_only: bool = True) -> d
 
 
 def pending_interrupts_of(istate: Any, *, unresolved_only: bool = True) -> dict[str, Any]:
-    """Return the pending interrupts of a detached ``_InterruptState``.
-
-    Used by the multi-agent adapter, which parks each thread's interrupt state
-    off-orchestrator between runs (see ``StrandsMultiAgent``).
+    """Return the pending interrupts of an ``_InterruptState``.
 
     DEPENDS ON strands internal: ``_InterruptState.interrupts`` and
     ``Interrupt.response``.
@@ -124,85 +129,3 @@ def pending_interrupts_of(istate: Any, *, unresolved_only: bool = True) -> dict[
     if unresolved_only:
         return {iid: intr for iid, intr in istate.interrupts.items() if intr.response is None}
     return dict(istate.interrupts)
-
-
-def swap_interrupt_state(strands_agent: Any, state: Any | None = None) -> Any | None:
-    """Install *state* (or a fresh, inert one) and return the previous state.
-
-    The seam for per-thread interrupt isolation on a shared orchestrator: the
-    caller parks the returned state per thread and re-installs it on that
-    thread's next run, so a gate paused on one conversation can never be seen
-    (or clobbered) by a run on another.
-
-    DEPENDS ON strands internal: ``_interrupt_state`` / ``_InterruptState``.
-    """
-    from strands.interrupt import _InterruptState
-
-    previous = getattr(strands_agent, "_interrupt_state", None)
-    strands_agent._interrupt_state = state if state is not None else _InterruptState()
-    return previous
-
-
-def deactivate_interrupts(strands_agent: Any) -> None:
-    """Clear a stale, activated interrupt state.
-
-    DEPENDS ON strands internal: ``_InterruptState.deactivate``.
-    """
-    istate = get_interrupt_state(strands_agent)
-    if istate is not None and getattr(istate, "activated", False):
-        istate.deactivate()
-
-
-@contextlib.contextmanager
-def resume_prompt_override(strands_agent: Any, responses: list[dict[str, Any]]) -> Generator[None]:
-    """Route the next ag-ui-strands run through interrupt *responses*.
-
-    ``ag_ui_strands.StrandsAgent.run()`` has no resume entry point — it always
-    calls ``strands_agent.stream_async(prompt)`` with a user message (or
-    ``None``). To resume an interrupted agent we must instead feed the interrupt
-    ``responses`` into ``stream_async`` while still using ``run()``'s full
-    strands->AG-UI event conversion pipeline.
-
-    We therefore override ``stream_async`` on the instance for the duration of
-    the run and guarantee restoration in ``finally``. The agent's message
-    history is captured up-front and re-applied inside the override so the
-    replay path in ``run()`` cannot overwrite it before the resume.
-
-    Unless there is nothing to re-apply. An agent seeded after a restart has no
-    messages of its own, and the history ``run()`` replayed from the client is
-    then the only record of the turn that paused — overwriting it with an empty
-    list leaves the model no tool call to resume, so it starts the turn over.
-
-    ag-ui-strands 1.x runs its own resume protocol and refuses a run whose
-    interrupt state is active but which carries no ``resume`` of its own. kaboo
-    answers the interrupts itself, so the state reads as inactive to those
-    checks and is reactivated the moment strands receives the responses.
-
-    DEPENDS ON strands internal: ``Agent.stream_async`` / ``Agent.messages`` /
-    ``_InterruptState.activated``.
-    """
-    original_stream = strands_agent.stream_async
-    saved_messages = list(strands_agent.messages) if strands_agent.messages else []
-    istate = get_interrupt_state(strands_agent)
-    hidden = istate is not None and getattr(istate, "activated", False) is True
-    reactivated = False
-
-    async def _resume_stream(prompt: Any = None, **kwargs: Any) -> Any:
-        nonlocal reactivated
-        if hidden and istate is not None:
-            istate.activated = True
-            reactivated = True
-        if saved_messages:
-            strands_agent.messages = saved_messages
-        async for evt in original_stream(responses, **kwargs):
-            yield evt
-
-    if hidden and istate is not None:
-        istate.activated = False
-    strands_agent.stream_async = _resume_stream
-    try:
-        yield
-    finally:
-        strands_agent.stream_async = original_stream
-        if hidden and istate is not None and not reactivated:
-            istate.activated = True

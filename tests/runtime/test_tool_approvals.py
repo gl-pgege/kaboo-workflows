@@ -107,7 +107,7 @@ def _event(name: str, tool: Any, cancel: Any = False) -> BeforeToolCallEvent:
     )
 
 
-def test_the_hook_wraps_tools_but_not_ask_user_cancelled_calls_or_itself() -> None:
+def test_the_hook_wraps_tools_but_not_cancelled_calls_or_itself() -> None:
     hook = ToolApprovalHook(agent_name="a")
     tool = SimpleNamespace(tool_name="set_price")
 
@@ -120,7 +120,6 @@ def test_the_hook_wraps_tools_but_not_ask_user_cancelled_calls_or_itself() -> No
     assert again.selected_tool is wrapped.selected_tool
 
     for event in (
-        _event("ask_user", tool),
         _event("set_price", tool, cancel="no"),
         _event("x", None),
     ):

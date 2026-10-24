@@ -5,11 +5,14 @@ with a deterministic scripted model and asserts:
 
 - the AG-UI event stream is well-formed (starts RUN_STARTED, ends RUN_FINISHED,
   never RUN_ERROR) and the chat reply is the expected text, and
-- the folded activity-group tree matches the expected agents, parent nesting,
-  and chat-reply flag — i.e. the UI progress model is correct for that shape.
+- the expected agents ran: as sub-agents (``SUBAGENT_*`` events, folded into
+  groups) when a delegate reaches them, or as the steps ag-ui-strands reports
+  for the nodes of a Swarm or Graph entry, which its own bridge drives. That
+  bridge reports a Graph's top-level nodes only: agents inside a nested Swarm
+  or Graph node, or behind a delegate node, are not on the wire.
 
 Structural invariants (below) are checked for *all* shapes, so a regression in
-grouping/nesting for any mode fails loudly regardless of the specific fixture.
+sub-agent nesting for any mode fails loudly regardless of the specific fixture.
 """
 
 from __future__ import annotations
@@ -28,8 +31,8 @@ CONFIGS = Path(__file__).parent / "configs"
 class Case:
     config: str
     text: str  # expected chat-reply text (substring)
-    agents: set[str]  # agentNames expected among activity groups
-    chat_reply: str | None  # the group whose text IS the chat bubble, if any
+    agents: set[str]  # agents expected to run, as sub-agents or as Swarm/Graph steps
+    chat_reply: str | None  # unused since the Swarm/Graph bridge moved upstream
     delegated: set[str]  # agents reached via a delegate tool (toolCallId set)
 
 
@@ -80,25 +83,34 @@ CASES = {
     "graph_swarm": Case(
         "graph_swarm",
         "Edited final report.",
-        {"strategist", "a", "b", "editor"},
+        {"strategist", "editor"},
         "editor",
         set(),
     ),
     "graph_graph": Case(
         "graph_graph",
         "Outer end final report.",
-        {"outer_start", "g1", "g2", "outer_end"},
+        {"outer_start", "outer_end"},
         "outer_end",
         set(),
     ),
     "kitchen_sink": Case(
         "kitchen_sink",
         "Edited final report.",
-        {"strategist", "a", "b", "checker", "editor", "audit_team"},
+        {"strategist", "editor", "audit_team"},
         "editor",
         set(),
     ),
 }
+
+
+def _steps(r: TurnResult) -> set[str]:
+    """The agents ag-ui-strands reported as steps of a Swarm or Graph entry."""
+    return {
+        str(e.step_name).removeprefix("agent:")
+        for e in r.events
+        if e.type.value == "STEP_STARTED" and str(e.step_name).startswith("agent:")
+    }
 
 
 def _assert_invariants(r: TurnResult) -> None:
@@ -108,24 +120,16 @@ def _assert_invariants(r: TurnResult) -> None:
     assert types[-1] == "RUN_FINISHED"
     assert not r.errored()
 
-    chat_replies = 0
     for gid, g in r.groups.items():
-        # Every group finished cleanly on a deterministic happy path.
+        # Every sub-agent finished cleanly on a deterministic happy path.
         assert g["status"] == "completed", f"{gid} status={g['status']}"
-
         # The group id's last segment is always the agent's name.
         assert gid.rsplit(".", 1)[-1] == g["agentName"], f"{gid} != {g['agentName']}"
-
-        # parentGroup, when set, is a strict path-prefix of the group id.
+        # A parent is another sub-agent of the run, never an invention.
         parent = g.get("parentGroup")
-        if parent is not None:
-            assert gid.startswith(parent + "."), f"{gid} not under {parent}"
-
-        if g.get("isChatReply"):
-            chat_replies += 1
-
-    # At most one card carries the chat reply (avoids duplicating the bubble).
-    assert chat_replies <= 1, f"{chat_replies} chat-reply groups"
+        assert parent is None or parent in r.groups, f"{gid} has an unknown parent {parent}"
+        # Every sub-agent was started by a delegate call.
+        assert g["toolCallId"], f"{gid} has no delegating call"
 
 
 @pytest.mark.parametrize("name", list(CASES))
@@ -136,76 +140,77 @@ async def test_composition(name: str) -> None:
     _assert_invariants(r)
     assert case.text in r.text(), f"expected {case.text!r} in {r.text()!r}"
 
-    got_agents = r.agent_names()
+    got_agents = r.agent_names() | _steps(r)
     assert case.agents <= got_agents, f"missing {case.agents - got_agents}"
 
-    # chat-reply flag lands on exactly the configured chat_output agent.
-    reply_agents = {g["agentName"] for g in r.groups.values() if g.get("isChatReply")}
-    if case.chat_reply is None:
-        assert reply_agents == set(), f"unexpected chat-reply cards {reply_agents}"
-    else:
-        assert reply_agents == {case.chat_reply}, f"chat-reply {reply_agents}"
-
-    # Delegated agents carry a toolCallId; peers/graph nodes do not.
     for agent in case.delegated:
-        gids = [gid for gid, g in r.groups.items() if g["agentName"] == agent]
-        assert gids, f"no group for delegated agent {agent}"
-        assert all(r.groups[g].get("toolCallId") for g in gids), f"{agent} missing toolCallId"
+        assert any(g["agentName"] == agent for g in r.groups.values()), f"no sub-agent {agent}"
 
 
-async def test_a_plain_entrys_only_group_is_the_chat_it_owns() -> None:
-    # A plain entry agent owns the chat bubble directly. Its group only enriches
-    # its tool rows and is flagged inline_chat_owner, so it is never a card.
+async def test_a_plain_entry_reports_no_sub_agents() -> None:
+    # A plain entry agent is the chat itself, streamed by ag-ui-strands.
     r = await run_pipeline(str(CONFIGS / "plain.yaml"), "hi")
-    assert [g["inlineChatOwner"] for g in r.groups.values()] == [True]
+    assert r.groups == {}
+    assert "SUBAGENT_STARTED" not in r.types()
 
 
-async def test_a_delegate_entrys_own_tool_calls_land_in_the_chat_it_owns() -> None:
-    # The coordinator's text is the chat reply, like a plain entry's, so its own
-    # tool calls (the delegations included) are in its inline group: a client
-    # can anchor a question there and see every group of the turn.
+async def test_a_delegate_entrys_calls_start_its_sub_agents() -> None:
+    # The coordinator's delegations are its own tool calls in the chat; each
+    # worker is a sub-agent started by one of them.
     r = await run_pipeline(str(CONFIGS / "delegate.yaml"), "go")
-    owners = [g for g in r.groups.values() if g["inlineChatOwner"]]
-    assert len(owners) == 1
-    assert [t["toolName"] for t in owners[0]["tools"]] == ["worker_a", "worker_b"]
-    workers = [g for g in r.groups.values() if g["agentName"] in ("worker_a", "worker_b")]
-    assert all(g["toolCallId"] and not g["inlineChatOwner"] for g in workers)
+    calls = {
+        e.tool_call_id: e.tool_call_name
+        for e in r.events
+        if e.type.value == "TOOL_CALL_START" and not e.subagent_run_id
+    }
+    assert sorted(calls.values()) == ["worker_a", "worker_b"]
+    workers = {g["agentName"]: g["toolCallId"] for g in r.groups.values()}
+    assert workers == {name: call for call, name in calls.items()}
 
 
 async def test_delegate_two_levels_of_nesting() -> None:
-    # The depth-2 delegate shows fact_checker nested under the team's group. The
-    # inner delegate's entry (`lead`) runs AS the orchestration and collapses into
-    # its group, so fact_checker parents to that EMITTED group — never a phantom
-    # `...lead` group. Its parent MUST exist, else the card is orphaned and
-    # invisible when drilling into the team.
+    # The depth-2 delegate shows fact_checker nested under the team that
+    # delegated to it: its parent is the sub-agent that made the call.
     r = await run_pipeline(str(CONFIGS / "delegate_2level.yaml"), "go")
     fact = next(g for g in r.groups.values() if g["agentName"] == "fact_checker")
     parent = fact["parentGroup"]
-    assert parent is not None
-    assert "research_team" in parent
-    assert "lead" not in parent
     assert parent in r.groups, f"fact_checker orphaned: parent {parent!r} not emitted"
+    assert r.groups[parent]["agentName"] == "research_team"
 
 
 async def test_graph_parallel_batch_all_run() -> None:
     # Both parallel nodes (writer, researcher) and the merge node (editor) run.
     r = await run_pipeline(str(CONFIGS / "graph.yaml"), "go")
-    names = r.agent_names()
-    assert {"strategist", "writer", "researcher", "editor"} <= names
+    assert {"strategist", "writer", "researcher", "editor"} <= _steps(r)
 
 
 async def test_kitchen_sink_mixes_swarm_and_delegate_in_one_graph() -> None:
     r = await run_pipeline(str(CONFIGS / "kitchen_sink.yaml"), "go")
+    assert not r.errored()
+    assert "Edited final report." in r.text()
+    assert {"strategist", "editor"} <= _steps(r)
 
-    # Swarm members nest under the swarm node.
-    for peer in ("a", "b"):
-        g = next(gg for gg in r.groups.values() if gg["agentName"] == peer)
-        assert g["parentGroup"] and g["parentGroup"].endswith("research_team")
 
-    # The delegate's checker nests under the audit sub-tree via a tool call.
-    checker = next(g for g in r.groups.values() if g["agentName"] == "checker")
-    assert checker.get("toolCallId")
-    assert checker["parentGroup"] and "audit_team" in checker["parentGroup"]
-
-    # Only the editor's text is the chat reply.
-    assert {g["agentName"] for g in r.groups.values() if g.get("isChatReply")} == {"editor"}
+async def test_a_sub_agents_tool_call_carries_the_label_the_workflow_gives_it() -> None:
+    config = """
+x-model: &m kaboo_workflows.testing:ScriptedModel
+agents:
+  coordinator:
+    model: {provider: *m, model_id: scripted, params: {script: [{tool: filer, input: "file it"}], final_text: "Done."}}
+  filer:
+    tools: ["tests.fakes.gated_tools:submit_report"]
+    tool_labels: {submit_report: "Filing the report"}
+    model:
+      provider: *m
+      model_id: scripted
+      params: {script: [{tool: submit_report, input: {title: "Q3"}}], final_text: "Filed."}
+orchestrations:
+  team: {mode: delegate, entry_name: coordinator, connections: [{agent: filer, description: "Files reports"}]}
+entry: team
+"""
+    r = await run_pipeline(config, "go")
+    assert not r.errored()
+    start = next(e for e in r.events if getattr(e, "tool_call_name", None) == "submit_report")
+    assert start.metadata == {"label": "Filing the report"}
+    [group] = r.groups.values()
+    assert group["tools"][0]["toolLabel"] == "Filing the report"

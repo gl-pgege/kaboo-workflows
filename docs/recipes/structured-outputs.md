@@ -41,15 +41,17 @@ produced nothing say so, instead of inventing an ID to satisfy the schema.
 
 ## What the client receives
 
-The agent's activity group carries two extra fields once it finishes:
+The agent's `SUBAGENT_FINISHED` event carries the result:
 
 | Field | Value |
 |-------|-------|
-| `structuredOutput` | The filled schema, as JSON |
-| `outputSchemaName` | The class name, here `DashboardSnippet` |
+| `result` | The filled schema, as JSON |
+| `metadata.outputSchema` | The class name, here `DashboardSnippet` |
 
-Register one renderer per schema name in the UI; a group with no renderer for
-its schema falls back to plain text. Keep structured output for the agents
+kaboo-react keeps them on the agent's card as `structuredOutput` and
+`outputSchemaName`. Register one renderer per schema name in the UI
+(`structuredRenderers`); a card with no renderer for its schema shows the
+result as a readable list. Keep structured output for the agents
 whose result *is* a card — usually a specialist the orchestrator delegates to —
 and let the orchestrator answer the user in prose.
 
@@ -118,7 +120,7 @@ async def main() -> None:
 
     card = result.group("assistant.tracker")
     assert card["outputSchemaName"] == "OrderCard"
-    assert card["structuredOutput"] == {"order_id": "42", "status": "shipped"}
+    assert card["result"] == {"order_id": "42", "status": "shipped"}
 
 
 asyncio.run(main())

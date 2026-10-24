@@ -1,6 +1,6 @@
 # Delegate whose sub-agent remembers across turns via client-driven history.
 # `memo` has history enabled, so its transcript is seeded from
-# state.kaboo_history and captured back into the outgoing snapshot.
+# state.kaboo_sessions and written back at the end of each run.
 x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:

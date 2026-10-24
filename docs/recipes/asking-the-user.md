@@ -1,23 +1,18 @@
 # Ask the user, and request inputs
 
-An agent that guesses when it should ask produces confident wrong answers. The
-library pauses a run for a question with `ask_user`, gates risky tools behind
-an approval, and resumes the same run with the answer
-([Human-in-the-loop](../workflows/human-in-the-loop.md) has the protocol).
-This recipe adds the parts a product needs on top: custom requests — "attach a
-file", "pick a data source" — that a UI renders as its own panel.
+An agent that guesses when it should ask produces confident wrong answers. A
+question, a file upload or a choice of data source is a tool the browser runs:
+the client declares it with each run, the agent calls it, the run waits, and the
+person's answer goes back to the agent that asked
+([Human-in-the-loop](../workflows/human-in-the-loop.md) has the protocol). The
+server needs no code for it, only an allow-list.
 
 ## The agent side
 
 ```yaml
 agents:
   assistant:
-    tools:
-      - ./tools/requests.py:request_files
-      - ./tools/requests.py:request_datasources
-    interrupt:
-      tools: []             # tools that need approval before running
-      ask_user: true        # grant the built-in ask_user tool
+    client_tools: [ask_user, request_files, request_datasources]
     system_prompt: |
       When the question is ambiguous, ask once with ask_user, putting every
       open question into that one call with a few options each. When the data
@@ -25,95 +20,99 @@ agents:
       prose.
 ```
 
-Grant `ask_user` to the agent that talks to the user, and usually not to the
-analysts it delegates to: questions should come from one voice, and a
-sub-agent's question pauses the whole run anyway.
+`client_tools` names the browser's tools this agent may call. Any agent may
+have one, delegates included, and an agent never sees a browser tool its list
+doesn't name. Questions are usually best from one voice — the agent the person
+talks to — but an analyst deep in a delegate can ask too: its question shows in
+the main chat under its name, and its coordinator is told what was asked and
+answered.
 
-## Questions are multiple choice
+## The browser side
 
-`ask_user` only asks multiple-choice questions: two or more options each,
-`multiple` for multi-select, and an **Other** choice the person can always use
-to answer in their own words. Prompts do not need to mention Other — the card
-adds it, and the tool strips one the model lists. A free-text question is
-refused with a tool error that teaches the rule, so the model rephrases it with
-options.
+The client declares each tool, with its description and schema, and draws what
+the person answers. With kaboo-react:
 
-## A custom request is a tool that interrupts
+```tsx
+import { useAskUserTool, useRequestTool } from "@pgege/kaboo-react";
 
-An input that is not a question — a file, a data source — is its own request
-kind. Any tool can pause the run: declare it with `context=True` and call
-`tool_context.interrupt` with a reason whose `type` names your kind. Whatever
-the client sends back on resume becomes the interrupt's return value, and the
-tool turns it into a result the model can read:
+function BrowserTools() {
+  useAskUserTool();
+  useRequestTool({
+    name: "request_datasources",
+    description: "Ask the person to pick data sources and wait for the choice.",
+    parameters: RequestDatasourcesArgs,
+    render: DatasourcesPanel,
+  });
+  return null;
+}
+```
+
+- **`ask_user`** asks multiple-choice questions: two or more options each,
+  `multiple` for multi-select, and an **Other** choice for an answer in the
+  person's own words. The answer is a `{question: answer}` map.
+- **A request** is any other input. Its panel calls `answer` with what the
+  model should read; `skip` tells the model the person declined.
+- **Arguments are checked** against the tool's schema. A malformed call is
+  answered with an error that names the problem, so the model corrects it
+  instead of the person seeing a broken panel.
+- **Several requests show in order**: one agent's questions as one card, and
+  several agents' requests one after another.
+
+## What the user experiences
+
+- The run pauses; the chat shows the card or panel; the answer resumes the
+  agent that asked, mid-thought, rather than starting over.
+- There is no time limit. The paused agent travels in the conversation's state,
+  so the person can close the browser, come back days later on another device,
+  and answer; it also survives a restart or a second replica
+  ([A pause outlives the process](../workflows/human-in-the-loop.md#a-pause-outlives-the-process-that-opened-it)).
+- If the person sends a message instead of answering, the request is skipped
+  and the agent answers the message
+  ([The person can move on](../workflows/human-in-the-loop.md#the-person-can-move-on)).
+
+## A request that needs the server
+
+When answering a request takes server logic — checking the person may use a
+data source, say — make it a server tool that interrupts. Declare it with
+`context=True` and call `tool_context.interrupt` with a reason whose `type`
+names your kind. Whatever the client sends back on resume becomes the
+interrupt's return value:
 
 ```python
 import json
-from typing import Any, Literal
+from typing import Any
 
 from strands import tool
 from strands.types.tools import ToolContext
 
-Kind = Literal["sql", "kafka", "prometheus"]
-
 
 def _answer(response: Any) -> str:
-    if response is None:
-        return "The user did not provide a selection."
     if isinstance(response, dict) and response.get("status") == "cancelled":
         return "The user skipped the request."
     return json.dumps(response, ensure_ascii=False)
 
 
-@tool(name="request_datasources", context=True)
-def request_datasources(
-    tool_context: ToolContext, reason: str, kinds: list[Kind] | None = None
-) -> dict:
-    """Pause and ask the user to select one or more data sources.
-
-    Use this when the analysis needs a data source the run does not have.
+@tool(name="pick_account", context=True)
+def pick_account(tool_context: ToolContext, reason: str) -> dict:
+    """Pause and ask the user to pick one of their billing accounts.
 
     Args:
-        reason: Why the data source is needed, shown to the user.
-        kinds: The kinds of data source to offer; all when omitted.
+        reason: Why an account is needed, shown to the user.
     """
-    response = tool_context.interrupt(
-        name="request_datasources",
-        reason={
-            "type": "datasources",
-            "message": reason,
-            "kinds": list(kinds) if kinds else ["sql", "kafka", "prometheus"],
-        },
-    )
+    response = tool_context.interrupt(name="pick_account", reason={"type": "account", "message": reason})
     return {"status": "success", "content": [{"text": _answer(response)}]}
 ```
 
-The `reason` payload is the contract with your UI:
-
-- **`type`** names the kind. kaboo-react renders it with the component you
-  register for it (`interruptRenderers={{ datasources: DatasourcePicker }}`),
-  and shows a minimal card with the `message` and Skip wherever nothing is
-  registered, so the chat never stalls.
-- **`message`** says what the request is for.
-- **Your own fields** (`kinds` here) reach the renderer unchanged in the
-  interrupt's `metadata`.
-- **A skipped request is an answer.** It arrives as `{"status": "cancelled",
-  "skipped": True}`; tell the model the user skipped it, so it can continue
-  without the input instead of asking again.
-
-## What the user experiences
-
-- The run pauses; the chat shows the card or panel; the answer resumes the
-  *same* run, so the agent continues mid-thought rather than starting over.
-- There is no time limit. The pause lives in the stored conversation, so the
-  person can close the browser, come back days later on another device, and
-  answer; it also survives a restart or a second replica
-  ([A gate outlives the process](../workflows/human-in-the-loop.md#a-gate-outlives-the-process-that-opened-it)).
-- If the person sends a message instead of answering, the request is skipped
-  and the agent answers the message
-  ([The person can move on](../workflows/human-in-the-loop.md#the-person-can-move-on)).
+kaboo-react renders the interrupt with the component registered for its type
+(`interruptRenderers={{ account: AccountPicker }}`), and shows a minimal card
+with the `message` and Skip wherever nothing is registered.
 
 ## Test it
 
-A scripted model can call your request tool, and `Pipeline.turn(resume=...)`
-answers it, including on a fresh pipeline to prove the restart case
-([Testing](../testing.md#interrupts-and-resume)).
+A scripted model can call a browser tool, and `Pipeline.turn(tools=..., messages=...)`
+answers it the way a browser does ([Testing](../testing.md#browser-tools-approvals-and-resume)).
+Lab scenarios:
+[question-several](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-several.yaml),
+[question-subagent](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-subagent.yaml)
+and
+[request-datasources](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/request-datasources.yaml).

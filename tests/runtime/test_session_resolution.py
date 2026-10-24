@@ -13,7 +13,6 @@ import pytest
 from ag_ui.core import RunAgentInput, UserMessage
 from fastapi import FastAPI
 
-from kaboo_workflows.adapters._activity import ActivityRegistry
 from kaboo_workflows.adapters.agui import (
     AguiSession,
     _add_kaboo_endpoint,
@@ -58,7 +57,7 @@ def _input(**props: Any) -> RunAgentInput:
 
 def _endpoint(resolve: Any) -> Any:
     app = FastAPI()
-    _add_kaboo_endpoint(app, resolve, ActivityRegistry(), "/invocations")
+    _add_kaboo_endpoint(app, resolve, "/invocations")
     return cast("Any", app.routes[-1]).endpoint
 
 

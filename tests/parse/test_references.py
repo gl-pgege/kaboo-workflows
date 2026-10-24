@@ -7,18 +7,16 @@ object references come from ``state.kaboo_references``.
 
 from __future__ import annotations
 
-from ag_ui.core import EventType as AGUIEventType
 from ag_ui.core import (
     ImageInputContent,
     InputContentDataSource,
     InputContentUrlSource,
-    MessagesSnapshotEvent,
     RunAgentInput,
     TextInputContent,
     UserMessage,
 )
 
-from kaboo_workflows.adapters.agui import _parse_references, _restore_snapshot_user_content
+from kaboo_workflows.adapters.agui import _parse_references
 
 
 def _run_input(messages, state=None) -> RunAgentInput:
@@ -102,29 +100,3 @@ def test_combines_attachments_and_objects():
 def test_plain_text_message_yields_no_attachment_refs():
     msg = UserMessage(id="m5", content="just text")
     assert _parse_references(_run_input([msg])) == []
-
-
-def test_restore_snapshot_reinstates_structured_user_content():
-    original = [
-        TextInputContent(text="compare these"),
-        ImageInputContent(
-            source=InputContentUrlSource(value="https://x/y.png", mime_type="image/png"),
-            metadata={"kaboo_id": "img_1", "kaboo_name": "y.png"},
-        ),
-    ]
-    # ag-ui-strands emits the snapshot with the content stringified.
-    event = MessagesSnapshotEvent(
-        type=AGUIEventType.MESSAGES_SNAPSHOT,
-        messages=[UserMessage(id="m1", content=str(original))],
-    )
-    _restore_snapshot_user_content(event, {"m1": original})
-    assert event.messages[0].content == original
-
-
-def test_restore_snapshot_ignores_unknown_ids():
-    event = MessagesSnapshotEvent(
-        type=AGUIEventType.MESSAGES_SNAPSHOT,
-        messages=[UserMessage(id="other", content="unchanged")],
-    )
-    _restore_snapshot_user_content(event, {"m1": [TextInputContent(text="x")]})
-    assert event.messages[0].content == "unchanged"

@@ -1,18 +1,19 @@
-# HITL interrupt on a first-class GRAPH node. The strategist asks the user a
-# question, pausing the run; on resume the graph proceeds along its edge to the
-# editor, whose text is the chat reply.
+# HITL interrupt on a first-class GRAPH node. The strategist's call waits for
+# the person's approval, pausing the run; on resume the graph proceeds along its
+# edge to the editor, whose text is the chat reply.
 x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   strategist:
     stream: {title: "Strategy"}
-    interrupt: true
+    tools: ["tests.fakes.gated_tools:submit_report"]
+    interrupt: {tools: [submit_report]}
     model:
       provider: *m
       model_id: scripted
       params:
         script:
-          - {tool: ask_user, input: {question: "How wide should the scope be?", options: ["Narrow", "Broad"]}}
+          - {tool: submit_report, input: {title: "Scope"}}
         final_text: "Outline ready."
   editor:
     stream: {title: "Editing"}

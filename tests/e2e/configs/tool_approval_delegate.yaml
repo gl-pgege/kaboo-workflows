@@ -15,7 +15,6 @@ agents:
     tools: ["tests.fakes.enforcing_tools:set_price"]
     interrupt:
       tool_approvals: true
-      ask_user: false
     model:
       provider: *m
       model_id: scripted

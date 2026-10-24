@@ -1,24 +1,22 @@
-# 18 — Human-in-the-loop (nested + parallel gates)
+# 18 — Human-in-the-loop: a delegated agent asks the person
 
-> A gated agent deep inside a delegate pauses the whole run to ask the user, then
-> resumes with their answer. It can ask several questions at once.
+> An agent deep inside a delegate asks the person a question through the
+> browser, then carries on with the answer.
 
 ## What this shows
 
-- **`interrupt: true`** grants an agent the built-in `ask_user` tool.
-- **Interrupts bubble up** — a gate fired by a nested sub-agent surfaces to the
-  single top-level handler and pauses the entire run.
-- **Parallel gated tool calls** — an agent can raise multiple gates in one turn
-  (e.g. a multi-question form, or two tool calls). Each becomes its own interrupt
-  with a distinct tool-call id; the run resumes once all are answered.
-- **Rejection is safe** — declining a gate resumes to a clean finish without
-  fabricating an approval (see example 20).
+- **`client_tools: [ask_user]`** lets an agent call the browser's question tool
+  (kaboo-react's `useAskUserTool`). Any agent may, delegates included.
+- **The question reaches the browser from any depth** — the run ends with the
+  call pending, and the browser's answer goes back to the agent that asked.
+- **The coordinator hears it too** — the delegate's result tells it what was
+  asked and answered.
 
 ## Shape
 
 ```
 review_team (delegate):
-  coordinator ─▶ field_agent (interrupt: true, asks the user)
+  coordinator ─▶ field_agent (client_tools: [ask_user])
 ```
 
 ## Prerequisites
@@ -28,8 +26,7 @@ review_team (delegate):
 
 ## Run
 
-HITL is best experienced through the server + a CopilotKit frontend (the resume
-UI lives in the client):
+Serve it and connect a kaboo-react frontend that registers `useAskUserTool()`:
 
 ```bash
 uv run kaboo-serve examples/18_hitl/config.yaml
@@ -37,9 +34,7 @@ uv run kaboo-serve examples/18_hitl/config.yaml
 
 ## Proven by
 
-- `tests/e2e/test_cross_cutting.py::test_ask_user_interrupt_then_resume`
-  (parametrized over plain / delegate / swarm / graph positions).
-- `tests/e2e/test_complex.py::test_parallel_interrupts_surface_together_and_resume`
-  (two gates in one step, distinct ids, both resumed).
+- `tests/e2e/test_client_tools.py` (an entry agent's question, a delegate's,
+  one two delegations down, and one answered in another process).
 
 See the [Human-in-the-loop guide](../../docs/workflows/human-in-the-loop.md).

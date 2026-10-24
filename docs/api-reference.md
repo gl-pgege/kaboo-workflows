@@ -64,8 +64,9 @@ Loaders, interpolation, infra resolution, and the full YAML schema models
 ## Hooks — [`kaboo_workflows.hooks`](api/hooks.md)
 
 `EventPublisher`, `HistoryHook`, `InterruptHook`, `MaxToolCallsGuard`,
-`MultiAgentStopGuard`, `SessionStateHook`, `StopGuard`, `ToolNameSanitizer`,
-`restore_session_state`, `session_state_snapshot`, `stop_guard_from_event`.
+`MultiAgentStopGuard`, `SessionStateHook`, `StateEffectsHook`,
+`StateEffectCall`, `StopGuard`, `ToolNameSanitizer`, `restore_session_state`,
+`session_state_snapshot`, `stop_guard_from_event`.
 
 ## MCP — [`kaboo_workflows.mcp`](api/mcp.md)
 
@@ -74,7 +75,7 @@ Loaders, interpolation, infra resolution, and the full YAML schema models
 
 ## Tools — [`kaboo_workflows.tools`](api/tools.md)
 
-`ask_user`, the `load_tool*` discovery helpers, `node_as_tool` /
+The `load_tool*` discovery helpers, `node_as_tool` /
 `node_as_async_tool`, `resolve_tool_spec(s)`, `serialize_multiagent_result`.
 
 ## Converters — [`kaboo_workflows.converters`](api/converters.md)

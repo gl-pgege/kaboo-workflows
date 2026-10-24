@@ -166,7 +166,7 @@ async def run_eval(
     report = EvalReport(dataset=loaded.name)
     out_file = Path(output).open("w") if output is not None else None
 
-    pipeline = EvalPipeline(config_path)
+    pipeline = EvalPipeline(config_path, browser_tools=loaded.browser_tools)
     try:
         # Fail fast on bad scorer configs before spending on any run.
         for item in items:

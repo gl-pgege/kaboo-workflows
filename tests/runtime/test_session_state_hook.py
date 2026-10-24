@@ -4,18 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
-from ag_ui.core import RunAgentInput
 from strands.interrupt import Interrupt, PendingToolExecution, _InterruptState
 
-from kaboo_workflows._context import SessionExchange, set_session_exchange
-from kaboo_workflows.adapters.agui import (
-    _carries_active_gate,
-    _enrich_session_snapshot,
-    _parse_session_state,
-)
+from kaboo_workflows._context import HistoryExchange, SessionExchange, set_session_exchange
+from kaboo_workflows.adapters._sessions import SESSIONS_KEY, inbound_sessions, sessions_delta
 from kaboo_workflows.hooks import SessionStateHook, restore_session_state, session_state_snapshot
 
 
@@ -196,71 +191,82 @@ def test_no_exchange_is_a_no_op():
     assert session_state_snapshot() is None
 
 
-# ── the AG-UI adapter's half of the round trip ───────────────────────────────
+# ── the adapter's half of the round trip: kaboo_sessions ──────────────────────
 
 
-def test_state_snapshot_carries_the_pending_gate():
+def _written_back(exchange: HistoryExchange | None = None) -> dict[str, Any] | None:
+    delta = sessions_delta(exchange or HistoryExchange())
+    if delta is None:
+        return None
+    [operation] = delta.model_dump(by_alias=True)["delta"]
+    assert (operation["op"], operation["path"]) == ("add", f"/{SESSIONS_KEY}")
+    return operation["value"]
+
+
+def test_the_run_writes_back_the_pending_gate_and_what_it_asks():
     set_session_exchange(SessionExchange())
     agent = _agent()
     SessionStateHook()._on_before_invocation(_event(agent))
-    agent._interrupt_state.interrupts["int-3"] = Interrupt(id="int-3", name="approval")
+    agent._interrupt_state.interrupts["int-3"] = Interrupt(
+        id="int-3", name="approval", reason={"type": "approval", "tool_name": "submit_report"}
+    )
     agent._interrupt_state.activate()
-    event = SimpleNamespace(snapshot={"other": 1})
 
-    _enrich_session_snapshot(event)
+    sessions = _written_back()
 
-    assert event.snapshot["kaboo_session"]["interrupt_state"]["activated"] is True
-    assert event.snapshot["other"] == 1
+    assert sessions is not None
+    assert sessions["paused"]["interrupt_state"]["activated"] is True
+    assert [a["interruptId"] for a in sessions["approvals"]] == ["int-3"]
 
 
-def test_snapshot_untouched_when_nothing_is_pending():
+def test_the_run_writes_back_every_agents_transcript():
+    exchange = HistoryExchange(
+        inbound={"team": [{"role": "user", "content": [{"text": "old"}]}]},
+        outbound={"team": [{"role": "user", "content": [{"text": "new"}]}]},
+    )
+    set_session_exchange(SessionExchange())
+
+    sessions = _written_back(exchange)
+
+    assert sessions == {"history": {"team": [{"role": "user", "content": [{"text": "new"}]}]}}
+
+
+def test_nothing_is_written_when_the_run_holds_and_carried_nothing():
     set_session_exchange(SessionExchange())
     SessionStateHook()._on_before_invocation(_event(_agent()))
-    event = SimpleNamespace(snapshot={"other": 1})
-
-    _enrich_session_snapshot(event)
-
-    assert "kaboo_session" not in event.snapshot
+    assert _written_back() is None
 
 
-def test_snapshot_enrichment_ignores_a_non_dict_snapshot():
+def test_a_resolved_gate_is_cleared_rather_than_replayed():
     set_session_exchange(SessionExchange(inbound={"interrupt_state": _paused_state()}))
-    event = SimpleNamespace(snapshot=None)
+    SessionStateHook()._on_before_invocation(_event(_agent()))
 
-    _enrich_session_snapshot(event)  # must not raise
+    sessions = _written_back()
 
-    assert event.snapshot is None
+    assert sessions is not None
+    assert sessions["paused"]["interrupt_state"]["activated"] is False
 
 
 @pytest.mark.parametrize(
     ("state", "expected"),
     [
-        (None, {}),
-        ({}, {}),
-        ("nonsense", {}),
-        ({"kaboo_session": "nonsense"}, {}),
+        (None, ({}, {})),
+        ({}, ({}, {})),
+        ("nonsense", ({}, {})),
+        ({SESSIONS_KEY: "nonsense"}, ({}, {})),
+        ({SESSIONS_KEY: {"history": "x", "paused": []}}, ({}, {})),
         (
-            {"kaboo_session": {"interrupt_state": {"activated": True}}},
-            {"interrupt_state": {"activated": True}},
+            {
+                SESSIONS_KEY: {
+                    "history": {"team": []},
+                    "paused": {"interrupt_state": {"activated": True}},
+                }
+            },
+            ({"team": []}, {"interrupt_state": {"activated": True}}),
         ),
     ],
 )
-def test_parses_client_state_defensively(state: Any, expected: dict[str, Any]):
-    # Duck-typed on purpose: the point is what happens when a host sends state
-    # that RunAgentInput's own typing would never allow.
-    assert _parse_session_state(cast("RunAgentInput", SimpleNamespace(state=state))) == expected
-
-
-@pytest.mark.parametrize(
-    ("state", "expected"),
-    [
-        ({"kaboo_session": {"interrupt_state": _paused_state()}}, True),
-        ({"kaboo_session": {"interrupt_state": {"activated": False, "interrupts": {}}}}, False),
-        ({"kaboo_session": {"interrupt_state": "nonsense"}}, False),
-        ({}, False),
-        (None, False),
-    ],
-)
-def test_carries_an_active_gate_only_when_one_is_still_paused(state: Any, expected: bool):
-    input_data = cast("RunAgentInput", SimpleNamespace(state=state))
-    assert _carries_active_gate(input_data) is expected
+def test_reads_client_state_defensively(
+    state: Any, expected: tuple[dict[str, Any], dict[str, Any]]
+):
+    assert inbound_sessions(state) == expected

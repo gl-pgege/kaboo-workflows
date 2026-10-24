@@ -61,3 +61,4 @@ Thumbs.db
 
 # MkDocs site build output
 /site/
+tests/contract/recordings/

@@ -5,7 +5,6 @@ agents:
     interrupt:
       tools: [submit_report]
       remember: thread
-      ask_user: false
     model:
       provider: kaboo_workflows.testing:ScriptedModel
       model_id: scripted

@@ -113,7 +113,7 @@ kaboo-workflows does three things:
 
 1. **YAML → Agents**: Your config defines models, agents, tools, hooks, MCP servers, and orchestrations. `load()` resolves everything into live strands objects.
 2. **Agents → AG-UI SSE**: `kaboo-serve` wraps the resolved agents with [ag-ui-strands](https://github.com/ag-ui-protocol/ag-ui/tree/main/integrations/aws-strands/python) and serves them as AG-UI Server-Sent Events.
-3. **AG-UI → CopilotKit**: Any CopilotKit frontend connects directly. Generative UI, shared state, and human-in-the-loop work out of the box.
+3. **AG-UI → CopilotKit**: Any CopilotKit frontend connects directly. Sub-agents stream as AG-UI's own `SUBAGENT_*` events, the browser's tools reach the agents their `client_tools` allow, approvals pause on native interrupts, tool results update the shared state, and a conversation's memory travels in the AG-UI state, so a run keeps nothing between turns. Generative UI (A2UI, Open Generative UI, MCP Apps) works from any agent.
 
 ```
 YAML config → load() → strands.Agent → StrandsAgent (AG-UI) → FastAPI SSE
@@ -275,9 +275,9 @@ Public subpackages (import directly for the rest of the surface):
 |-------------|-----------|
 | `kaboo_workflows.adapters` | `create_agui_app` — the primary serving entrypoint |
 | `kaboo_workflows.config` | `load`, `load_config`, `load_session`, schema models (`AgentDef`, `AppConfig`, …) |
-| `kaboo_workflows.hooks` | `EventPublisher`, `ContextHook`, `HistoryHook`, `InterruptHook`, guards, `ToolNameSanitizer` |
+| `kaboo_workflows.hooks` | `EventPublisher`, `ContextHook`, `HistoryHook`, `InterruptHook`, `StateEffectsHook`, guards, `ToolNameSanitizer` |
 | `kaboo_workflows.mcp` | `MCPClient`, `MCPServer`, `MCPLifecycle`, transports |
-| `kaboo_workflows.tools` | `ask_user`, tool loaders, `node_as_tool` |
+| `kaboo_workflows.tools` | tool loaders, `node_as_tool` |
 | `kaboo_workflows.converters` | `StreamConverter`, `OpenAIStreamConverter`, `RawStreamConverter` |
 | `kaboo_workflows.renderers` | `AnsiRenderer` |
 | `kaboo_workflows.types` | `EventType`, `StreamEvent`, `SessionManifest` family |

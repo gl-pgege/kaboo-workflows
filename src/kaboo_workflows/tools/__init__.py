@@ -9,7 +9,6 @@ Provides helpers for:
 
 from __future__ import annotations
 
-from .ask_user import ask_user
 from .extractors import serialize_multiagent_result
 from .fetching import (
     ConfiguredReferenceFetcher,
@@ -35,7 +34,6 @@ from .wrappers import (
 __all__ = [
     "ConfiguredReferenceFetcher",
     "ReferenceFetcher",
-    "ask_user",
     "fetch_attachment",
     "fetch_reference_bytes",
     "get_reference_fetcher",

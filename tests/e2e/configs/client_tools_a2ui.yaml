@@ -1,0 +1,33 @@
+# A delegated worker renders an A2UI surface in the chat; its first try has no
+# root, which comes back as an error it corrects. The coordinator may not render.
+x-model: &m kaboo_workflows.testing:ScriptedModel
+
+agents:
+  coordinator:
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: worker, input: "show churn"}
+        final_text: "Coordinator done."
+  worker:
+    stream: {title: "Working"}
+    client_tools: [render_a2ui]
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: render_a2ui, input: {surfaceId: churn, components: [{id: title, component: Text, text: Churn fell}]}}
+          - {tool: render_a2ui, input: {surfaceId: churn, components: [{id: root, component: Text, text: Churn fell}]}}
+        final_text: "Worker rendered it."
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: worker, description: "Shows things"}
+
+entry: team

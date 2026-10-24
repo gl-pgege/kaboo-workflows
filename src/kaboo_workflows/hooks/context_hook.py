@@ -4,7 +4,7 @@
 (``InvokeModelStage``), which hands it a deep copy of ``agent.messages`` before
 every model call. Whatever it changes reaches the model only: the agent's own
 messages, the chat the client renders and stores (``MESSAGES_SNAPSHOT``), the
-transcript captured into ``kaboo_history`` and anything a session manager
+transcript captured into ``kaboo_sessions`` and anything a session manager
 persists all keep the original conversation.
 
 On every call it joins neighbouring messages that share a role. The chat stores
@@ -30,9 +30,9 @@ every later model turn of the call reads the memory from Bedrock's prompt cache.
 If rewriting leaves that cache point opening a message, it moves to the end of
 the message before.
 
-DEPENDS ON strands internals: ``Agent._middleware_registry`` and
-``strands._middleware.stages.InvokeModelStage`` (strands 1.44 or later). strands'
-own ``ContextInjector`` plugin uses the same seam.
+Uses strands' public middleware API (``strands.middleware.InvokeModelStage`` and
+``Agent.add_middleware``, strands 1.62 or later). On older strands the same
+stages were private (``strands._middleware``, 1.44 to 1.61) and are reached there.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from collections.abc import Collection
 from dataclasses import replace
 from typing import Any, cast
 
-from strands._middleware.stages import InvokeModelContext, InvokeModelStage
+from strands import Agent
 from strands.hooks import HookProvider, HookRegistry
 from strands.hooks.events import AgentInitializedEvent
 from strands.models import Model
@@ -55,7 +55,17 @@ if sys.version_info >= (3, 12):
 else:
     from typing_extensions import override
 
+try:
+    from strands.middleware import InvokeModelContext, InvokeModelStage
+except ImportError:  # strands 1.44 to 1.61 kept the stages private
+    from strands._middleware.stages import (  # ty: ignore[unresolved-import]
+        InvokeModelContext,
+        InvokeModelStage,
+    )
+
+from .._context import get_run_context
 from ..tools.wrappers import delegate_tool_names
+from ._run_context import context_for, format_context
 from ._transcript import (
     DEFAULT_MIN_CHARS,
     INHERITED_MESSAGES,
@@ -66,6 +76,7 @@ from ._transcript import (
     join_turns,
     settle_cache_points,
 )
+from .state_effects import workspace_view
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +91,8 @@ class ContextHook(HookProvider):
         keep_last: int = 3,
         min_chars: int = DEFAULT_MIN_CHARS,
         keep_tools: Collection[str] = (),
+        client_tools: Collection[str] = (),
+        workspace: Collection[str] = (),
     ) -> None:
         """Initialize the ContextHook.
 
@@ -95,11 +108,18 @@ class ContextHook(HookProvider):
                 stay; a turn is every result of one model response.
             min_chars: Tool results shorter than this always stay.
             keep_tools: Tools whose results always stay. A delegate's always do.
+            client_tools: The browser tools the agent may call; context items
+                that belong to another browser tool stay out of its calls.
+            workspace: JSON Pointers into the shared state the agent sees at
+                every model call (see
+                :func:`~kaboo_workflows.hooks.state_effects.workspace_view`).
         """
         self._clear_trigger = clear_trigger
         self._keep_last = keep_last
         self._min_chars = min_chars
         self._keep_tools = frozenset(keep_tools)
+        self._client_tools = frozenset(client_tools)
+        self._workspace = tuple(workspace)
 
     @override
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
@@ -107,7 +127,13 @@ class ContextHook(HookProvider):
         registry.add_callback(AgentInitializedEvent, self._on_initialized)
 
     def _on_initialized(self, event: AgentInitializedEvent) -> None:
-        event.agent._middleware_registry.add_middleware(InvokeModelStage.Input, self._model_input)
+        add = getattr(event.agent, "add_middleware", None)
+        if callable(add):
+            add(InvokeModelStage.Input, self._model_input)
+        else:
+            event.agent._middleware_registry.add_middleware(
+                InvokeModelStage.Input, self._model_input
+            )
 
     def _model_input(self, context: InvokeModelContext) -> InvokeModelContext:
         registry = context.agent.tool_registry
@@ -136,9 +162,14 @@ class ContextHook(HookProvider):
                 messages,
                 keep_last=self._keep_last,
                 min_chars=self._min_chars,
-                kept=self._keep_tools | delegate_tool_names(context.agent),
+                kept=self._keep_tools | delegate_tool_names(cast("Agent", context.agent)),
                 tools=tools,
             )
+        block = format_context(context_for(get_run_context(), self._client_tools))
+        view = workspace_view(self._workspace) if self._workspace else None
+        for text in (view, block):
+            if text:
+                messages = with_context(messages, text)
         return replace(context, messages=cast("Messages", settle_cache_points(messages)))
 
 
@@ -149,3 +180,19 @@ def _manual_bedrock_cache(model: Model) -> bool:
     given and place its own.
     """
     return isinstance(model, BedrockModel) and not model.config.get("cache_config")
+
+
+def with_context(messages: list[dict[str, Any]], block: str) -> list[dict[str, Any]]:
+    """Open the latest human message with the run's context, in a copy.
+
+    The latest one, so a context that changes between runs leaves the earlier
+    conversation as it was, and a prompt cache over it still applies.
+    """
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        content = message.get("content") or []
+        if message.get("role") == "user" and any("text" in block_ for block_ in content):
+            copied = list(messages)
+            copied[index] = {**message, "content": [{"text": block}, *content]}
+            return copied
+    return [{"role": "user", "content": [{"text": block}]}, *messages]

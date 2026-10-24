@@ -1,10 +1,10 @@
-"""18_hitl — Human-in-the-loop, nested + parallel gates.
+"""18_hitl — Human-in-the-loop: a delegated agent asks the person.
 
-review_team(delegate): coordinator -> field_agent(interrupt: true). The gated
-agent's `ask_user` interrupt bubbles to the single top-level handler.
+review_team(delegate): coordinator -> field_agent(client_tools: [ask_user]). The
+browser shows field_agent's question and sends the answer back to it.
 
-Note: driving HITL from a terminal REPL is limited (there is no resume UI). This
-flow is best experienced through the AG-UI server + a CopilotKit frontend:
+Note: a terminal REPL has no browser to answer the question. This flow is best
+experienced through the AG-UI server + a kaboo-react frontend:
 
     uv run kaboo-serve examples/18_hitl/config.yaml
 

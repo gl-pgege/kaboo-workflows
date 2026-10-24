@@ -1,0 +1,15 @@
+# The entry agent renders an A2UI surface in the chat and goes on with its turn.
+x-model: &m kaboo_workflows.testing:ScriptedModel
+
+agents:
+  analyst:
+    client_tools: [render_a2ui]
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: render_a2ui, input: {surfaceId: total, components: [{id: root, component: Text, text: "362"}]}}
+        final_text: "Rendered the total."
+
+entry: analyst

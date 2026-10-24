@@ -14,17 +14,26 @@ Key Features:
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
 import logging
 import threading
 from typing import TYPE_CHECKING, Any, cast
 
+from ag_ui_strands.frontend_tool_interrupt import (
+    is_frontend_tool_interrupt,
+    parse_frontend_tool_reason,
+    wrap_frontend_tool_response,
+)
 from strands import Agent
 from strands.agent.agent_result import AgentResult
+from strands.interrupt import _InterruptState
 from strands.multiagent.base import MultiAgentResult
 from strands.tools.decorator import DecoratedFunctionTool, tool
 from strands.types.tools import ToolContext
 
-from .._context import delegation_context
+from .._context import delegation_context, get_session_exchange
+from ._browser import BROWSER_WAIT, browser_wait_reason
 from .extractors import extract_last_message, extract_text
 
 if TYPE_CHECKING:
@@ -36,6 +45,8 @@ _TOOL_RESULT_CONTENT_KEYS = ("document", "image", "json", "text")
 _DELEGATE_ATTR = "_kaboo_delegate"
 _TURN_LOCK_ATTR = "_kaboo_turn_lock"
 _THREAD_LOCK_ATTR = "_kaboo_thread_lock"
+_CLIENT_TOOLS_ATTR = "_kaboo_client_tools"
+_SKIPPED_BROWSER_CALL = "Skipped: the person moved on without answering."
 
 
 def _turn_lock(node: Node) -> asyncio.Lock:
@@ -103,6 +114,65 @@ def _result_to_tool_result(result: AgentResult | MultiAgentResult) -> dict[str, 
     return {"status": "success", "content": [{"text": extract_text(message)}]}
 
 
+def _forward(interrupts: list[Any], tool_context: ToolContext) -> list[dict[str, Any]]:
+    """Raise a delegate's interrupts on the coordinator and collect the answers.
+
+    A browser tool's wait goes up as a :data:`~kaboo_workflows.tools._browser.BROWSER_WAIT`
+    naming the call, so the run reports the call as pending and the browser's
+    answer comes back down to it. Any other interrupt goes up as it is.
+    """
+    responses: list[dict[str, Any]] = []
+    for interrupt in interrupts:
+        if is_frontend_tool_interrupt(interrupt):
+            call = parse_frontend_tool_reason(interrupt.reason)
+            answer = _browser_answer(
+                tool_context.interrupt(f"{BROWSER_WAIT}:{call}", reason=browser_wait_reason(call))
+            )
+        else:
+            answer = tool_context.interrupt(interrupt.id, reason=interrupt.reason)
+        responses.append({"interruptResponse": {"interruptId": interrupt.id, "response": answer}})
+    return responses
+
+
+def _browser_answer(answer: Any) -> Any:
+    """The browser's answer inside ag-ui-strands' resume envelope, as the stand-in reads it."""
+    if isinstance(answer, dict) and set(answer) == {"response"}:
+        return answer["response"]
+    if isinstance(answer, dict) and answer.get("cancelled") is True:
+        return wrap_frontend_tool_response(_SKIPPED_BROWSER_CALL, is_error=True)
+    return answer
+
+
+def _save_place(node: Node, tool_context: ToolContext) -> None:
+    """Keep a paused delegate's place on the session, so another process can resume it."""
+    exchange = get_session_exchange()
+    state = getattr(node, "_interrupt_state", None)
+    if exchange is None or not isinstance(node, Agent) or state is None or not state.activated:
+        return
+    exchange.delegates[tool_context.tool_use["toolUseId"]] = {
+        "messages": copy.deepcopy(node.messages),
+        "interrupt_state": state.to_dict(),
+    }
+
+
+def _restore_place(node: Node, tool_context: ToolContext) -> None:
+    """Put a delegate back where a run in another process left it paused."""
+    exchange = get_session_exchange()
+    if exchange is None or not exchange.resuming or not isinstance(node, Agent):
+        return
+    state = getattr(node, "_interrupt_state", None)
+    if state is not None and state.activated:
+        return
+    place = (exchange.inbound.get("delegates") or {}).get(tool_context.tool_use["toolUseId"])
+    if not isinstance(place, dict):
+        return
+    try:
+        node._interrupt_state = _InterruptState.from_dict(place["interrupt_state"])
+        node.messages = place["messages"]
+    except Exception:
+        logger.exception("delegate place restore failed; the delegate starts over")
+
+
 def _pending_interrupt_responses(
     node: Node, tool_context: ToolContext
 ) -> list[dict[str, Any]] | None:
@@ -113,27 +183,86 @@ def _pending_interrupt_responses(
     ``tool_context.interrupt`` so the coordinator captures the human response,
     then return the strands resume payload. Returns ``None`` for a fresh call.
     """
+    _restore_place(node, tool_context)
     istate = getattr(node, "_interrupt_state", None)
     if not (istate and istate.activated and istate.interrupts):
         return None
-    pending = {iid: intr for iid, intr in istate.interrupts.items() if intr.response is None}
+    pending = [intr for intr in istate.interrupts.values() if intr.response is None]
     logger.debug("delegate resuming with %d pending interrupt(s)", len(pending))
-    responses: list[dict[str, Any]] = []
-    for intr_id, intr in pending.items():
-        user_response = tool_context.interrupt(intr_id, reason=intr.reason)
-        responses.append({"interruptResponse": {"interruptId": intr_id, "response": user_response}})
-    return responses
+    _save_place(node, tool_context)
+    return _forward(pending, tool_context)
 
 
 def _interrupt_responses_from_result(
-    result: AgentResult, tool_context: ToolContext
+    node: Node, result: AgentResult, tool_context: ToolContext
 ) -> list[dict[str, Any]]:
     """Forward interrupts raised mid-run up to the coordinator and collect responses."""
-    responses: list[dict[str, Any]] = []
-    for intr in result.interrupts or []:
-        user_response = tool_context.interrupt(intr.id, reason=intr.reason)
-        responses.append({"interruptResponse": {"interruptId": intr.id, "response": user_response}})
-    return responses
+    _save_place(node, tool_context)
+    return _forward(list(result.interrupts or []), tool_context)
+
+
+def _plain(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return ", ".join(_plain(item) for item in value)
+    if isinstance(value, dict):
+        return "; ".join(f"{key}: {_plain(item)}" for key, item in value.items())
+    return json.dumps(value)
+
+
+def _exchange(name: str, tool_input: Any, answer: str) -> str:
+    try:
+        reply: Any = json.loads(answer)
+    except ValueError:
+        reply = answer
+    questions = tool_input.get("questions") if isinstance(tool_input, dict) else None
+    asked = [q["question"] for q in questions or [] if isinstance(q, dict) and q.get("question")]
+    if not asked:
+        return f"- {name} ({_plain(tool_input)}): {_plain(reply)}"
+    if isinstance(reply, dict) and all(question in reply for question in asked):
+        return "\n".join(f'- Asked "{question}": {_plain(reply[question])}' for question in asked)
+    return "\n".join(f'- Asked "{question}"' for question in asked) + f"\n  Answer: {_plain(reply)}"
+
+
+def _browser_exchanges(node: Node) -> list[str]:
+    """What the delegate asked the person through browser tools in its last task, and the answers."""
+    names = getattr(node, _CLIENT_TOOLS_ATTR, None)
+    messages = getattr(node, "messages", None)
+    if not names or not isinstance(messages, list):
+        return []
+    start = 0
+    for index, message in enumerate(messages):
+        content = message.get("content") or []
+        if message.get("role") == "user" and any("text" in block for block in content):
+            start = index
+    calls: dict[str, dict[str, Any]] = {}
+    lines: list[str] = []
+    for message in messages[start:]:
+        for block in message.get("content") or []:
+            use = block.get("toolUse")
+            if use and use.get("name") in names:
+                calls[use["toolUseId"]] = use
+            result = block.get("toolResult")
+            if result and result.get("toolUseId") in calls:
+                use = calls[result["toolUseId"]]
+                answer = " ".join(part.get("text", "") for part in result.get("content") or [])
+                lines.append(_exchange(use["name"], use.get("input"), answer.strip()))
+    return lines
+
+
+def _with_exchanges(node: Node, tool_result: dict[str, Any]) -> dict[str, Any]:
+    """Tell the coordinator what the delegate asked the person, so it knows the answers too."""
+    lines = _browser_exchanges(node)
+    if not lines:
+        return tool_result
+    note = "While working, this agent asked the person:\n" + "\n".join(lines)
+    content = list(tool_result["content"])
+    if content and "text" in content[-1]:
+        content[-1] = {"text": f"{content[-1]['text']}\n\n{note}"}
+    else:
+        content.append({"text": note})
+    return {**tool_result, "content": content}
 
 
 def _node_as_tool(
@@ -166,9 +295,9 @@ def _node_as_tool(
                         and result.stop_reason == "interrupt"
                         and result.interrupts
                     ):
-                        responses = _interrupt_responses_from_result(result, tool_context)
+                        responses = _interrupt_responses_from_result(node, result, tool_context)
                         result = await node.invoke_async(cast(Any, responses))
-                    return _result_to_tool_result(result)
+                    return _with_exchanges(node, _result_to_tool_result(result))
 
     else:
         lock = _thread_lock(node)
@@ -183,9 +312,9 @@ def _node_as_tool(
                     and result.stop_reason == "interrupt"
                     and result.interrupts
                 ):
-                    responses = _interrupt_responses_from_result(result, tool_context)
+                    responses = _interrupt_responses_from_result(node, result, tool_context)
                     result = node(cast(Any, responses))
-                return _result_to_tool_result(result)
+                return _with_exchanges(node, _result_to_tool_result(result))
 
     setattr(delegate, _DELEGATE_ATTR, True)
     return delegate

@@ -99,10 +99,12 @@ async def test_approval_survives_the_session_being_rebuilt() -> None:
         state=r1.state(),
         messages=r1.messages(),
         forwarded_props={KEY: gated},
-        resume=[{"interruptId": interrupt_id, "status": "resolved", "payload": {"answer": "yes"}}],
+        resume=[
+            {"interruptId": interrupt_id, "status": "resolved", "payload": {"status": "approved"}}
+        ],
     )
 
     assert not r2.errored()
     results = r2.of_type(AGUIEventType.TOOL_CALL_RESULT)
     assert [r.tool_call_id for r in results] == [paused_call_id]
-    assert "yes" in results[0].content
+    assert "submitted" in results[0].content

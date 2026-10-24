@@ -1,18 +1,19 @@
-# Parallel gated tool calls in ONE step: a plain entry agent asks the user TWO
-# questions in a single assistant turn (two ask_user tool-uses with distinct
-# tool-use ids). Both interrupts must surface together and resume cleanly.
+# Parallel gated tool calls in ONE step: a plain entry agent makes two gated
+# calls in a single assistant turn, with distinct tool-use ids. Both approval
+# requests must surface together and resume cleanly.
 agents:
   assistant:
     stream: {title: "Assistant"}
-    interrupt: true
+    tools: ["tests.fakes.gated_tools:submit_report"]
+    interrupt: {tools: [submit_report]}
     model:
       provider: kaboo_workflows.testing:ScriptedModel
       model_id: scripted
       params:
         script:
           - tools:
-              - {tool: ask_user, input: {question: "Approve step one?", options: ["yes", "no"]}}
-              - {tool: ask_user, input: {question: "Approve step two?", options: ["yes", "no"]}}
+              - {tool: submit_report, input: {title: "Step one"}}
+              - {tool: submit_report, input: {title: "Step two"}}
         final_text: "Both steps approved."
 
 entry: assistant

@@ -1,0 +1,36 @@
+# The worker saves a query; a state effect notes it in the workspace, which the
+# coordinator sees at its next model call.
+x-model: &m tests.e2e.test_state_effects:RecordingModel
+
+state_effects:
+  - tool: save_query
+    mapper: tests.fakes.workspace_tools:saved
+
+agents:
+  coordinator:
+    workspace: [/kaboo_workspace/queries]
+    model:
+      provider: *m
+      model_id: coordinator
+      params:
+        script:
+          - {tool: worker, input: "save the churn query"}
+        final_text: "Saved."
+  worker:
+    tools: ["tests.fakes.workspace_tools:save_query"]
+    model:
+      provider: *m
+      model_id: worker
+      params:
+        script:
+          - {tool: save_query, input: {title: "Churn by region"}}
+        final_text: "Saved q_7."
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: worker, description: "Saves queries"}
+
+entry: team

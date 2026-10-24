@@ -25,8 +25,6 @@ app = create_agui_app(
     allowed_mcp_hosts=["gateway.internal.example.com"],
     auth=verify_run_token,
     ping_path=None,
-    activity_deltas=True,
-    response_budget=CONTINUATION_BUDGET,
 )
 ```
 
@@ -42,9 +40,6 @@ app = create_agui_app(
   as them — see [Call MCP tools as the signed-in user](user-identity-mcp.md).
 - **`ping_path=None`** because the packaged health check always answers
   healthy, and AgentCore needs more than that (below).
-- **`activity_deltas`** sends activity as JSON Patches after the first
-  snapshot. Full snapshots on every change are what fill a response on long,
-  multi-agent runs.
 - **The Bedrock read timeout** defaults to strands' value, which a long
   thinking turn can exceed. Raise it for the slowest call you expect.
 
@@ -83,25 +78,18 @@ the response ends — in the ASGI middleware below, which sees both.
 AgentCore closes the socket once a response reaches 100 MiB, with no error of
 its own. The run dies without a terminal event, and CopilotKit reports
 whichever tool call was open as failed — the user is told a healthy tool broke.
-Two budgets keep that from happening:
 
-1. **`response_budget`** pauses the run at the next tool boundary once the
-   response has carried that many bytes, and continues the same turn in a fresh
-   response. The user loses nothing. Clients resolve the pause on their own; it
-   is an interrupt marked `reason: "continuation"`
-   ([Human-in-the-loop](../workflows/human-in-the-loop.md)).
-2. **A hard backstop** for a response that fills without ever reaching a tool
-   call: wrap the ASGI `send` so it forwards whole SSE frames, and once the
-   budget is spent, close the stream with a real `RUN_FINISHED` and a short
-   message saying the answer was cut off. A truncated answer with a reason
-   beats a failure with none.
-
-Give the pause room to fire first:
+A response carries only what its turn adds, never the conversation again (see
+[Response size](../concepts.md#response-size)), so a turn would need tens of
+megabytes of new tool results to come near the cap. Keep a backstop anyway:
+wrap the ASGI `send` so it forwards whole SSE frames, and once the budget is
+spent, close the stream with a real `RUN_FINISHED` and a short message saying
+the answer was cut off. A truncated answer with a reason beats a failure with
+none.
 
 ```{.python notest}
 AGENTCORE_RESPONSE_CAP = 104_857_600
 HARD_BUDGET = AGENTCORE_RESPONSE_CAP - 10 * 1024 * 1024
-CONTINUATION_BUDGET = HARD_BUDGET * 3 // 4
 ```
 
 The margin under the cap leaves room for the closing events and for

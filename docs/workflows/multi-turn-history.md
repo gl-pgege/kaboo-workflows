@@ -1,8 +1,8 @@
 # Multi-turn history
 
 A delegate sub-agent starts fresh every turn by default. Set `history: true` and
-its transcript is seeded from `state.kaboo_history` on the way in and captured
-back into the outgoing snapshot on the way out — so it can remember across turns.
+its transcript is seeded from `state.kaboo_sessions.history` on the way in and
+written back at the end of the run — so it can remember across turns.
 
 ```
 assistant_team (delegate):
@@ -164,11 +164,11 @@ The keys are those of strands' `CacheConfig` (`strategy`, `ttl`,
 config loads. strands deprecates the older `cache_prompt` and `cache_tools`
 params in their favor.
 
-The run's usage in the activity stream (`usageByRun`) carries `cacheHitRate`,
-the share of the prompt read from the cache, for any run that read or wrote it:
-`cacheReadInputTokens / (inputTokens + cacheReadInputTokens + cacheWriteInputTokens)`.
-Bedrock counts the three separately, so `inputTokens` alone is only the
-uncached part.
+The run's usage on `RUN_FINISHED` counts cache reads (`cachedInputTokens`) and
+writes (`cacheWriteInputTokens`) apart from `inputTokens`, per model. Bedrock
+counts the three separately, so `inputTokens` alone is only the uncached part,
+and the share of the prompt read from the cache is
+`cachedInputTokens / (inputTokens + cachedInputTokens + cacheWriteInputTokens)`.
 
 ## What the model is sent is not what is stored
 
@@ -183,20 +183,21 @@ written back keep the original calls.
 ## The client owns storage
 
 kaboo enriches the data structure; it does **not** choose your datastore. The
-captured transcript comes back in the run's outgoing history snapshot, and the
-client feeds it back in `state.kaboo_history` on the next turn. For turnkey
-persistence (in-memory or Postgres `ThreadStore`s behind a CopilotKit runtime),
-use [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime).
+captured transcript leaves in the run's closing `STATE_DELTA`, under
+`kaboo_sessions.history`, and the client sends it back on the next turn. For
+turnkey persistence (in-memory or Postgres `ThreadStore`s behind a CopilotKit
+runtime), use [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime), which
+also keeps the key from the browser.
 
 ## The state channel carries more than history
 
-`kaboo_history` has a sibling. A pending human-in-the-loop gate travels the same
-way, under `kaboo_session`, for the same reason: the run is stateless, so anything
-the conversation accumulates has to arrive with the turn. That is what lets an
-approval survive a restart — see
-[human-in-the-loop](human-in-the-loop.md#a-gate-outlives-the-process-that-opened-it).
+`kaboo_sessions` carries the paused checkpoint of a run waiting on the person
+too, under `paused`, for the same reason: the run is stateless, so anything the
+conversation accumulates has to arrive with the turn. That is what lets an
+approval or a question survive a restart — see
+[human-in-the-loop](human-in-the-loop.md#a-pause-outlives-the-process-that-opened-it).
 
-Together, the two keys are the reason a server can rebuild its agents per run and
+Together, they are the reason a server can rebuild its agents per run and
 still be indistinguishable from one that kept them: a session holds behaviour,
 the state channel holds memory.
 

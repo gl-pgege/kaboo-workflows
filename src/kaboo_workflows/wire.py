@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from strands import Agent
 from strands.multiagent import Swarm
 from strands.multiagent.graph import Graph
 
-from .hooks import ContinuationHook, EventPublisher, HistoryHook
+from .hooks import EventPublisher, HistoryHook
 from .types import EventType, SessionManifest, StreamEvent
 
 if TYPE_CHECKING:
@@ -77,15 +78,19 @@ class EventQueue:
         self._session_id = session_id
         self._session_start_emitted = False
         self._session_end_emitted = False
+        self._sink: Callable[[StreamEvent], None] | None = None
 
     # -- Internal ----------------------------------------------------------
 
     def _put(self, event: StreamEvent | object) -> None:
-        """Place an item on the queue (non-blocking).
+        """Place an item on the queue (non-blocking), or hand it to the sink.
 
         Used as the :class:`~kaboo_workflows.hooks.EventPublisher` callback.
         Drops the event with a warning when the queue is full.
         """
+        if self._sink is not None and isinstance(event, StreamEvent):
+            self._sink(event)
+            return
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
@@ -95,6 +100,15 @@ class EventQueue:
                 )
 
     # -- Public API --------------------------------------------------------
+
+    def forward_to(self, sink: Callable[[StreamEvent], None] | None) -> None:
+        """Hand every event to ``sink`` as it is published, instead of queueing it.
+
+        The AG-UI endpoint forwards a run's events into its own response this
+        way, so they reach the client in the order they happened. Pass ``None``
+        to queue them again.
+        """
+        self._sink = sink
 
     def flush(self) -> None:
         """Discard all currently queued events and reset lifecycle guards.
@@ -308,9 +322,6 @@ def make_event_queue(
             is_chat_reply=(chat_reply is not None and name == chat_reply),
         )
         agent.hooks.add_hook(pub)
-        # Every agent can be the one holding the pen when the response fills
-        # up, delegates included, so each needs somewhere to pause.
-        agent.hooks.add_hook(ContinuationHook())
         agent.callback_handler = pub.as_callback_handler()
         # Stash the instance so the AG-UI adapter can forward it to the per-thread
         # clone ag-ui-strands executes for a plain-agent entry (that clone does not
@@ -344,7 +355,6 @@ def make_event_queue(
             stream_title=st,
         )
         orch.hooks.add_hook(orch_pub)
-        orch.hooks.add_hook(ContinuationHook())
         if isinstance(orch, Agent):
             orch.callback_handler = orch_pub.as_callback_handler()
             # Stash for the AG-UI adapter, same as declared agents above: the

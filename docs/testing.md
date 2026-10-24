@@ -8,8 +8,9 @@ provider, no network and no server. Two pieces do the work:
   replays it the same way on every run.
 - **`Pipeline`** drives a config through the same AG-UI path
   `create_agui_app` serves, in-process, and returns what a client would have
-  seen as a `TurnResult`: the AG-UI events, the reply text, the state to carry
-  into the next turn, and the activity groups a chat UI renders.
+  seen as a `TurnResult`: the AG-UI events, the reply text, the transcript and
+  state to carry into the next turn, and the sub-agent cards a chat UI folds
+  from the events.
 
 Because the real strands event loop runs, a scripted test exercises your
 tools, hooks, prompts, orchestration wiring, interrupts and history exactly
@@ -202,12 +203,12 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## Multi-agent runs and activity
+## Multi-agent runs
 
-`TurnResult.groups` is the activity tree a chat UI renders: one group per
-agent stream, nested under the group that called it. The entry agent's own
-stream is the chat reply, so its group is flagged `inlineChatOwner` and never
-drawn as a card; it holds the entry's tool calls for the UI to label.
+`TurnResult.groups` holds what a chat UI folds from the sub-agent events: one
+group per sub-agent invocation, keyed by its `subagentRunId`, with the call that
+started it, its parent, its status, its tool calls, its result and its token
+usage. The entry agent's own stream is the chat reply, so it has no group.
 
 ```python
 import asyncio
@@ -241,9 +242,9 @@ async def main() -> None:
     result = await run_pipeline(CONFIG, "What was revenue last quarter?")
 
     assert result.text() == "Revenue was 42M."
-    assert result.agent_names() == {"team", "researcher"}
-    assert result.group_ids() == ["coordinator.researcher", "team"]
-    assert result.group("team")["inlineChatOwner"]
+    assert result.agent_names() == {"researcher"}
+    assert result.group_ids() == ["coordinator.researcher"]
+    assert result.group("coordinator.researcher")["status"] == "completed"
 
 
 asyncio.run(main())
@@ -252,11 +253,66 @@ asyncio.run(main())
 `children_of(group_id)` walks the tree for nested delegation, and
 `group(group_id)` returns one group as the UI holds it.
 
-## Interrupts and resume
+## Browser tools, approvals and resume
 
-A run that pauses on `ask_user` or a gated tool finishes with an `interrupt`
-outcome. To resume it, send the next turn the way a client does: the previous
-turn's `state()` and `messages()`, plus the answer in `resume`.
+A run pauses two ways, and a test answers each the way a client does.
+
+A **browser tool**, such as `ask_user`, is one the client declares and runs.
+Pass its declaration in `tools=`; the run ends with the call in
+`pendingToolCallIds`, and the next turn carries the answer as a tool message on
+the transcript from `messages()`:
+
+```python
+import asyncio
+
+from ag_ui.core import Tool, ToolMessage
+
+from kaboo_workflows.testing import Pipeline
+
+ASK_USER = Tool(
+    name="ask_user",
+    description="Ask the person multiple-choice questions.",
+    parameters={"type": "object", "properties": {"questions": {"type": "array"}}},
+)
+
+CONFIG = """
+agents:
+  assistant:
+    client_tools: [ask_user]
+    model:
+      provider: kaboo_workflows.testing:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - {tool: ask_user, input: {questions: [{question: "Which region?", options: ["Europe", "APAC"]}]}}
+        final_text: "Looking at Europe."
+entry: assistant
+"""
+
+
+async def main() -> None:
+    pipe = Pipeline(CONFIG)
+    first = await pipe.turn("How is churn?", thread_id="c1", run_id="r1", tools=[ASK_USER])
+    [call_id] = first.run_outcome().pending_tool_call_ids
+
+    answer = ToolMessage(id="a1", role="tool", tool_call_id=call_id, content='{"Which region?": "Europe"}')
+    second = await pipe.turn(
+        thread_id="c1",
+        run_id="r2",
+        tools=[ASK_USER],
+        state=first.state(),
+        messages=[*first.messages(), answer],
+    )
+    pipe.close()
+
+    assert second.text() == "Looking at Europe."
+
+
+asyncio.run(main())
+```
+
+An **approval** pauses with an `interrupt` outcome. Resume it with the previous
+turn's `state()` and `messages()`, plus the decision in `resume`:
 
 ```python
 import asyncio
@@ -266,26 +322,29 @@ from kaboo_workflows.testing import Pipeline
 CONFIG = """
 agents:
   assistant:
-    interrupt: true
+    tools: ["tests.fakes.gated_tools:submit_report"]
+    interrupt:
+      tools: [submit_report]
     model:
       provider: kaboo_workflows.testing:ScriptedModel
       model_id: scripted
       params:
         script:
-          - {tool: ask_user, input: {question: "Delete the draft?", options: ["yes", "no"]}}
-        final_text: "Deleted."
+          - {tool: submit_report, input: {title: "Q3 draft"}}
+        final_text: "Filed."
 entry: assistant
 """
 
 
 async def main() -> None:
     pipe = Pipeline(CONFIG)
-    first = await pipe.turn("Clean up my drafts", thread_id="c1", run_id="r1")
+    first = await pipe.turn("File the report", thread_id="c2", run_id="r1")
     outcome = first.run_outcome()
     assert outcome.type == "interrupt"
+    assert outcome.interrupts[0].reason == "kaboo:approval"
 
     second = await pipe.turn(
-        thread_id="c1",
+        thread_id="c2",
         run_id="r2",
         state=first.state(),
         messages=first.messages(),
@@ -293,14 +352,14 @@ async def main() -> None:
             {
                 "interruptId": outcome.interrupts[0].id,
                 "status": "resolved",
-                "payload": {"answer": "yes"},
+                "payload": {"status": "approved"},
             }
         ],
     )
     pipe.close()
 
     assert second.finished()
-    assert second.text() == "Deleted."
+    assert second.text() == "Filed."
 
 
 asyncio.run(main())

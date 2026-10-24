@@ -1,0 +1,28 @@
+# The coordinator and its worker record what their models receive.
+x-model: &m tests.e2e.test_client_tools:RecordingModel
+
+agents:
+  coordinator:
+    model:
+      provider: *m
+      model_id: coordinator
+      params:
+        script:
+          - {tool: worker, input: "look"}
+        final_text: "Done."
+  worker:
+    client_tools: [ask_user]
+    model:
+      provider: *m
+      model_id: worker
+      params:
+        final_text: "Looked."
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: worker, description: "Looks"}
+
+entry: team

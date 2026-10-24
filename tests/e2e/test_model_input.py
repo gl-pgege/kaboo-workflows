@@ -3,7 +3,7 @@
 kaboo rewrites the copy of the conversation each model call is sent and never
 the conversation itself. These drive the production adapter path and check both
 sides: the scripted model's input, and the ``MESSAGES_SNAPSHOT`` and
-``kaboo_history`` a host would persist and replay.
+``kaboo_sessions`` a host would persist and replay.
 """
 
 from __future__ import annotations
@@ -106,7 +106,10 @@ async def test_a_foreign_call_in_loaded_memory_reaches_the_model_as_a_note_and_i
     ]
 
     r = await pipe.turn(
-        "and in 2023?", thread_id="f2", run_id="r1", state={"kaboo_history": {"finance": memory}}
+        "and in 2023?",
+        thread_id="f2",
+        run_id="r1",
+        state={"kaboo_sessions": {"history": {"finance": memory}}},
     )
 
     assert not r.errored()
@@ -116,7 +119,7 @@ async def test_a_foreign_call_in_loaded_memory_reaches_the_model_as_a_note_and_i
     assert sent[1]["content"][0]["text"].startswith(
         "Earlier step (athena___run_query, a tool you don't have)"
     )
-    assert _turns(r.state()["kaboo_history"]["finance"][: len(memory)]) == memory
+    assert _turns(r.state()["kaboo_sessions"]["history"]["finance"][: len(memory)]) == memory
 
 
 async def test_a_bedrock_sub_agent_caches_its_loaded_memory_without_writing_the_point_back():
@@ -129,7 +132,10 @@ async def test_a_bedrock_sub_agent_caches_its_loaded_memory_without_writing_the_
     ]
 
     r = await pipe.turn(
-        "and 2022?", thread_id="c1", run_id="r1", state={"kaboo_history": {"finance": memory}}
+        "and 2022?",
+        thread_id="c1",
+        run_id="r1",
+        state={"kaboo_sessions": {"history": {"finance": memory}}},
     )
 
     assert not r.errored()
@@ -137,5 +143,5 @@ async def test_a_bedrock_sub_agent_caches_its_loaded_memory_without_writing_the_
         {"text": "It was $42M."},
         {"cachePoint": {"type": "default"}},
     ]
-    written_back = r.state()["kaboo_history"]["finance"]
+    written_back = r.state()["kaboo_sessions"]["history"]["finance"]
     assert not [b for m in written_back for b in m["content"] if "cachePoint" in b]

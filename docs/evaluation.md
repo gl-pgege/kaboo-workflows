@@ -82,9 +82,9 @@ The active trace id rides outward so hosts can attach scores to the exact
 trace:
 
 - `AGENT_COMPLETE` events carry `trace_id`;
-- activity snapshots expose `traceId` per group and `traceByRun` per run
-  (`ACTIVITY_SNAPSHOT` → kaboo-react's `StreamGroup.traceId` /
-  `ActivityState.traceByRun`);
+- `RUN_FINISHED.metadata.traceId` names the run's root trace, and each
+  sub-agent's `SUBAGENT_STARTED.metadata.traceId` its own (kaboo-react's
+  `ActivityState.traceByRun` / `StreamGroup.traceId`);
 - `current_trace_id()` (exported from `kaboo_workflows`) returns the ambient
   trace id, `None` when telemetry is off.
 

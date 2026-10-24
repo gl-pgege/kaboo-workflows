@@ -20,7 +20,15 @@ from strands.interrupt import InterruptException
 from strands.types._events import ToolInterruptEvent, ToolResultEvent
 from strands.types.tools import AgentTool, ToolContext, ToolGenerator, ToolSpec, ToolUse
 
-from .interrupt_hook import APPROVAL_SCOPES, APPROVALS_STATE_KEY, _refusal, _tool_title
+from .interrupt_hook import (
+    APPROVAL_NAME,
+    APPROVAL_SCOPES,
+    APPROVALS_STATE_KEY,
+    _refusal,
+    _tool_title,
+    _unwrapped,
+    is_expired,
+)
 
 if sys.version_info >= (3, 12):
     from typing import override
@@ -37,7 +45,6 @@ logger = logging.getLogger(__name__)
 TOOL_APPROVAL_KEY = "kaboo_approval"
 """Key of the reply a tool sends instead of a result when a call needs approval."""
 
-_ASK_USER = "ask_user"
 _MAX_REQUEST_CHARS = 200
 _MAX_TEXT_CHARS = 500
 _STILL_NEEDS_APPROVAL = (
@@ -137,7 +144,7 @@ def _text(value: Any) -> str | None:
 class ToolApprovalHook(HookProvider):
     """Let tools ask the person to approve a call.
 
-    Wraps each tool the agent calls, except ``ask_user``. When a tool replies
+    Wraps each tool the agent calls. When a tool replies
     with ``kaboo_approval`` instead of a result, the run pauses with an
     approval request: the same one the gate raises, plus the tool's
     ``request`` ID. The reply never reaches the model. On resume:
@@ -168,8 +175,6 @@ class ToolApprovalHook(HookProvider):
     def _on_before_tool(self, event: BeforeToolCallEvent) -> None:
         tool = event.selected_tool
         if tool is None or event.cancel_tool or isinstance(tool, _ApprovalAwareTool):
-            return
-        if event.tool_use.get("name") == _ASK_USER:
             return
         event.selected_tool = _ApprovalAwareTool(tool, agent_name=self._agent_name)
 
@@ -212,7 +217,7 @@ class _ApprovalAwareTool(AgentTool):
                 yield event
             return
         context = ToolContext(tool_use=tool_use, agent=agent, invocation_state=invocation_state)
-        name = f"{self._agent_name}:tool_approval:{tool_use.get('name', '')}"
+        name = APPROVAL_NAME
         answer = _stored_answer(context, name)
         if answer is not None:
             async for event in self._resume(tool_use, invocation_state, answer, **kwargs):
@@ -248,6 +253,7 @@ class _ApprovalAwareTool(AgentTool):
             "message": request["message"] or f"{tool_name} needs your approval",
             "tool_name": tool_name,
             "tool_input": tool_use.get("input", {}),
+            "tool_use_id": str(tool_use.get("toolUseId", "")),
             "subject": request["subject"]
             or {"key": tool_name, "label": _tool_title(self._inner) or tool_name},
             "scopes": request["scopes"],
@@ -265,6 +271,7 @@ class _ApprovalAwareTool(AgentTool):
         **kwargs: Any,
     ) -> ToolGenerator:
         tool_use_id = str(tool_use.get("toolUseId", ""))
+        answer = _unwrapped(answer)
         if not (isinstance(answer, dict) and answer.get("status") == "approved"):
             decision, note, reason = _refusal(answer)
             record: dict[str, Any] = {"decision": decision, "by": "person"}
@@ -307,7 +314,11 @@ def _stored_answer(context: ToolContext, name: str) -> Any:
     interrupts = getattr(state, "interrupts", None)
     if not isinstance(interrupts, dict):
         return None
-    return getattr(interrupts.get(context._interrupt_id(name)), "response", None)
+    interrupt = interrupts.get(context._interrupt_id(name))
+    response = getattr(interrupt, "response", None)
+    if response is not None and is_expired(getattr(interrupt, "reason", None)):
+        return {"expired": True}
+    return response
 
 
 def _record(invocation_state: dict[str, Any], tool_use_id: str, record: dict[str, Any]) -> None:

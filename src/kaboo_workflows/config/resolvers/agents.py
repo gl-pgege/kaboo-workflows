@@ -11,9 +11,9 @@ from ...exceptions import ConfigurationError
 from ...hooks.context_hook import ContextHook
 from ...hooks.interrupt_hook import GateRule, InterruptHook
 from ...hooks.reference_hook import ReferenceHook
+from ...hooks.state_effects import StateEffectsHook
 from ...hooks.tool_approval_hook import ToolApprovalHook
 from ...hooks.tool_attachments_hook import ToolAttachmentsHook
-from ...tools.ask_user import ask_user
 from ...tools.references import fetch_attachment, list_references
 from ...utils import load_object
 from .conversation_manager import resolve_conversation_manager
@@ -158,7 +158,7 @@ def build_agent_from_def(
     # 6b. Resolve interrupt configuration
     agent_kwargs = dict(agent_def.agent_kwargs)
     interrupt = agent_def.interrupt
-    if interrupt is not None and not isinstance(interrupt, bool):
+    if interrupt is not None:
         if interrupt.tools:
             hooks.append(
                 InterruptHook(
@@ -171,8 +171,6 @@ def build_agent_from_def(
             )
         if interrupt.tool_approvals:
             hooks.append(ToolApprovalHook(agent_name=name))
-        if interrupt.ask_user:
-            tools.append(ask_user)
 
     # 6bb. Resolve reference/attachment policy. Attach the ReferenceHook at
     # build time (not wire time) so it rides `_kaboo_hook_providers`: the
@@ -196,7 +194,9 @@ def build_agent_from_def(
     # must reach the per-thread clone the AG-UI adapter runs for the entry.
     clearing = agent_def.context.clear_tool_results if agent_def.context is not None else None
     if clearing is None:
-        hooks.append(ContextHook())
+        hooks.append(
+            ContextHook(client_tools=agent_def.client_tools, workspace=agent_def.workspace)
+        )
     else:
         hooks.append(
             ContextHook(
@@ -204,8 +204,11 @@ def build_agent_from_def(
                 keep_last=clearing.keep_last,
                 min_chars=clearing.min_chars,
                 keep_tools=clearing.keep_tools,
+                client_tools=agent_def.client_tools,
+                workspace=agent_def.workspace,
             )
         )
+    hooks.append(StateEffectsHook(agent_name=name))
 
     # 6bbbb. Media a tool returned as data becomes media blocks; attached at
     # build time for the same reason as the hooks above.

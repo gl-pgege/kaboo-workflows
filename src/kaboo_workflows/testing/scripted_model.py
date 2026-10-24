@@ -36,6 +36,17 @@ stay deterministic. Each step is one of:
 
 When the script is exhausted the model emits ``final_text`` and stops.
 
+The step is read from the conversation, not counted on the instance: it is the
+number of assistant messages since the last human turn. A run that builds fresh
+agents, a resume after a pause and a follow-up after a browser tool therefore
+all land on the right step. ``turns`` gives each human turn its own script (the
+first human turn plays ``turns[0]``, the second ``turns[1]``, and the last one
+repeats); without it every turn plays ``script``.
+
+``stream_chunk`` splits text and tool arguments into deltas of that many
+characters, and ``stream_delay_ms`` waits between them, so a UI can be watched
+rendering arguments as they stream.
+
 Every call's messages are kept on ``calls`` and its system prompt on
 ``system_prompts``, so a test can assert exactly what the model was sent — which
 is not always what the agent holds.
@@ -43,6 +54,7 @@ is not always what the agent holds.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import uuid
@@ -98,7 +110,10 @@ class ScriptedModel(Model):
         model_id: str = "scripted",
         *,
         script: list[dict[str, Any]] | None = None,
+        turns: list[list[dict[str, Any]]] | None = None,
         final_text: str = "Done.",
+        stream_chunk: int = 0,
+        stream_delay_ms: int = 0,
         **_: Any,
     ) -> None:
         """Initialize the scripted model.
@@ -107,13 +122,21 @@ class ScriptedModel(Model):
             model_id: Reported as the model id; any value works.
             script: The steps to replay, one per model turn. See the module
                 docstring for the step shapes.
+            turns: One script per human turn; the last repeats. Overrides
+                ``script`` when given.
             final_text: The reply once the script is exhausted.
+            stream_chunk: Characters per streamed delta; 0 sends each text and
+                each tool's arguments as one delta.
+            stream_delay_ms: Pause between deltas, for watching a UI render.
             **_: Extra model params from the config, accepted and ignored so a
                 config written for a real provider still loads.
         """
         self._config: dict[str, Any] = {"model_id": model_id}
         self._script = script or []
+        self._turns = [list(turn) for turn in turns] if turns else None
         self._final_text = final_text
+        self._stream_chunk = max(0, int(stream_chunk))
+        self._stream_delay = max(0, int(stream_delay_ms)) / 1000
         self._step = 0
         self.calls: list[list[dict[str, Any]]] = []
         self.system_prompts: list[Any] = []
@@ -172,15 +195,11 @@ class ScriptedModel(Model):
         self.calls.append(copy.deepcopy(messages))
         self.system_prompts.append(system_prompt)
         _validate_tool_pairing(messages)
-        if _is_fresh_human_turn(messages):
-            self._step = 0
 
-        action = (
-            self._script[self._step]
-            if self._step < len(self._script)
-            else {"text": self._final_text}
-        )
-        self._step += 1
+        script = self._script_for(messages)
+        step = _steps_since_human_turn(messages)
+        action = script[step] if step < len(script) else {"text": self._final_text}
+        self._step = step + 1
 
         if "error" in action:
             raise RuntimeError(action["error"])
@@ -189,19 +208,27 @@ class ScriptedModel(Model):
 
         if "text" in action:
             yield {"contentBlockStart": {"start": {}}}
-            yield {"contentBlockDelta": {"delta": {"text": action["text"]}}}
+            for piece in _pieces(action["text"], self._stream_chunk):
+                yield {"contentBlockDelta": {"delta": {"text": piece}}}
+                await self._pause()
             yield {"contentBlockStop": {}}
             yield {"messageStop": {"stopReason": "end_turn"}}
         elif "tools" in action:
             for sub in action["tools"]:
                 spec = _resolve_tool_spec(sub, tool_specs or [])
-                for event in _tool_use_events(spec, _build_tool_input(sub, spec)):
+                for event in _tool_use_events(
+                    spec, _build_tool_input(sub, spec), self._stream_chunk
+                ):
                     yield event
+                    await self._pause()
             yield {"messageStop": {"stopReason": "tool_use"}}
         else:
             spec = _resolve_tool_spec(action, tool_specs or [])
-            for event in _tool_use_events(spec, _build_tool_input(action, spec)):
+            for event in _tool_use_events(
+                spec, _build_tool_input(action, spec), self._stream_chunk
+            ):
                 yield event
+                await self._pause()
             yield {"messageStop": {"stopReason": "tool_use"}}
 
         yield {
@@ -211,54 +238,79 @@ class ScriptedModel(Model):
             }
         }
 
+    def _script_for(self, messages: Any) -> list[dict[str, Any]]:
+        """The script for the current human turn."""
+        if not self._turns:
+            return self._script
+        index = max(0, _human_turns(messages) - 1)
+        return self._turns[min(index, len(self._turns) - 1)]
 
-def _tool_use_events(spec: dict[str, Any], tool_input: dict[str, Any]) -> list[dict[str, Any]]:
+    async def _pause(self) -> None:
+        if self._stream_delay:
+            await asyncio.sleep(self._stream_delay)
+
+
+def _pieces(text: str, size: int) -> list[str]:
+    """Split ``text`` into deltas of ``size`` characters; one delta when ``size`` is 0."""
+    if size <= 0 or len(text) <= size:
+        return [text]
+    return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+def _tool_use_events(
+    spec: dict[str, Any], tool_input: dict[str, Any], chunk: int = 0
+) -> list[dict[str, Any]]:
     """Build the content-block events for one tool call.
 
     Args:
         spec: The tool's spec, as strands exposes it this turn.
         tool_input: The input to call the tool with.
+        chunk: Characters per argument delta; 0 sends the arguments at once.
 
     Returns:
         The start, delta and stop events of one ``toolUse`` block.
     """
-    return [
-        {
-            "contentBlockStart": {
-                "start": {
-                    "toolUse": {
-                        "name": spec["name"],
-                        "toolUseId": f"call-{uuid.uuid4().hex[:8]}",
-                    }
+    start = {
+        "contentBlockStart": {
+            "start": {
+                "toolUse": {
+                    "name": spec["name"],
+                    "toolUseId": f"call-{uuid.uuid4().hex[:8]}",
                 }
             }
-        },
-        {"contentBlockDelta": {"delta": {"toolUse": {"input": json.dumps(tool_input)}}}},
-        {"contentBlockStop": {}},
+        }
+    }
+    deltas = [
+        {"contentBlockDelta": {"delta": {"toolUse": {"input": piece}}}}
+        for piece in _pieces(json.dumps(tool_input), chunk)
     ]
+    return [start, *deltas, {"contentBlockStop": {}}]
 
 
-def _is_fresh_human_turn(messages: Any) -> bool:
-    """Tell a new human turn apart from a tool-result continuation.
-
-    strands appends tool results as user-role messages, so a real new human turn
-    is a user message with text and no toolResult.
-
-    Args:
-        messages: The conversation strands sends.
-
-    Returns:
-        Whether the last message is a human text turn.
-    """
-    if not messages:
-        return True
-    last = messages[-1]
-    if last.get("role") != "user":
+def _is_human_text(message: Any) -> bool:
+    """Whether a message is a person's turn: user text with no tool result."""
+    if not isinstance(message, dict) or message.get("role") != "user":
         return False
-    blocks = last.get("content", []) or []
+    blocks = message.get("content", []) or []
     has_text = any(isinstance(b, dict) and "text" in b for b in blocks)
     has_tool_result = any(isinstance(b, dict) and "toolResult" in b for b in blocks)
     return has_text and not has_tool_result
+
+
+def _human_turns(messages: Any) -> int:
+    """How many human turns the conversation holds."""
+    return sum(1 for message in messages or [] if _is_human_text(message))
+
+
+def _steps_since_human_turn(messages: Any) -> int:
+    """How many assistant messages follow the last human turn: the step to play."""
+    steps = 0
+    for message in reversed(messages or []):
+        if _is_human_text(message):
+            break
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            steps += 1
+    return steps
 
 
 def _tool_name(spec: dict[str, Any]) -> str:

@@ -8,9 +8,13 @@ A dataset is a list of items, each an input message plus its expectations
     scorers:                       # applied to every item
       - type: budget
         max_cost: 2.0
+    browser_tools: [ask_user]      # offered to the agents whose client_tools allow them
     items:
       - id: revenue
         input: "What was total revenue last quarter?"
+        answers:                       # the browser's answers, by tool
+          ask_user: {"Which quarter?": "Q3"}
+        approve: true                  # approve requests; false declines; unset leaves them open
         expect:
           - type: contains
             value: revenue
@@ -43,6 +47,10 @@ class EvalItem:
     forwarded_props: dict[str, Any] | None = None
     timeout_s: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    answers: dict[str, Any] = field(default_factory=dict)
+    """The browser's answer to each browser tool, or a list of answers used in order."""
+    approve: bool | None = None
+    """Approve (``True``) or decline (``False``) every approval request; ``None`` leaves it open."""
 
 
 @dataclass
@@ -53,6 +61,8 @@ class EvalDataset:
     items: list[EvalItem]
     scorers: list[dict[str, Any]] = field(default_factory=list)
     config: str | None = None
+    browser_tools: list[Any] = field(default_factory=list)
+    """Browser tools every run offers: ``ask_user``, or ``{name, description, parameters}``."""
 
 
 def _parse_item(raw: dict[str, Any], index: int) -> EvalItem:
@@ -67,6 +77,12 @@ def _parse_item(raw: dict[str, Any], index: int) -> EvalItem:
         raise ValueError(f"dataset item '{item_id}': 'expect' must be a list of scorer configs")
     timeout = raw.get("timeout_s")
     metadata = raw.get("metadata")
+    answers = raw.get("answers") or {}
+    if not isinstance(answers, dict):
+        raise ValueError(f"dataset item '{item_id}': 'answers' must map tool names to answers")
+    approve = raw.get("approve")
+    if approve is not None and not isinstance(approve, bool):
+        raise ValueError(f"dataset item '{item_id}': 'approve' must be true or false")
     return EvalItem(
         id=item_id,
         input=text,
@@ -77,6 +93,8 @@ def _parse_item(raw: dict[str, Any], index: int) -> EvalItem:
         ),
         timeout_s=float(timeout) if timeout is not None else None,
         metadata=metadata if isinstance(metadata, dict) else {},
+        answers=dict(answers),
+        approve=approve,
     )
 
 
@@ -112,6 +130,9 @@ def load_eval_dataset(path: str | Path) -> EvalDataset:
     scorers = raw.get("scorers") or []
     if not isinstance(scorers, list):
         raise ValueError(f"dataset {file}: 'scorers' must be a list of scorer configs")
+    browser_tools = raw.get("browser_tools") or []
+    if not isinstance(browser_tools, list):
+        raise ValueError(f"dataset {file}: 'browser_tools' must be a list")
     config = raw.get("config")
     if config is not None:
         # Relative config paths resolve against the dataset file, so datasets
@@ -122,4 +143,5 @@ def load_eval_dataset(path: str | Path) -> EvalDataset:
         items=items,
         scorers=[dict(s) for s in scorers],
         config=config,
+        browser_tools=browser_tools,
     )

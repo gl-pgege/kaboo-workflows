@@ -41,7 +41,7 @@ class HistoryExchange:
     """Request-scoped carrier for client-driven, per-agent history.
 
     ``inbound`` holds the transcripts the client sent this run (parsed from
-    ``RunAgentInput.state['kaboo_history']``), keyed per agent bucket.
+    ``RunAgentInput.state['kaboo_sessions']['history']``), keyed per agent bucket.
     ``outbound`` accumulates the transcripts agents produce this run, whole, so
     an agent called again in the same run is seeded with everything it did.
     ``persisted`` holds the copy to write back instead, for buckets whose agent
@@ -115,7 +115,7 @@ class SessionExchange:
     """Request-scoped carrier for client-driven session state.
 
     ``inbound`` is the state the client sent this run (parsed from
-    ``RunAgentInput.state['kaboo_session']``); a hook restores it onto the
+    ``RunAgentInput.state['kaboo_sessions']['paused']``); a hook restores it onto the
     executing agent so a paused approval survives a process restart.
 
     ``agent`` is that executing agent, recorded on invocation so the snapshot
@@ -125,7 +125,7 @@ class SessionExchange:
     hook fires.
 
     ``publishes_approvals`` says whether this run writes the approvals it is
-    waiting on to ``kaboo_session.approvals``, where a host reads them to match
+    waiting on to ``kaboo_sessions.approvals``, where a host reads them to match
     the person's decisions. Without it a host cannot remember a decision, so
     the tool gate offers only ``once``.
 
@@ -134,6 +134,10 @@ class SessionExchange:
     the resumed tools have run, a later invocation in the same run (a hook
     sending the agent back, a continuation) must not restore it again, or the
     answered gate comes back and its tools run a second time.
+
+    ``delegates`` holds the place of every delegate this run left paused — its
+    messages and interrupt state — by the id of the call that delegated to it,
+    so a run in another process can resume it (``kaboo_sessions.paused.delegates``).
     """
 
     inbound: dict[str, Any] = field(default_factory=dict)
@@ -141,62 +145,12 @@ class SessionExchange:
     resuming: bool = False
     publishes_approvals: bool = False
     restored: bool = False
+    delegates: dict[str, Any] = field(default_factory=dict)
 
 
 _current_session: contextvars.ContextVar[SessionExchange | None] = contextvars.ContextVar(
     "kaboo_session_exchange", default=None
 )
-
-
-@dataclass
-class ResponseBudget:
-    """Request-scoped byte allowance for the response this run streams into.
-
-    Some hosts cap how much one HTTP response may carry — AWS AgentCore closes
-    the socket at 100 MB, which reaches the browser as a dropped connection
-    rather than an answer. The SSE writer adds each encoded frame to
-    :attr:`sent`; :class:`~kaboo_workflows.hooks.ContinuationHook` reads it at
-    the next tool boundary and pauses the run there, so the turn carries on in
-    a fresh response instead of dying in this one.
-
-    A ``limit`` of zero means no cap, which is the default: the pause only
-    happens where a host has asked for it.
-
-    One instance is created per request and shared by reference across the
-    request's tasks via :data:`_current_response_budget`, so the writer and the
-    hook — which run in different tasks — see the same counter.
-    """
-
-    limit: int = 0
-    sent: int = 0
-
-    def add(self, count: int) -> None:
-        """Record ``count`` bytes written to the response."""
-        self.sent += count
-
-    @property
-    def exhausted(self) -> bool:
-        """Whether the response has used up its allowance."""
-        return self.limit > 0 and self.sent >= self.limit
-
-
-_current_response_budget: contextvars.ContextVar[ResponseBudget | None] = contextvars.ContextVar(
-    "kaboo_response_budget", default=None
-)
-
-
-def set_response_budget(budget: ResponseBudget | None) -> None:
-    """Bind the current request's :class:`ResponseBudget`.
-
-    Call at the start of each request handler, before creating the run task, so
-    the run's hooks and the SSE writer share one counter.
-    """
-    _current_response_budget.set(budget)
-
-
-def get_response_budget() -> ResponseBudget | None:
-    """Return the current request's :class:`ResponseBudget` (or ``None``)."""
-    return _current_response_budget.get()
 
 
 @dataclass
@@ -367,6 +321,39 @@ def get_session_exchange() -> SessionExchange | None:
     return _current_session.get()
 
 
+@dataclass
+class StateChannel:
+    """Request-scoped carrier for the shared state a run's agents write and read.
+
+    ``state`` starts as the state the run carries and takes every state effect
+    as it happens, so a later model call's workspace view is current.
+    ``effects`` are the run's compiled ``state_effects``: ``(tool glob, effect)``
+    pairs. ``emit`` sends each effect's operations to the client as a
+    ``STATE_DELTA``; ``touched`` names the top-level keys effects changed, which
+    the adapter folds into every snapshot it passes on.
+    """
+
+    state: dict[str, Any] = field(default_factory=dict)
+    effects: list[tuple[str, Any]] = field(default_factory=list)
+    emit: Any = None
+    touched: set[str] = field(default_factory=set)
+
+
+_current_state_channel: contextvars.ContextVar[StateChannel | None] = contextvars.ContextVar(
+    "kaboo_state_channel", default=None
+)
+
+
+def set_state_channel(channel: StateChannel | None) -> None:
+    """Bind the current request's :class:`StateChannel`, before creating the run task."""
+    _current_state_channel.set(channel)
+
+
+def get_state_channel() -> StateChannel | None:
+    """Return the current request's :class:`StateChannel` (or ``None``)."""
+    return _current_state_channel.get()
+
+
 def set_references(references: list[Reference] | None) -> None:
     """Bind the current request's parsed :class:`Reference` list.
 
@@ -399,6 +386,26 @@ def set_forwarded_props(props: dict[str, Any] | None) -> None:
 def get_forwarded_props() -> dict[str, Any]:
     """Return the current request's forwarded props (empty dict when none)."""
     return _current_forwarded_props.get() or {}
+
+
+_current_run_context: contextvars.ContextVar[list[dict[str, Any]] | None] = contextvars.ContextVar(
+    "kaboo_run_context", default=None
+)
+
+
+def set_run_context(items: list[dict[str, Any]] | None) -> None:
+    """Bind the current request's context items (``RunAgentInput.context``).
+
+    Every agent's model calls read them through
+    :class:`~kaboo_workflows.hooks.ContextHook`; call before creating the run
+    task so it inherits them.
+    """
+    _current_run_context.set(items)
+
+
+def get_run_context() -> list[dict[str, Any]]:
+    """Return the current request's context items (empty list when none)."""
+    return _current_run_context.get() or []
 
 
 @dataclass

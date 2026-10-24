@@ -43,12 +43,30 @@ Full runnable project: [`examples/16_swarm_in_graph`](https://github.com/gl-pgeg
 uv run python examples/16_swarm_in_graph/main.py
 ```
 
-## What you'll observe
+## What a Swarm or Graph entry supports
 
-- Swarm members (`researcher_a`, `researcher_b`) nest under the swarm node.
-- The delegate's `checker` nests under the audit sub-tree via its tool call.
-- Only the `editor` (the `chat_output`) carries the chat reply.
+A Swarm or Graph *entry* runs on ag-ui-strands' own orchestrator bridge, not on
+kaboo's sub-agent stream. Inside a delegate — a coordinator that calls a swarm
+or a graph as a tool — they are ordinary sub-agents and get everything a
+delegate does. As the entry, what they get differs:
+
+| Capability | Swarm or Graph entry |
+|---|---|
+| Streaming | Each node is a step (`STEP_STARTED` / `STEP_FINISHED`, named by node) with its handoffs; its text streams in the main transcript. |
+| Sub-agent cards | No: nodes are steps, not `SUBAGENT_*` events. Only a Graph's top-level nodes are on the wire; agents inside a nested node or behind a delegate node are not. |
+| Approvals | Yes, in one process. A paused node does not survive a restart: strands does not yet persist state for orchestration node agents. |
+| Browser tools, state effects, workspace views, generative UI | Not tested through the bridge; use a delegate entry for these. |
+
+Kaboo's workflows all use a delegate entry, which is why these gaps are
+documented rather than closed. Lab scenarios:
+[swarm-dashboard](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/swarm-dashboard.yaml)
+and
+[graph-dashboard](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/graph-dashboard.yaml).
 
 ## Proven by
 
-`tests/e2e/test_compositions.py::test_kitchen_sink_mixes_swarm_and_delegate_in_one_graph`.
+- `tests/e2e/test_compositions.py` — every composition streams a well-formed
+  run, and the expected agents run as sub-agents or as steps.
+- `tests/e2e/test_compositions.py::test_kitchen_sink_mixes_swarm_and_delegate_in_one_graph`.
+- `tests/e2e/test_cross_cutting.py::test_an_interrupt_then_resume` (the swarm
+  and graph positions).

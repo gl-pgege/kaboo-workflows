@@ -3,8 +3,8 @@
 The follow-up hang was a *duplicate* ``toolResult``: a paused-for-interrupt call
 was closed with an empty result, then emitted its real result on resume. These
 tests script an ag-ui-strands-style event stream and assert the emission
-contract: a paused call is left open, a genuinely-finished or errored call is
-closed once, and a superseded (abandoned) call is backfilled after RUN_STARTED.
+contract: a paused call is left open, and a genuinely-finished or errored call
+is closed once.
 """
 
 from __future__ import annotations
@@ -63,28 +63,14 @@ def _patch_bridge(monkeypatch: pytest.MonkeyPatch):
     def _apply(*, interrupt_active: bool) -> None:
         monkeypatch.setattr(agui_mod.bridge, "get_thread_agent", lambda a, t: object())
         monkeypatch.setattr(agui_mod.bridge, "is_interrupt_active", lambda s: interrupt_active)
-        pending = (
-            {"i1": SimpleNamespace(id="i1", reason={"type": "approval", "message": "ok"})}
-            if interrupt_active
-            else {}
-        )
-        monkeypatch.setattr(
-            agui_mod.bridge, "pending_interrupts", lambda s, unresolved_only=True: pending
-        )
 
     return _apply
 
 
-async def _drive(agent: _FakeAguiAgent, *, backfill: list[str] | None = None) -> list:
+async def _drive(agent: _FakeAguiAgent) -> list:
     merged: asyncio.Queue = asyncio.Queue()
     input_data = SimpleNamespace(thread_id="t", run_id="r")
-    await _consume_run(
-        cast(Any, agent),
-        cast(Any, input_data),
-        merged,
-        HistoryExchange(),
-        backfill_tool_calls=backfill,
-    )
+    await _consume_run(cast(Any, agent), cast(Any, input_data), merged, HistoryExchange())
     items: list = []
     while not merged.empty():
         items.append(merged.get_nowait())
@@ -109,8 +95,6 @@ async def test_paused_call_is_not_closed(_patch_bridge) -> None:
     # The open call is left dangling on pause — no premature empty result.
     assert _results_for(items, "tc1") == []
     assert items[-1] is _DONE
-    finished = next(it for it in items if getattr(it, "type", None) == EventType.RUN_FINISHED)
-    assert getattr(finished.outcome, "type", None) == "interrupt"
 
 
 async def test_finished_run_closes_open_call_once(_patch_bridge) -> None:
@@ -131,19 +115,3 @@ async def test_errored_run_closes_open_call_then_errors(_patch_bridge) -> None:
 
     assert len(_results_for(items, "tc1")) == 1
     assert any(getattr(it, "type", None) == EventType.RUN_ERROR for it in items)
-
-
-async def test_superseded_call_is_backfilled_after_run_started(_patch_bridge) -> None:
-    _patch_bridge(interrupt_active=False)
-    agent = _FakeAguiAgent([_started(), _finished()])
-
-    items = await _drive(agent, backfill=["abandoned1"])
-
-    backfilled = _results_for(items, "abandoned1")
-    assert len(backfilled) == 1
-    # Ordered after RUN_STARTED to keep the AG-UI protocol valid.
-    started_idx = next(
-        i for i, it in enumerate(items) if getattr(it, "type", None) == EventType.RUN_STARTED
-    )
-    result_idx = items.index(backfilled[0])
-    assert result_idx > started_idx

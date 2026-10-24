@@ -16,15 +16,15 @@ agents:
   analyst:
     stream: {title: "Analysis"}
     history: {group: sql, keep: masked}
-    interrupt: true
-    tools: ["tests.fakes.data_tools:run_query"]
+    interrupt: {tools: [submit_report]}
+    tools: ["tests.fakes.data_tools:run_query", "tests.fakes.gated_tools:submit_report"]
     model:
       provider: *m
       model_id: scripted
       params:
         script:
           - {tool: run_query, input: "select region, revenue from sales"}
-          - {tool: ask_user, input: {question: "Include returns?", options: ["yes", "no"]}}
+          - {tool: submit_report, input: {title: "Include returns"}}
         final_text: "Revenue by region is ready."
 
 orchestrations:

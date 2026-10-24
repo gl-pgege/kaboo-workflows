@@ -1,0 +1,32 @@
+# A delegated worker asks the person through the browser's ask_user tool; the
+# coordinator may not call it.
+x-model: &m kaboo_workflows.testing:ScriptedModel
+
+agents:
+  coordinator:
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: worker, input: "find the region"}
+        final_text: "Coordinator done."
+  worker:
+    stream: {title: "Working"}
+    client_tools: [ask_user]
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: ask_user, input: {questions: [{question: "Which region?", options: ["Europe", "APAC"]}]}}
+        final_text: "Worker used the answer."
+
+orchestrations:
+  team:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - {agent: worker, description: "Finds things out"}
+
+entry: team

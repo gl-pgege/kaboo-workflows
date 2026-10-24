@@ -1,0 +1,15 @@
+# A plain agent asks the person through the browser's ask_user tool.
+x-model: &m kaboo_workflows.testing:ScriptedModel
+
+agents:
+  analyst:
+    client_tools: [ask_user]
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: ask_user, input: {questions: [{question: "Which region?", options: ["Europe", "APAC"]}]}}
+        final_text: "Looking at Europe."
+
+entry: analyst

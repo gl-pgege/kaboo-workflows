@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 EventCallback = Callable[[StreamEvent], None]
 
-_MAX_RESULT_LEN = 600
+_MAX_RESULT_LEN = 16_000
 
 
 # ============================================================================
@@ -191,7 +191,7 @@ class EventPublisher(HookProvider):
         stream_group: str = "",
         stream_title: str = "",
         is_chat_reply: bool = False,
-        max_result_len: int = 600,
+        max_result_len: int = _MAX_RESULT_LEN,
     ) -> None:
         """Initialize the EventPublisher.
 
@@ -210,7 +210,7 @@ class EventPublisher(HookProvider):
                 attribution. Empty string when not configured.
             stream_title: Human-readable title for the stream group.
             max_result_len: Maximum character length for tool result text
-                in TOOL_END events. Default: 600.
+                in TOOL_END events. Default: 16,000.
 
         Example::
 
@@ -254,6 +254,8 @@ class EventPublisher(HookProvider):
             data["stream_group"] = active_group
             data["stream_title"] = self._stream_title
         data["agent_name"] = self._agent_name
+        if self._inline_chat_owner:
+            data["inline_chat_owner"] = True
         data["thread_id"] = thread_id
         data["run_id"] = get_run_id()
         data["turn_id"] = get_turn_id()
@@ -459,6 +461,7 @@ class EventPublisher(HookProvider):
                 },
                 "text": str(result) if result is not None else "",
                 "message": result.message if result is not None else {},
+                "model_id": (getattr(event.agent.model, "config", None) or {}).get("model_id"),
             }
         )
 
@@ -593,6 +596,29 @@ class EventPublisher(HookProvider):
                         type=EventType.TOKEN,
                         agent_name=self._agent_name,
                         data=self._enrich({"text": text}),
+                    ),
+                )
+
+            current = kwargs.get("current_tool_use")
+            if (
+                kwargs.get("type") == "tool_use_stream"
+                and isinstance(current, dict)
+                and current.get("toolUseId")
+            ):
+                self._callback(
+                    StreamEvent(
+                        type=EventType.TOOL_INPUT,
+                        agent_name=self._agent_name,
+                        data=self._enrich(
+                            {
+                                "tool_use_id": current["toolUseId"],
+                                "tool_name": current.get("name", ""),
+                                "tool_label": _resolve_tool_label(
+                                    current.get("name", ""), self._tool_labels
+                                ),
+                                "input": current.get("input", ""),
+                            }
+                        ),
                     ),
                 )
 

@@ -285,7 +285,7 @@ def _resolve_history(
     and writes the same transcript the declared agent would.
 
     The entry agent is intentionally included but ignored at wire time — its
-    transcript is always the CopilotKit chat, not the ``kaboo_history`` blob.
+    transcript is always the CopilotKit chat, not the ``kaboo_sessions`` blob.
     """
     from ..schema import DelegateOrchestrationDef
 

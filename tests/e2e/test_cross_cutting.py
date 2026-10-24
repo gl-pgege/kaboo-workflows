@@ -3,7 +3,7 @@
 - error propagation (a failing node surfaces RUN_ERROR, never a hang),
 - HITL interrupt → resume (ask_user pauses the run, resume continues it), and
 - multi-turn client-driven history (a sub-agent's transcript round-trips through
-  ``state.kaboo_history`` and accumulates across turns).
+  ``state.kaboo_sessions.history`` and accumulates across turns).
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 from ag_ui.core import EventType as AGUIEventType
 
-from kaboo_workflows._context import ResponseBudget, set_response_budget
 from kaboo_workflows.testing import Pipeline, ScriptedModel, run_pipeline
 
 CONFIGS = Path(__file__).parent / "configs"
@@ -35,19 +34,13 @@ async def test_plain_agent_model_error_terminates_without_hanging() -> None:
 
 
 async def test_swarm_node_error_is_isolated_and_run_terminates() -> None:
-    # A mid-swarm failure must terminate the run (never stall) and be isolated
-    # to the failing node: the earlier node stays completed and the failing
-    # node's card is marked "error".
+    # A mid-swarm failure must terminate the run (never stall) after the earlier
+    # node finished, and the node after the failing one never runs.
     r = await run_pipeline(str(CONFIGS / "error_swarm.yaml"), "go")
     assert r.finished() or r.errored()
 
-    planner = next(g for g in r.groups.values() if g["agentName"] == "planner")
-    assert planner["status"] == "completed"
-
-    researcher = next(g for g in r.groups.values() if g["agentName"] == "researcher")
-    assert researcher["status"] == "error"
-
-    # The writer (after the failing researcher) never produces its text.
+    finished = [e.step_name for e in r.of_type(AGUIEventType.STEP_FINISHED)]
+    assert "agent:planner" in finished
     assert "unreached" not in r.text()
 
 
@@ -66,11 +59,11 @@ INTERRUPT_CASES = {
 
 
 @pytest.mark.parametrize("case", list(INTERRUPT_CASES))
-async def test_ask_user_interrupt_then_resume(case: str) -> None:
+async def test_an_interrupt_then_resume(case: str) -> None:
     config, expected = INTERRUPT_CASES[case]
     pipe = Pipeline(str(CONFIGS / f"{config}.yaml"))
 
-    # Turn 1: an agent calls ask_user, pausing the whole run.
+    # Turn 1: an agent's gated call pauses the whole run.
     r1 = await pipe.turn("start the task", thread_id="c1", run_id="r1")
     outcome = r1.run_outcome()
     assert outcome is not None, f"{case}: no interrupt outcome"
@@ -82,41 +75,18 @@ async def test_ask_user_interrupt_then_resume(case: str) -> None:
     # Nothing final streamed yet — the run is paused awaiting the user.
     assert r1.text() == ""
 
-    # Turn 2: resume with the user's answer; the run finishes cleanly.
+    # Turn 2: resume with the person's approval; the run finishes cleanly.
     r2 = await pipe.turn(
         "(resume)",
         thread_id="c1",
         run_id="r2",
-        resume=[{"interruptId": interrupt_id, "status": "resolved", "payload": {"answer": "yes"}}],
+        resume=[
+            {"interruptId": interrupt_id, "status": "resolved", "payload": {"status": "approved"}}
+        ],
     )
     assert not r2.errored(), f"{case}: resumed run errored"
     assert r2.finished()
     assert expected in r2.text(), f"{case}: expected {expected!r} in {r2.text()!r}"
-
-
-async def test_a_free_text_question_is_refused_and_the_model_asks_with_options() -> None:
-    pipe = Pipeline(str(CONFIGS / "ask_multiple_choice.yaml"))
-
-    r1 = await pipe.turn("help me focus", thread_id="q1", run_id="r1")
-    outcome = r1.run_outcome()
-    assert getattr(outcome, "type", None) == "interrupt"
-    question = (outcome.interrupts[0].metadata or {})["questions"][0]
-    assert question["options"] == ["AI", "Cloud"]
-
-    r2 = await pipe.turn(
-        thread_id="q1",
-        run_id="r2",
-        resume=[
-            {
-                "interruptId": outcome.interrupts[0].id,
-                "status": "resolved",
-                "payload": {"Which market should I focus on?": "Robotics"},
-            }
-        ],
-    )
-    assert not r2.errored() and r2.finished()
-    results = r2.of_type(AGUIEventType.TOOL_CALL_RESULT)
-    assert any("Robotics" in r.content for r in results)
 
 
 async def test_approval_survives_a_restart_of_the_service() -> None:
@@ -138,7 +108,7 @@ async def test_approval_survives_a_restart_of_the_service() -> None:
     assert interrupt_id
 
     persisted = r1.state()
-    assert persisted["kaboo_session"]["interrupt_state"]["activated"] is True
+    assert persisted["kaboo_sessions"]["paused"]["interrupt_state"]["activated"] is True
     paused_call_id = r1.of_type(AGUIEventType.TOOL_CALL_START)[0].tool_call_id
 
     restarted = Pipeline(str(CONFIGS / "interrupt_plain.yaml"))
@@ -148,87 +118,28 @@ async def test_approval_survives_a_restart_of_the_service() -> None:
         state=persisted,
         # The transcript the host replays, carrying the tool call that paused.
         messages=r1.messages(),
-        resume=[{"interruptId": interrupt_id, "status": "resolved", "payload": {"answer": "yes"}}],
+        resume=[
+            {"interruptId": interrupt_id, "status": "resolved", "payload": {"status": "approved"}}
+        ],
     )
 
     assert not r2.errored()
     assert r2.finished()
 
-    # The proof of resumption: the paused tool produced its result from the
-    # user's answer, on a process that never saw the question asked.
+    # The proof of resumption: the approved call ran, on a process that never
+    # saw the request raised.
     results = r2.of_type(AGUIEventType.TOOL_CALL_RESULT)
     assert [r.tool_call_id for r in results] == [paused_call_id]
-    assert "yes" in results[0].content
+    assert "submitted" in results[0].content
 
     # And the answered gate is spent, not replayed into the next turn.
-    resumed_state = r2.state()["kaboo_session"]["interrupt_state"]
+    resumed_state = r2.state()["kaboo_sessions"]["paused"]["interrupt_state"]
     assert interrupt_id not in resumed_state["interrupts"]
 
     # Note: the final assistant text is not asserted here. Each Pipeline builds
     # its own ScriptedModel, and the fake picks its action by call index, so the
     # "restarted" one replays its first scripted step rather than answering. That
     # is the fake restarting with the process, not the resume failing.
-
-
-async def test_cold_resume_with_answered_tool_result_in_transcript() -> None:
-    """A restart-resume whose transcript already carries the answered card.
-
-    Real hosts (CopilotKit) append the resolved interrupt to the transcript as a
-    ``tool`` message before resuming, so the request carries that message AND the
-    ``resume`` payload for the same tool call. Replaying both left two toolResult
-    blocks for one toolUse; Bedrock rejected the turn and the run force-stopped
-    with no continuation and no error — the frontend just saw the run end after
-    the card was answered. The endpoint now drops the client's copy and lets the
-    interrupt resolution supply the single result.
-    """
-    import json
-
-    from ag_ui.core import ToolMessage
-
-    first = Pipeline(str(CONFIGS / "interrupt_plain.yaml"))
-    r1 = await first.turn("start the task", thread_id="c3", run_id="r1")
-
-    outcome = r1.run_outcome()
-    assert getattr(outcome, "type", None) == "interrupt"
-    interrupt_id = getattr((getattr(outcome, "interrupts", []) or [])[0], "id", None)
-    assert interrupt_id
-    paused_call_id = r1.of_type(AGUIEventType.TOOL_CALL_START)[0].tool_call_id
-
-    # The transcript as a real client sends it: the paused run's messages plus
-    # the answered card rendered as a tool-result message.
-    payload = {"answer": "yes"}
-    client_messages = list(r1.messages()) + [
-        ToolMessage(
-            id="answered-card",
-            role="tool",
-            tool_call_id=paused_call_id,
-            content=json.dumps(payload),
-        )
-    ]
-
-    restarted = Pipeline(str(CONFIGS / "interrupt_plain.yaml"))
-    r2 = await restarted.turn(
-        thread_id="c3",
-        run_id="r2",
-        state=r1.state(),
-        messages=client_messages,
-        resume=[{"interruptId": interrupt_id, "status": "resolved", "payload": payload}],
-    )
-
-    assert not r2.errored()
-    assert r2.finished()
-
-    # Exactly one result for the paused call — the resolution's, not a duplicate.
-    results = r2.of_type(AGUIEventType.TOOL_CALL_RESULT)
-    assert [r.tool_call_id for r in results] == [paused_call_id]
-    assert "yes" in results[0].content
-
-    # The proof the run continued: the model was re-engaged after the
-    # resolution and the run reached a terminal outcome. The silent
-    # force-stop ended with RUN_FINISHED carrying no outcome at all.
-    assert r2.run_outcome() is not None
-    resumed_state = r2.state()["kaboo_session"]["interrupt_state"]
-    assert interrupt_id not in resumed_state["interrupts"]
 
 
 async def test_resume_without_carried_state_still_reports_a_lost_session() -> None:
@@ -269,14 +180,16 @@ async def test_a_new_message_on_a_restarted_service_does_not_replay_an_answered_
     assert interrupt_id
     answered_call_id = r1.of_type(AGUIEventType.TOOL_CALL_START)[0].tool_call_id
     stale = r1.state()
-    assert stale["kaboo_session"]["interrupt_state"]["activated"] is True
+    assert stale["kaboo_sessions"]["paused"]["interrupt_state"]["activated"] is True
 
     r2 = await first.turn(
         thread_id="c5",
         run_id="r2",
         state=stale,
         messages=r1.messages(),
-        resume=[{"interruptId": interrupt_id, "status": "resolved", "payload": {"answer": "yes"}}],
+        resume=[
+            {"interruptId": interrupt_id, "status": "resolved", "payload": {"status": "approved"}}
+        ],
     )
     assert not r2.errored() and r2.finished()
 
@@ -291,15 +204,16 @@ async def test_a_new_message_on_a_restarted_service_does_not_replay_an_answered_
     assert not r3.errored()
     results = r3.of_type(AGUIEventType.TOOL_CALL_RESULT)
     assert answered_call_id not in [r.tool_call_id for r in results]
-    carried = r3.state().get("kaboo_session", {}).get("interrupt_state", {})
+    carried = r3.state().get("kaboo_sessions", {}).get("paused", {}).get("interrupt_state", {})
     assert interrupt_id not in carried.get("interrupts", {})
 
 
 async def test_swarm_tool_gate_pauses_then_executes_the_edited_call() -> None:
     # A gated PLATFORM-STYLE tool (interrupt.tools) inside a swarm node: the
-    # gate pauses the run before the tool runs, the descriptor carries the
-    # correlation/card fields (toolCallId, tool_name, tool_input), and an
-    # approve-with-edits resume executes exactly the edited call.
+    # gate pauses the run before the tool runs, the descriptor carries the card
+    # fields (tool_name, tool_input), and an approve-with-edits resume executes
+    # exactly the edited call. ag-ui-strands' Swarm bridge does not put the
+    # call's id on the interrupt.
     from tests.fakes.gated_tools import CALLS
 
     CALLS.clear()
@@ -309,10 +223,9 @@ async def test_swarm_tool_gate_pauses_then_executes_the_edited_call() -> None:
     outcome = r1.run_outcome()
     assert outcome is not None and getattr(outcome, "type", None) == "interrupt"
     gate = list(outcome.interrupts)[0]
-    assert gate.tool_call_id, "gate descriptor must carry the originating toolCallId"
-    metadata = gate.metadata or {}
-    assert metadata.get("tool_name") == "submit_report"
-    assert metadata.get("tool_input") == {"title": "Q3 draft"}
+    reason = gate.metadata or {}
+    assert reason.get("tool_name") == "submit_report"
+    assert reason.get("tool_input") == {"title": "Q3 draft"}
     assert CALLS == [], "gated tool must not execute before approval"
 
     r2 = await pipe.turn(
@@ -332,72 +245,34 @@ async def test_swarm_tool_gate_pauses_then_executes_the_edited_call() -> None:
     assert "Final swarm report after the gated write." in r2.text()
 
 
-# --- response continuation ------------------------------------------------
+# --- response size --------------------------------------------------------
 
 
-async def test_a_full_response_pauses_the_run_and_the_next_one_finishes_it() -> None:
-    """A turn too large for one response is split, not lost.
+async def test_a_run_streams_only_what_its_turn_adds() -> None:
+    """A response grows with its turn, never with the thread.
 
-    This is the whole feature end to end, and the assertion that matters is
-    that the tool runs exactly once: the pause has to be free. It stops the run
-    before an ungated tool, with no gate in the config — the budget is the only
-    thing that interrupts.
-
-    It also pins down the part that is easy to get wrong. The hook's condition
-    is true in the first response and false in the second, so the resumed run
-    reaches the same tool call and does *not* interrupt again; strands must
-    still clear the pause and carry on.
+    No run re-sends the conversation as a ``MESSAGES_SNAPSHOT``. The client
+    builds the transcript from the events, sub-agents' messages included, and
+    sends it back with the next turn.
     """
-    from tests.fakes.gated_tools import CALLS
+    from ag_ui.core import UserMessage
 
-    CALLS.clear()
-    pipe = Pipeline(str(CONFIGS / "continuation.yaml"))
-
-    # A budget already spent: the first tool call the agent makes stops it.
-    set_response_budget(ResponseBudget(limit=1, sent=1))
-    r1 = await pipe.turn("file the report", thread_id="k1", run_id="r1")
-
-    outcome = r1.run_outcome()
-    assert outcome is not None and getattr(outcome, "type", None) == "interrupt"
-    pause = list(outcome.interrupts)[0]
-    assert pause.reason == "continuation", "the client must not prompt anyone for this"
-    assert CALLS == [], "the run must pause before the tool, not after"
-    assert r1.text() == ""
-    # Written to the state channel, so the continuation survives landing on a
-    # different replica — the same property that makes approvals restartable.
-    assert r1.state()["kaboo_session"]["interrupt_state"]["activated"] is True
-
-    # The next response has its own budget, so the run proceeds.
-    set_response_budget(ResponseBudget(limit=0))
+    pipe = Pipeline(str(CONFIGS / "history.yaml"))
+    r1 = await pipe.turn("first note", thread_id="s1", run_id="r1")
     r2 = await pipe.turn(
-        "(continue)",
-        thread_id="k1",
+        thread_id="s1",
         run_id="r2",
-        resume=[{"interruptId": pause.id, "status": "resolved", "payload": {"status": "continue"}}],
+        state=r1.state(),
+        messages=[*r1.messages(), UserMessage(id="u2", role="user", content="second note")],
     )
 
-    assert not r2.errored() and r2.finished()
-    assert CALLS == [{"title": "Q3 draft"}], "the paused tool must run once, not twice"
-    assert "Filed the report." in r2.text()
-    # The pause is spent, not replayed: the finished run leaves no session
-    # state behind for a later turn to trip over.
-    assert "kaboo_session" not in r2.state()
-
-
-async def test_a_run_inside_its_budget_is_never_paused() -> None:
-    """The cap must be invisible until it is reached."""
-    from tests.fakes.gated_tools import CALLS
-
-    CALLS.clear()
-    pipe = Pipeline(str(CONFIGS / "continuation.yaml"))
-
-    set_response_budget(ResponseBudget(limit=50_000_000))
-    r = await pipe.turn("file the report", thread_id="k2", run_id="r1")
-
-    assert not r.errored() and r.finished()
-    assert getattr(r.run_outcome(), "type", None) != "interrupt"
-    assert CALLS == [{"title": "Q3 draft"}]
-    assert "Filed the report." in r.text()
+    for r in (r1, r2):
+        assert not r.errored() and r.finished()
+        assert AGUIEventType.MESSAGES_SNAPSHOT not in {e.type for e in r.events}
+    assert any(getattr(m, "subagent_run_id", None) for m in r1.messages())
+    earlier = {m.id for m in r1.messages()}
+    assert not earlier & {getattr(e, "message_id", None) for e in r2.events}
+    assert "Coordinator done." in r2.text()
 
 
 # --- multi-turn history round-trip ----------------------------------------
@@ -414,7 +289,7 @@ async def test_subagent_history_round_trips_and_accumulates() -> None:
     assert len1 > 0
 
     # Feed turn 1's captured history back in, exactly as the client would.
-    state = {"kaboo_history": r1.exchange.outbound}
+    state = {"kaboo_sessions": {"history": r1.exchange.outbound}}
     r2 = await pipe.turn("second note", thread_id="h1", run_id="r2", state=state)
     assert not r2.errored()
     assert key in r2.exchange.outbound
@@ -438,13 +313,16 @@ async def test_a_forked_delegate_entry_remembers_through_its_entry_agents_group(
 
     r1 = await pipe.turn("first question", thread_id="d1", run_id="r1")
     assert not r1.errored()
-    assert _texts(r1.state()["kaboo_history"]["sql"]) == ["how much revenue?", "Revenue is 42."]
+    assert _texts(r1.state()["kaboo_sessions"]["history"]["sql"]) == [
+        "how much revenue?",
+        "Revenue is 42.",
+    ]
 
     r2 = await pipe.turn("second question", thread_id="d1", run_id="r2", state=r1.state())
 
     assert not r2.errored()
     assert _texts(analyst.calls[-1]) == ["how much revenue?", "Revenue is 42.", "how much revenue?"]
-    assert len(r2.state()["kaboo_history"]["sql"]) == 4
+    assert len(r2.state()["kaboo_sessions"]["history"]["sql"]) == 4
 
 
 def _result_texts(messages: list[dict]) -> list[str]:
@@ -463,7 +341,7 @@ async def test_a_masked_sub_agent_writes_back_a_paused_call_whole_and_a_finished
 
     outcome = r1.run_outcome()
     assert getattr(outcome, "type", None) == "interrupt"
-    paused = r1.state()["kaboo_history"]["sql"]
+    paused = r1.state()["kaboo_sessions"]["history"]["sql"]
     assert any("region-199" in text for text in _result_texts(paused))
 
     r2 = await pipe.turn(
@@ -474,7 +352,7 @@ async def test_a_masked_sub_agent_writes_back_a_paused_call_whole_and_a_finished
     )
 
     assert r2.finished() and not r2.errored()
-    finished = r2.state()["kaboo_history"]["sql"]
+    finished = r2.state()["kaboo_sessions"]["history"]["sql"]
     assert (
         "Result cleared (run_query, queryExecutionId=q-123): call it again to see it."
         in _result_texts(finished)
@@ -506,11 +384,14 @@ async def test_a_memory_over_summarize_over_is_written_back_with_its_oldest_call
     pipe = Pipeline(str(CONFIGS / "history_summary.yaml"))
 
     r = await pipe.turn(
-        "and by region?", thread_id="s1", run_id="r1", state={"kaboo_history": {"sql": stored}}
+        "and by region?",
+        thread_id="s1",
+        run_id="r1",
+        state={"kaboo_sessions": {"history": {"sql": stored}}},
     )
 
     assert not r.errored()
-    memory = r.state()["kaboo_history"]["sql"]
+    memory = r.state()["kaboo_sessions"]["history"]["sql"]
     assert _texts(memory[:2]) == [
         "Summary of your earlier work in this conversation",
         "Earlier, queries q-1 and q-2 found $42M of revenue.",

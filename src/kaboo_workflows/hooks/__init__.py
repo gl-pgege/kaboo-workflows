@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from .context_hook import ContextHook
-from .continuation_hook import CONTINUATION_TYPE, ContinuationHook
 from .event_publisher import EventPublisher
 from .forwarded_props_hook import ForwardedPropsHook
 from .history_hook import HistoryHook, HistoryPolicy
@@ -16,6 +15,7 @@ from .session_state_hook import (
     restore_session_state,
     session_state_snapshot,
 )
+from .state_effects import StateEffectCall, StateEffectsHook
 from .stop_guard import MultiAgentStopGuard, StopGuard, stop_guard_from_event
 from .tool_approval_hook import TOOL_APPROVAL_KEY, ToolApprovalHook
 from .tool_attachments_hook import ToolAttachmentsHook
@@ -23,10 +23,8 @@ from .tool_name_sanitizer import ToolNameSanitizer
 
 __all__ = [
     "APPROVAL_SCOPES",
-    "CONTINUATION_TYPE",
     "GRANTS_PROP",
     "ContextHook",
-    "ContinuationHook",
     "EventPublisher",
     "ForwardedPropsHook",
     "GateRule",
@@ -38,6 +36,8 @@ __all__ = [
     "MultiAgentStopGuard",
     "ReferenceHook",
     "SessionStateHook",
+    "StateEffectCall",
+    "StateEffectsHook",
     "StopGuard",
     "TOOL_APPROVAL_KEY",
     "ToolApprovalHook",

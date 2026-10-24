@@ -41,7 +41,9 @@ GRANTS_PROP = "kaboo_grants"
 APPROVALS_STATE_KEY = "kaboo_approvals"
 """``invocation_state`` key recording how each gated call was decided."""
 
-_ASK_USER = "ask_user"
+APPROVAL_NAME = "kaboo:approval"
+"""The name a gate's approval request is raised under."""
+
 _MAX_REASON_CHARS = 500
 
 
@@ -93,8 +95,8 @@ class InterruptHook(HookProvider):
 
         Args:
             tools: Tool names, globs or :class:`GateRule` objects. The first
-                matching entry applies. ``ask_user`` is never gated.
-            agent_name: Agent name, used to name the interrupt.
+                matching entry applies.
+            agent_name: The agent's name.
             ttl_seconds: Optional deadline for each request. An answer arriving
                 after it does not run the call.
             skip_read_only: Let tools annotated ``readOnlyHint: true`` run
@@ -129,23 +131,21 @@ class InterruptHook(HookProvider):
         if subject is None:
             return
 
-        name = f"{self._agent_name}:gate:{tool_name}"
-        response = _earlier_answer(event, name)
-        if response is None:
-            grant = _matching_grant(tool_name, subject["key"])
-            if grant is not None:
-                _record(
-                    event, {"decision": "approved", "by": "permission", "scope": grant["scope"]}
-                )
-                return
-            response = event.interrupt(
-                name=name, reason=self._reason(rule, tool_name, tool_input, subject)
-            )
+        asked = _earlier_request(event, APPROVAL_NAME)
+        if asked is not None:
+            expired = is_expired(getattr(asked, "reason", None))
+            _apply(event, {"expired": True} if expired else asked.response)
+            return
+        grant = _matching_grant(tool_name, subject["key"])
+        if grant is not None:
+            _record(event, {"decision": "approved", "by": "permission", "scope": grant["scope"]})
+            return
+        response = event.interrupt(
+            name=APPROVAL_NAME, reason=self._reason(rule, event.tool_use, subject)
+        )
         _apply(event, response)
 
     def _rule_for(self, tool_name: str, tool: Any) -> GateRule | None:
-        if tool_name == _ASK_USER:
-            return None
         for rule in self._rules:
             if fnmatch.fnmatchcase(tool_name, rule.pattern):
                 if self._skip_read_only and _is_read_only(tool):
@@ -156,15 +156,16 @@ class InterruptHook(HookProvider):
     def _reason(
         self,
         rule: GateRule,
-        tool_name: str,
-        tool_input: Any,
+        tool_use: Any,
         subject: dict[str, str],
     ) -> dict[str, Any]:
+        tool_name = tool_use.get("name", "")
         reason: dict[str, Any] = {
             "type": "approval",
             "message": f"Agent wants to call {tool_name}",
             "tool_name": tool_name,
-            "tool_input": tool_input,
+            "tool_input": tool_use.get("input", {}),
+            "tool_use_id": str(tool_use.get("toolUseId", "")),
             "subject": subject,
             "scopes": self._offered_scopes(rule),
         }
@@ -228,11 +229,12 @@ def _subject_of(
     return default
 
 
-def _earlier_answer(event: Any, name: str) -> Any:
-    """The person's answer to this call's request, when the call is resuming.
+def _earlier_request(event: Any, name: str) -> Any:
+    """This call's request, when the call is resuming with the person's answer.
 
     Read before remembered permissions, so the person's own decision on this
-    request (and any edits) wins over a permission created by that decision.
+    request (and any edits) wins over a permission created by that decision,
+    and so the deadline checked is the one the person was shown.
 
     DEPENDS ON strands internal: ``Agent._interrupt_state``.
     """
@@ -242,9 +244,28 @@ def _earlier_answer(event: Any, name: str) -> Any:
         return None
     tool_use_id = str(event.tool_use.get("toolUseId", ""))
     for interrupt in interrupts.values():
-        if getattr(interrupt, "name", None) == name and f":{tool_use_id}:" in str(interrupt.id):
-            return interrupt.response
+        if (
+            getattr(interrupt, "name", None) == name
+            and f":{tool_use_id}:" in str(interrupt.id)
+            and interrupt.response is not None
+        ):
+            return interrupt
     return None
+
+
+def is_expired(reason: Any) -> bool:
+    """Whether a request's ``expiresAt`` has passed."""
+    expires_at = reason.get("expiresAt") if isinstance(reason, dict) else None
+    if not isinstance(expires_at, str) or not expires_at:
+        return False
+    try:
+        deadline = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("expires_at=<%s> | unreadable interrupt deadline; ignoring it", expires_at)
+        return False
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return deadline <= datetime.now(timezone.utc)
 
 
 def _host_remembers() -> bool:
@@ -252,7 +273,7 @@ def _host_remembers() -> bool:
 
     It needs both halves: the host sends its remembered permissions (so it
     reads decisions back), and this run publishes its open requests to the host
-    (``kaboo_session.approvals``).
+    (``kaboo_sessions.approvals``).
     """
     exchange = get_session_exchange()
     if exchange is None or not exchange.publishes_approvals:
@@ -275,8 +296,23 @@ def _matching_grant(tool_name: str, subject_key: str) -> dict[str, Any] | None:
     return None
 
 
+def _unwrapped(response: Any) -> Any:
+    """The answer inside ag-ui-strands' resume envelope, when it has one.
+
+    A resolved resume arrives as ``{"response": answer}``; a cancelled one as
+    ``{"cancelled": True}``, which is the person moving on: a skip.
+    """
+    if isinstance(response, dict):
+        if set(response) == {"response"}:
+            return response["response"]
+        if set(response) == {"cancelled"} and response["cancelled"] is True:
+            return {"status": "cancelled", "skipped": True}
+    return response
+
+
 def _apply(event: Any, response: Any) -> None:
     """Run the call only on an ``approved`` answer; cancel it on anything else."""
+    response = _unwrapped(response)
     if isinstance(response, dict) and response.get("status") == "approved":
         edited = response.get("tool_input")
         if isinstance(edited, dict):

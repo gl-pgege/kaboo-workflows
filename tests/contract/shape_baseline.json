@@ -30,6 +30,7 @@
     "stream_group_start",
     "token",
     "tool_end",
+    "tool_input",
     "tool_start"
   ],
   "model_descriptor": [

@@ -1,25 +1,35 @@
-# Activity a chat UI can show
+# Sub-agents in a chat UI
 
 A multi-agent run can take minutes. Users trust it when they can see it
 working — which specialist is on the job, what it is doing right now, in
-words rather than function names. Two pieces of config produce that, and
-kaboo-react renders it.
+words rather than function names. Every agent a delegate runs streams on the
+wire as AG-UI's own sub-agent events, and kaboo-react folds them into cards.
 
 ## What the client receives
 
-`create_agui_app` folds every agent's stream into **activity groups** and sends
-them alongside the chat reply: a snapshot first, then JSON Patches as they
-change (`activity_deltas`). Each group is one card in the UI:
+The entry agent's stream *is* the chat reply: its text and tool calls arrive as
+ordinary AG-UI events. Each agent it delegates to, at any depth, arrives as one
+invocation:
 
-- **the agent's title**, and the task it was handed;
-- **its tool calls**, each with a readable label, arguments and result;
-- **its text**, its token usage, and any [structured output](structured-outputs.md);
-- **its children**, for agents it delegated to.
+- **`SUBAGENT_STARTED`** opens it, with a `subagentRunId`, the agent's `name`,
+  the `parentToolCallId` of the delegating call and the
+  `parentSubagentRunId` of the invocation that made that call. `metadata`
+  holds its `title` and the `task` it was handed.
+- **Its text, reasoning and tool calls** follow as the standard events, each
+  tagged with its `subagentRunId`. Tool arguments stream as the model writes
+  them, so a UI can draw a widget or a query while it is being written.
+- **`TOOL_CALL_RESULT`** carries each result, with `metadata.approval` when the
+  call needed one ([Human-in-the-loop](../workflows/human-in-the-loop.md#remembered-approvals)).
+- **`SUBAGENT_FINISHED`** closes it: `completed` with its `result`, or
+  `suspended` while it waits on a question or an approval. `metadata` holds its
+  token `usage`, its `cost` and, for a
+  [structured output](structured-outputs.md), the `outputSchema` name.
+- **`SUBAGENT_ERROR`** closes it when it fails.
 
-The entry agent has no card: its stream *is* the chat reply. Its own tool calls
-still arrive, in a group flagged `inlineChatOwner`, whether it is a plain agent
-or a delegate's coordinator, so the client can label those rows, draw a question
-at its call and see every group of a turn, without drawing that group.
+A paused invocation keeps its `subagentRunId`, so the run that resumes it opens
+a new segment of the same card. The events are stored and replayed like any
+others, so a reload draws the same cards. `RUN_FINISHED.usage` counts every
+agent, so a UI can show a true total.
 
 ## Name the cards
 
@@ -57,20 +67,16 @@ mcp_clients:
       web-research___read_pages: Reading web pages
 ```
 
-A tool call shows its label (`toolLabel`) instead of
-`web-research___read_pages`. Label every tool a user will see; an unlabelled
-one shows its raw name.
-
-## Keep it fast
-
-- **Leave `activity_deltas` on.** Sending a full tree on every change grows
-  with the run; on long multi-agent runs that is what fills a response
-  ([Serve on AgentCore in production](production-serving.md#stay-under-the-response-cap)).
-- **Do not route the chat reply through a group.** The entry agent's text is
-  the answer and streams as ordinary AG-UI text messages.
+A sub-agent's tool call carries its label in `TOOL_CALL_START.metadata.label`,
+and the card shows "Reading web pages" instead of `web-research___read_pages`.
+Labels can also be set per agent, under `agents.<name>.tool_labels`.
 
 ## Test it
 
-`TurnResult.groups` holds the cards as the UI would, so a test can assert the
-tree a user would see — which agents worked, nested under whom
-([Testing](../testing.md#multi-agent-runs-and-activity)).
+`TurnResult.groups` holds the cards as a client folds them, so a test can assert
+what a user would see — which agents worked, nested under whom, and with which
+tools ([Testing](../testing.md#multi-agent-runs)). Lab scenarios:
+[delegate-dashboard](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/delegate-dashboard.yaml),
+[nested-dashboard](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/nested-dashboard.yaml)
+and
+[parallel-dashboard](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/parallel-dashboard.yaml).

@@ -251,7 +251,7 @@ the sessions leak for the life of the process.
 
 What is left at process level shrinks to what is genuinely process-level: the parsed base, the model objects, and any MCP server processes. Everything a conversation touches — agents, orchestrations, entry, client sessions — is built for the run and released with it.
 
-This is only safe because conversation state does not live in those objects. History arrives each turn in `state.kaboo_history`, and a pending interrupt arrives in `state.kaboo_session` ([Chapter 7](Chapter_07.md)). Rebuilding is therefore indistinguishable from retaining, which is what lets you run a second replica, restart mid-approval, or serve a workflow edited thirty seconds ago.
+This is only safe because conversation state does not live in those objects. History and a pending pause arrive each turn in `state.kaboo_sessions` ([Chapter 7](Chapter_07.md)). Rebuilding is therefore indistinguishable from retaining, which is what lets you run a second replica, restart mid-approval, or serve a workflow edited thirty seconds ago.
 
 ### Mental model
 

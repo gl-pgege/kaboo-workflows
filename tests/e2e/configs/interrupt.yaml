@@ -1,9 +1,6 @@
-# HITL interrupt inside a delegate: the coordinator delegates to `worker`, which
-# asks the user a question (ask_user) and pauses the whole run. On resume the
+# HITL interrupt inside a delegate: the coordinator delegates to `worker`, whose
+# call waits for the person's approval and pauses the whole run. On resume the
 # worker receives the answer and finishes, and the coordinator wraps up.
-#
-# Note: ask_user interrupts fire for delegated sub-agents (invoked via
-# invoke_async, which is interrupt-aware); this mirrors the demo's HITL flow.
 x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
@@ -18,13 +15,14 @@ agents:
         final_text: "Coordinator wrapped up after approval."
   worker:
     stream: {title: "Working"}
-    interrupt: true
+    tools: ["tests.fakes.gated_tools:submit_report"]
+    interrupt: {tools: [submit_report]}
     model:
       provider: *m
       model_id: scripted
       params:
         script:
-          - {tool: ask_user, input: {question: "Approve this action?", options: ["yes", "no"]}}
+          - {tool: submit_report, input: {title: "Q3 draft"}}
         final_text: "Worker finished after approval."
 
 orchestrations:

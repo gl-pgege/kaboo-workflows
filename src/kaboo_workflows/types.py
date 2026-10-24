@@ -37,6 +37,7 @@ class EventType(StrEnum):
     # Single-agent events
     AGENT_START = "agent_start"
     TOKEN = "token"  # nosec B105 — event type constant, not a credential
+    TOOL_INPUT = "tool_input"
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
     REASONING = "reasoning"

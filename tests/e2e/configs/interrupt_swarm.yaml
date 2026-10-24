@@ -1,18 +1,19 @@
-# HITL interrupt on a first-class SWARM node. The planner asks the user a
-# question mid-swarm, pausing the whole run; on resume it hands off to the
-# writer, whose text is the chat reply.
+# HITL interrupt on a first-class SWARM node. The planner's call waits for the
+# person's approval mid-swarm, pausing the whole run; on resume it hands off to
+# the writer, whose text is the chat reply.
 x-model: &m kaboo_workflows.testing:ScriptedModel
 
 agents:
   planner:
     stream: {title: "Planning"}
-    interrupt: true
+    tools: ["tests.fakes.gated_tools:submit_report"]
+    interrupt: {tools: [submit_report]}
     model:
       provider: *m
       model_id: scripted
       params:
         script:
-          - {tool: ask_user, input: {question: "Which market should I focus on?", options: ["AI", "Cloud"]}}
+          - {tool: submit_report, input: {title: "Market focus"}}
           - {handoff: writer, message: "Write it up."}
   writer:
     stream: {title: "Writing"}

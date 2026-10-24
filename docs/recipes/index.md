@@ -13,10 +13,12 @@ can lift it into your own project.
 | [Call MCP tools as the signed-in user](user-identity-mcp.md) | Tools behind a gateway must act with the caller's permissions |
 | [Tools that need run context](tools-with-run-context.md) | A tool keeps state per conversation or must act once per turn |
 | [Guard hooks for every agent](guard-hooks.md) | Runs should survive malformed transcripts, retry loops and expired sign-ins |
-| [Ask the user, and request inputs](asking-the-user.md) | An agent needs an answer, an approval, a file or a data source mid-run |
+| [Ask the user, and request inputs](asking-the-user.md) | An agent needs an answer, a file or a data source mid-run |
+| [Shared state](shared-state.md) | The person and every agent should see what the conversation built, without looking it up |
+| [Generative UI from any agent](generative-ui.md) | Answers should come as surfaces, visuals or partner apps in the chat |
 | [Structured outputs a UI can render](structured-outputs.md) | An agent's result should arrive as typed data for a card, not prose |
 | [Images and file attachments](attachments-and-images.md) | Users attach files, or tools return images |
-| [Activity a chat UI can show](chat-ui-activity.md) | Users should see which agent is working on what, in words |
+| [Sub-agents in a chat UI](chat-ui-activity.md) | Users should see which agent is working on what, in words |
 | [Cost and context control](cost-and-context.md) | Long, tool-heavy runs cost too much or outgrow the context window |
 
 [Testing your workflows](../testing.md) covers proving any of these with a

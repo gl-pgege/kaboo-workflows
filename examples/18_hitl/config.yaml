@@ -1,16 +1,13 @@
-# 18_hitl — Human-in-the-loop, nested + parallel gates
+# 18_hitl — Human-in-the-loop: a delegated agent asks the person
 #
 #   review_team (delegate):
-#     coordinator ─▶ field_agent (interrupt: true, asks the user)
+#     coordinator ─▶ field_agent (client_tools: [ask_user])
 #
-# The gated agent runs deep inside a delegate. When it calls `ask_user`, the
-# interrupt bubbles up to the single top-level handler and pauses the whole run
-# until the client resumes with an answer. `field_agent` can also ask SEVERAL
-# questions in one turn (parallel gated tool calls) — each surfaces as its own
-# interrupt with a distinct tool-call id, and the run resumes once all are
-# answered.
-#
-# Setting `interrupt: true` grants the agent the built-in `ask_user` tool.
+# `ask_user` is a browser tool: the client declares it and shows the question
+# (kaboo-react's useAskUserTool). The asking agent runs inside a delegate, and
+# its question still reaches the browser: the run ends with the call pending,
+# and the browser's answer goes back to field_agent. The coordinator is told
+# what was asked and answered.
 #
 # Run:
 #   uv run python examples/18_hitl/main.py
@@ -36,7 +33,7 @@ agents:
   field_agent:
     model: default
     hooks: *hooks
-    interrupt: true
+    client_tools: [ask_user]
     system_prompt: |
       You do gated field work. Before finalizing anything risky, call ask_user to
       confirm with the user. If several details are unclear, ask them together in

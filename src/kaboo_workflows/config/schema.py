@@ -264,7 +264,7 @@ class InterruptDef(BaseModel):
 
     ``tools`` lists the tools that wait for the person's approval before they
     run: names, ``fnmatch`` globs, or :class:`InterruptToolDef` objects. An
-    empty list means no tool gate (``ask_user`` only).
+    empty list means no tool gate.
 
     ``skip_read_only`` lets tools annotated ``readOnlyHint: true`` run without
     asking. Tools without annotations follow MCP's defaults and count as not
@@ -274,10 +274,6 @@ class InterruptDef(BaseModel):
     default) asks every time, ``thread`` adds "allow for this chat", ``always``
     adds "always allow". Scopes beyond ``once`` are only offered when the host
     remembers decisions (it sends ``forwardedProps.kaboo_grants``).
-
-    ``ask_user`` controls whether the built-in ``ask_user`` tool is injected,
-    allowing the agent to proactively ask the user questions at any time.
-    Defaults to ``True`` when interrupt is enabled.
 
     ``ttl_seconds`` optionally gives every approval this agent raises a
     deadline (``expiresAt`` in the request's metadata). The agent enforces it:
@@ -294,7 +290,6 @@ class InterruptDef(BaseModel):
     tools: list[InterruptToolDef] = Field(default_factory=list)
     skip_read_only: bool = False
     remember: ApprovalScope = "once"
-    ask_user: bool = True
     ttl_seconds: int | None = Field(default=None, gt=0)
     tool_approvals: bool = False
 
@@ -325,7 +320,7 @@ class HistoryDef(BaseModel):
     """Per-agent conversation history configuration.
 
     History is client-driven and stateless on the server: an agent's
-    transcript travels in the AG-UI ``state`` blob (``state.kaboo_history``),
+    transcript travels in the AG-UI ``state`` blob (``state.kaboo_sessions``),
     keyed per agent, and is seeded/captured around each invocation.
 
     - ``enabled`` — whether this agent remembers across turns of the same
@@ -575,24 +570,25 @@ class AgentDef(BaseModel):
     system_prompt: str | None = None
     description: str | None = None
     tools: list[str] = Field(default_factory=list)
+    client_tools: list[str] = Field(default_factory=list)
+    """Browser tools this agent may call, by name: the tools the client declares
+    in ``RunAgentInput.tools`` and runs itself, such as ``ask_user``. Each call
+    pauses the run until the browser answers it. Delegated agents included."""
+    workspace: list[str] = Field(default_factory=list)
+    """Parts of the shared state this agent sees at every model call, as JSON
+    Pointers (``/kaboo_workspace/dashboards``): what the conversation has built
+    so far, current as of that call, so the agent need not look it up."""
     hooks: list[HookDef | str] = Field(default_factory=list)
     mcp: list[str] = Field(default_factory=list)
     tool_labels: dict[str, str] = Field(default_factory=dict)
     conversation_manager: ConversationManagerDef | None = None
     session_manager: SessionManagerDef | None = None
     stream: StreamDef | None = None
-    interrupt: InterruptDef | bool | None = None
+    interrupt: InterruptDef | None = None
     history: HistoryDef | bool | None = None
     context: ContextDef | None = None
     attachments: AgentAttachmentsDef | str | bool | None = None
     output_schema: str | None = None
-
-    @model_validator(mode="after")
-    def _normalize_interrupt(self) -> AgentDef:
-        """Normalize ``interrupt: true`` shorthand to a full InterruptDef."""
-        if self.interrupt is True:
-            self.interrupt = InterruptDef()
-        return self
 
     @model_validator(mode="after")
     def _normalize_history(self) -> AgentDef:
@@ -795,6 +791,30 @@ COLLECTION_KEYS = ("models", "mcp_servers", "mcp_clients", "agents", "orchestrat
 JOINT_NAMESPACES: tuple[tuple[str, ...], ...] = (("agents", "orchestrations"),)
 
 
+class StateEffectDef(BaseModel):
+    """A tool's result written into the shared state the client and every agent see.
+
+    ``tool`` names the tool, or an ``fnmatch`` glob of names. With ``mapper``,
+    an import path to a callable taking a
+    :class:`~kaboo_workflows.hooks.StateEffectCall` and returning JSON Patch
+    operations on the state; with ``path``, the tool's parsed result is written
+    to that JSON Pointer whole. Each effect reaches the client as a
+    ``STATE_DELTA`` and every later model call's workspace view.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool: str = Field(min_length=1)
+    mapper: str | None = None
+    path: str | None = None
+
+    @model_validator(mode="after")
+    def _one_way(self) -> StateEffectDef:
+        if (self.mapper is None) == (self.path is None):
+            raise ValueError("a state effect takes either a mapper or a path")
+        return self
+
+
 class AppConfig(BaseModel):
     """Root YAML configuration.
 
@@ -812,6 +832,7 @@ class AppConfig(BaseModel):
     mcp_servers: dict[str, MCPServerDef] = Field(default_factory=dict)
     mcp_clients: dict[str, MCPClientDef] = Field(default_factory=dict)
     agents: dict[str, AgentDef] = Field(default_factory=dict)
+    state_effects: list[StateEffectDef] = Field(default_factory=list)
     session_manager: SessionManagerDef | None = None
     orchestrations: dict[str, OrchestrationDef] = Field(default_factory=dict)
     entry: str

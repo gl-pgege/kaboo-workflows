@@ -37,8 +37,10 @@ chapter in the [Configuration reference](configuration/README.md)):
 
 Tools and hooks are not top-level sections — they are declared per agent, as
 `agents.<name>.tools` and `agents.<name>.hooks`. Tools are Python `@tool`
-functions loaded from files or modules, plus built-ins like `ask_user`; hooks are
-lifecycle callbacks for event publishing, interrupts and guards. The remaining
+functions loaded from files or modules; tools the browser runs, such as
+`ask_user`, arrive with each run and reach the agents whose `client_tools` name
+them. Hooks are lifecycle callbacks for event publishing, interrupts and
+guards. `state_effects` write tool results into the shared state. The remaining
 root keys are settings rather than wiring: `history`, `telemetry`, `runtime`,
 `log_level` and `version`, plus `vars` for interpolation.
 
@@ -64,51 +66,43 @@ own:
 
 `kaboo-serve` (or `create_agui_app` in `kaboo_workflows.adapters`) wraps the
 resolved entry with [ag-ui-strands](https://github.com/ag-ui-protocol/ag-ui) and
-exposes it as an AG-UI SSE endpoint. A single run emits a well-formed event
-stream:
+exposes it as an AG-UI 1.0 SSE endpoint. A run uses the protocol's own events
+throughout:
 
 ```text
-RUN_STARTED → TEXT_MESSAGE_* → TOOL_CALL_* → ACTIVITY_SNAPSHOT → ACTIVITY_DELTA* → RUN_FINISHED
+RUN_STARTED → STATE_SNAPSHOT → TEXT_MESSAGE_* / TOOL_CALL_* → SUBAGENT_STARTED → (tagged events) → SUBAGENT_FINISHED → STATE_DELTA → RUN_FINISHED
 ```
 
-`ACTIVITY_SNAPSHOT` events carry the hierarchical activity tree that
-[kaboo-react](https://github.com/gl-pgege/kaboo-react) renders, while
-[kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) can persist and
-replay the whole stream. Human-in-the-loop pauses surface as interrupts on
-`RUN_FINISHED` and resume cleanly — see
-[human-in-the-loop](workflows/human-in-the-loop.md).
+- **Sub-agents** are `SUBAGENT_*` events, with their text, reasoning and tool
+  calls tagged by `subagentRunId`, which
+  [kaboo-react](https://github.com/gl-pgege/kaboo-react) folds into cards
+  ([Sub-agents in a chat UI](recipes/chat-ui-activity.md)).
+- **Pauses** end the run with `RUN_FINISHED`: waiting on a tool the browser
+  runs (`pendingToolCallIds`), or on approvals (an `interrupt` outcome) — see
+  [human-in-the-loop](workflows/human-in-the-loop.md).
+- **State changes** — the conversation's sessions and the
+  [shared state](recipes/shared-state.md) — leave as `STATE_DELTA`s.
+- **Usage** on `RUN_FINISHED` counts every agent of the run.
 
-Each response carries one snapshot and then `ACTIVITY_DELTA` events holding a
-JSON Patch against it, so the tree crosses the wire once rather than in full on
-every change. The run's closing snapshot restates it whole. Pass
-`activity_deltas=False` to `create_agui_app` to send snapshots throughout.
+[kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) persists the stream
+and replays it on reconnect. `GET /invocations/capabilities` describes what the
+service supports as AG-UI `AgentCapabilities`.
 
-The tree keeps one copy of everything it describes: a group's `tools` own its
-tool calls and its `timeline` refers to them by `toolUseId`, and the timeline's
-text entries are the only copy of its streamed prose.
+### Response size
 
-A group names the run that opened it (`runId`), its turn (`turnId`) and every
-run that streamed into it (`runIds`). A turn paused for an approval or a
-question resumes in a new run, which carries on in the turn's groups, so a
-client that keys anything by run (a reply, a version the run made) finds its
-turn through `runIds`.
+A run streams only what it adds: its text, its tool calls and their results,
+its sub-agents' events and its state changes. It never re-sends the
+conversation. ag-ui-strands' `MESSAGES_SNAPSHOT`, which repeats the whole
+transcript after every step, is turned off, because with it a response grows
+with the length of the thread times the steps of the turn, and a long thread
+eventually reaches a host's response cap (AWS AgentCore closes the socket at
+100 MiB). Clients build the transcript from the events, as CopilotKit does, and
+send it back with the next turn.
 
-### Runs larger than one response
-
-Some hosts cap how much a single HTTP response may carry — AWS AgentCore closes
-the socket at 100 MB, which reaches the browser as a dropped connection rather
-than an answer. Pass `response_budget=<bytes>` to `create_agui_app` and a run
-that fills its response stops at the next tool call instead: it pauses there,
-the response ends with a proper `RUN_FINISHED`, and the client resumes into a
-response with a fresh budget.
-
-The pause is an ordinary interrupt, which is what makes it cheap. The pending
-tool call and the agent's state are persisted and restored by the machinery
-that already serves approvals, so the tool runs exactly once and nothing is
-recomputed. It is marked `reason: "continuation"`, and clients resolve it
-immediately rather than prompting anyone; kaboo-react does this for you. The
-turn id is unchanged across the resume, so the two responses render as one
-turn. The default of `0` means no cap and no pausing.
+Measured in the lab, a deliberately long turn (twenty SQL results of up to 200
+rows, a 63-component A2UI surface, a 40 KB generated visual and a dashboard of
+twelve widgets) sends about 230 KB, and every turn of a twelve-turn thread sends
+the same 28 KB whatever came before it.
 
 ## References & attachments
 
@@ -159,9 +153,11 @@ in kaboo-runtime for where that goes on a Node host.
 ## Statelessness: what a run keeps and what it carries
 
 A run keeps nothing. Everything a conversation accumulates arrives with the turn
-on the AG-UI **state channel** — `kaboo_history` for sub-agent transcripts,
-`kaboo_session` for a pending human-in-the-loop gate — and leaves in the outgoing
-`STATE_SNAPSHOT` the host persists.
+on the AG-UI **state channel**, under `kaboo_sessions`: every agent's transcript
+(`history`), the paused checkpoint of a run waiting on the person (`paused`),
+and the approvals it waits on (`approvals`). The run writes it back as one
+`STATE_DELTA`, and the host persists it. kaboo-runtime keeps the key on the
+server, so a browser never sees or sends it.
 
 That is what makes the rest safe: a service can rebuild its agents every run,
 scale to a second replica, or restart mid-approval, and behave identically,

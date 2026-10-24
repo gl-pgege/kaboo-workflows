@@ -21,6 +21,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import logging
 import mimetypes
@@ -28,21 +29,21 @@ import uuid
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
-import jsonpatch
 from ag_ui.core import (
-    ActivityDeltaEvent,
-    ActivitySnapshotEvent,
+    AgentCapabilities,
+    HumanInTheLoopCapabilities,
+    IdentityCapabilities,
+    MultiAgentCapabilities,
     RunAgentInput,
     RunErrorEvent,
-    RunFinishedEvent,
-    RunFinishedInterruptOutcome,
     RunStartedEvent,
-    StateSnapshotEvent,
+    StateCapabilities,
     ToolCallResultEvent,
-    ToolMessage,
+    ToolsCapabilities,
 )
 from ag_ui.core import EventType as AGUIEventType
 from ag_ui.encoder import EventEncoder
@@ -58,16 +59,15 @@ from kaboo_workflows._context import (
     HistoryExchange,
     Principal,
     Reference,
-    ResponseBudget,
     SessionExchange,
-    get_session_exchange,
+    StateChannel,
     set_activity_context,
     set_auth_context,
     set_forwarded_props,
     set_history_exchange,
     set_references,
-    set_response_budget,
     set_session_exchange,
+    set_state_channel,
 )
 from kaboo_workflows.config import (
     AppConfig,
@@ -82,13 +82,10 @@ from kaboo_workflows.config import (
 )
 from kaboo_workflows.config.resolvers import resolve_session_manager
 from kaboo_workflows.config.resolvers.agents import get_agent_hook_providers
-from kaboo_workflows.config.resolvers.config import _resolve_chat_output
 from kaboo_workflows.hooks import (
-    ContinuationHook,
     ForwardedPropsHook,
     SessionStateHook,
     restore_session_state,
-    session_state_snapshot,
 )
 from kaboo_workflows.mcp import MCPLifecycle
 from kaboo_workflows.telemetry import init_telemetry
@@ -99,15 +96,21 @@ from kaboo_workflows.tools.fetching import (
     set_attachment_url_template,
     set_reference_fetcher,
 )
-from kaboo_workflows.types import StreamEvent
 from kaboo_workflows.wire import EventQueue
 
+from ..hooks.state_effects import compile_effects, fold_effects
 from . import _strands_bridge as bridge
-from ._activity import ActivityRegistry
-from ._interrupts import approval_descriptors, build_resume_responses
-from ._interrupts import map_strands_interrupt_to_agui as _map_strands_interrupt_to_agui
-from ._interrupts import tool_call_id_from_interrupt_id as _tool_call_id_from_interrupt_id
-from ._multiagent import StrandsMultiAgent
+from ._a2ui_actions import take_a2ui_action
+from ._client_tools import (
+    entry_agent_def,
+    equip_entry_agent,
+    prepare_run,
+    take_browser_answers,
+    waiting,
+)
+from ._interrupts import browser_resume_entries
+from ._sessions import inbound_sessions, sessions_delta
+from ._subagents import RunEvents, split_subagent_messages
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
@@ -152,37 +155,6 @@ def _is_run_finished(event: Any) -> bool:
     return getattr(event, "type", None) == AGUIEventType.RUN_FINISHED
 
 
-def _maybe_inject_interrupt_outcome(
-    event: Any,
-    agui_agent: StrandsAgent,
-    thread_id: str | None,
-) -> Any:
-    """Replace a plain RUN_FINISHED with an interrupt outcome when one is pending.
-
-    ag-ui-strands has no concept of interrupts, so it emits a normal
-    ``RunFinishedEvent`` even when the underlying strands agent paused. We
-    detect the pending (unresolved) interrupts and re-frame the outcome so the
-    frontend can render an approval / input request.
-    """
-    strands_agent = bridge.get_thread_agent(agui_agent, thread_id)
-    if strands_agent is None or not bridge.is_interrupt_active(strands_agent):
-        return event
-
-    pending = bridge.pending_interrupts(strands_agent, unresolved_only=True)
-    if not pending:
-        return event
-
-    agui_interrupts = [_map_strands_interrupt_to_agui(intr) for intr in pending.values()]
-    logger.debug("injecting interrupt outcome: %s", [i["id"] for i in agui_interrupts])
-    return RunFinishedEvent(
-        type=AGUIEventType.RUN_FINISHED,
-        thread_id=event.thread_id,
-        run_id=event.run_id,
-        outcome=RunFinishedInterruptOutcome.model_validate({"interrupts": agui_interrupts}),
-    )
-
-
-_ABANDONED_RESULT = "Skipped: the person sent a message instead of answering."
 _ERROR_RESULT = "[tool call did not complete: run error]"
 
 
@@ -200,239 +172,6 @@ def _terminal_result_event(tc_id: str, content: str) -> ToolCallResultEvent:
         content=content,
         role="tool",
     )
-
-
-def _find_transcript_imbalance(messages: list[Any] | None) -> str | None:
-    """Return a description of a malformed tool-block transcript, else ``None``.
-
-    ag-ui-strands rebuilds the coordinator's history 1:1 from this transcript
-    (``_build_strands_history`` -> ``stream_async(None)``) with no validation. A
-    ``toolUse`` without a matching ``toolResult`` (dangling) or more than one
-    ``toolResult`` for the same ``toolUse`` (duplicate) yields a native history
-    the model rejects, which manifests as a silent, event-less hang. We detect
-    those two conditions so the caller can fail loudly instead.
-    """
-    open_calls: dict[str, str] = {}
-    result_counts: dict[str, int] = {}
-    for msg in messages or []:
-        role = getattr(msg, "role", None)
-        if role == "assistant":
-            for tc in getattr(msg, "tool_calls", None) or []:
-                open_calls[tc.id] = _tool_call_name(tc)
-        elif role == "tool":
-            tcid = getattr(msg, "tool_call_id", None)
-            if tcid:
-                result_counts[tcid] = result_counts.get(tcid, 0) + 1
-    dangling = {cid: n for cid, n in open_calls.items() if cid not in result_counts}
-    duplicates = {cid: c for cid, c in result_counts.items() if c > 1}
-    problems: list[str] = []
-    if dangling:
-        problems.append(f"tool calls missing a result: {dangling}")
-    if duplicates:
-        problems.append(f"tool calls with duplicate results: {duplicates}")
-    return "; ".join(problems) if problems else None
-
-
-def _tool_call_name(tc: Any) -> str:
-    fn = getattr(tc, "function", None)
-    if isinstance(fn, dict):
-        return fn.get("name") or "?"
-    return getattr(fn, "name", None) or "?"
-
-
-def _close_abandoned_tool_calls(input_data: RunAgentInput) -> list[str]:
-    """Balance a transcript whose interrupt was superseded by a new user turn.
-
-    When the user sends a fresh message while a prior interrupt is still pending,
-    the paused tool call is genuinely abandoned. We insert a terminal
-    ``toolResult`` immediately after the assistant ``toolUse`` that lacks one so
-    the current turn's rebuilt history is well-formed, and return the closed ids
-    so the caller can also emit the result to the frontend (keeping its persisted
-    transcript balanced for subsequent turns).
-    """
-    messages = list(input_data.messages or [])
-    result_ids = {
-        getattr(m, "tool_call_id", None) for m in messages if getattr(m, "role", None) == "tool"
-    }
-    closed: list[str] = []
-    repaired: list[Any] = []
-    for msg in messages:
-        repaired.append(msg)
-        if getattr(msg, "role", None) != "assistant":
-            continue
-        for tc in getattr(msg, "tool_calls", None) or []:
-            if tc.id not in result_ids:
-                repaired.append(
-                    ToolMessage(
-                        id=str(uuid.uuid4()),
-                        role="tool",
-                        content=_ABANDONED_RESULT,
-                        tool_call_id=tc.id,
-                    )
-                )
-                closed.append(tc.id)
-    if closed:
-        input_data.messages = repaired
-    return closed
-
-
-def _collapse_duplicate_tool_results(input_data: RunAgentInput) -> dict[str, int]:
-    """Keep only the last ``tool`` result per tool-call id in the transcript.
-
-    A single tool call that raises **more than one** interrupt produces duplicate
-    results in the client transcript. When a nested sub-agent asks the user and
-    then requests tool approval, both interrupts bubble up keyed to the *outer*
-    delegate tool call (see :func:`_tool_call_id_from_interrupt_id`); the client
-    (CopilotKit) records each interrupt *resolution* as a ``tool`` message for
-    that id, plus the delegate's final genuine result. Replaying that 1:1 into
-    strands yields one ``toolUse`` with N ``toolResult``s — native history the
-    model rejects (the same failure mode :func:`_find_transcript_imbalance`
-    guards against).
-
-    Those intermediate resolutions are client-side HITL bookkeeping, not real
-    tool outputs; the last result is the genuine one. Dropping the earlier
-    duplicates makes the rebuilt history well-formed while preserving meaning
-    (the coordinator only ever needed one result for its delegate call). Returns
-    a ``{tool_call_id: dropped_count}`` map (empty when nothing was collapsed).
-    """
-    messages = list(input_data.messages or [])
-    counts: dict[str, int] = {}
-    for msg in messages:
-        if getattr(msg, "role", None) == "tool":
-            tcid = getattr(msg, "tool_call_id", None)
-            if tcid:
-                counts[tcid] = counts.get(tcid, 0) + 1
-    dupes = {tcid for tcid, c in counts.items() if c > 1}
-    if not dupes:
-        return {}
-
-    last_index: dict[str, int] = {}
-    for i, msg in enumerate(messages):
-        if getattr(msg, "role", None) == "tool":
-            tcid = getattr(msg, "tool_call_id", None)
-            if tcid in dupes:
-                last_index[tcid] = i
-
-    kept: list[Any] = []
-    dropped: dict[str, int] = {}
-    for i, msg in enumerate(messages):
-        tcid = getattr(msg, "tool_call_id", None)
-        if getattr(msg, "role", None) == "tool" and tcid in dupes and i != last_index[tcid]:
-            dropped[tcid] = dropped.get(tcid, 0) + 1
-            continue
-        kept.append(msg)
-    input_data.messages = kept
-    return dropped
-
-
-class TranscriptRepairs(NamedTuple):
-    """Outcome of :func:`normalize_client_transcript`.
-
-    ``backfill_ids``  tool calls closed as abandoned — the caller re-emits their
-                      terminal result to the frontend so its store stays balanced.
-    ``collapsed``     ``{tool_call_id: dropped_count}`` for duplicate results removed.
-    ``residual``      a description of any imbalance left *after* repair, or
-                      ``None``. Non-``None`` means genuinely foreign/unrecoverable
-                      data the caller should refuse loudly.
-    """
-
-    backfill_ids: list[str]
-    collapsed: dict[str, int]
-    residual: str | None
-
-
-def normalize_client_transcript(
-    input_data: RunAgentInput, *, close_dangling: bool
-) -> TranscriptRepairs:
-    """Turn an arbitrary client transcript into valid strands native history.
-
-    This is the single boundary for the fresh-run path, which replays the client
-    (CopilotKit) transcript 1:1 into strands via ``stream_async(None)``. strands
-    requires every ``toolUse`` to have exactly one ``toolResult``; the client can
-    violate that in two ways, each repaired by a focused helper:
-
-    - **Abandoned calls** (:func:`_close_abandoned_tool_calls`): the user sent a
-      new message past a pending interrupt, leaving a ``toolUse`` with no result.
-      Closed **only** when ``close_dangling`` (the supersede case); the returned
-      ids let the caller also balance the frontend store. A dangling call in any
-      other context is treated as foreign and left for ``residual`` to refuse —
-      we surface it loudly rather than guess.
-    - **Duplicate results** (:func:`_collapse_duplicate_tool_results`): a tool
-      call that raised multiple interrupts has each resolution recorded by the
-      client as a result (plus the one genuine result); collapsed to the last.
-
-    Any imbalance remaining after repair is reported as ``residual`` (normally
-    ``None``) so the caller can fail fast instead of hanging the model. New client
-    HITL quirks get one obvious home here instead of another ad-hoc guard.
-    """
-    backfill_ids = _close_abandoned_tool_calls(input_data) if close_dangling else []
-    collapsed = _collapse_duplicate_tool_results(input_data)
-    residual = _find_transcript_imbalance(input_data.messages)
-    return TranscriptRepairs(backfill_ids=backfill_ids, collapsed=collapsed, residual=residual)
-
-
-def _parse_resume_entries(input_data: RunAgentInput) -> list[dict[str, Any]] | None:
-    raw_resume = input_data.resume
-    if not raw_resume:
-        return None
-    return [
-        {
-            "interruptId": entry.interrupt_id,
-            "status": entry.status,
-            "payload": entry.payload,
-        }
-        for entry in raw_resume
-    ]
-
-
-def _skips_into_new_message(
-    input_data: RunAgentInput, resume_entries: list[dict[str, Any]]
-) -> bool:
-    """Whether the person skipped every open request to send a new message.
-
-    An AG-UI client must address every pending interrupt before it can send
-    anything, so a message sent while requests are waiting arrives as a resume
-    that cancels all of them and ends with the new user message. That is a new
-    turn, not a resume: the requests close as skipped and the agent answers the
-    message (see the supersede handling in the endpoint).
-    """
-    if not all(entry.get("status") == "cancelled" for entry in resume_entries):
-        return False
-    messages = input_data.messages or []
-    return bool(messages) and getattr(messages[-1], "role", None) == "user"
-
-
-def _drop_replayed_tool_results(
-    input_data: RunAgentInput, resume_entries: list[dict[str, Any]]
-) -> None:
-    """Strip the client's tool-result messages for the interrupts being resumed.
-
-    Hosts append the answered card to the transcript as a ``tool`` message (that
-    is how the resolved Q&A renders inline), so a resume request carries both
-    that message and the ``resume`` payload for the same tool call. On a cold
-    resume the transcript is replayed into the model conversation, and strands'
-    interrupt resolution then appends its own toolResult from the payload —
-    leaving two toolResult blocks for one toolUse. Bedrock rejects that turn
-    ("the number of toolResult blocks exceeds the number of toolUse blocks"),
-    force-stopping the run with no continuation and no error on the stream.
-    Dropping the client's copy keeps the replayed history open-ended so the
-    resolution supplies the single, authoritative result.
-    """
-    resumed_tool_call_ids = {
-        tcid
-        for entry in resume_entries
-        if (tcid := _tool_call_id_from_interrupt_id(entry.get("interruptId")))
-    }
-    if not resumed_tool_call_ids or not input_data.messages:
-        return
-    input_data.messages[:] = [
-        m
-        for m in input_data.messages
-        if not (
-            getattr(m, "role", None) == "tool"
-            and getattr(m, "tool_call_id", None) in resumed_tool_call_ids
-        )
-    ]
 
 
 _ATTACHMENT_PART_TYPES = ("image", "audio", "video", "document")
@@ -568,92 +307,11 @@ def _parse_references(input_data: RunAgentInput) -> list[Reference]:
     return refs
 
 
-def _enrich_history_snapshot(agui_event: Any, exchange: HistoryExchange) -> None:
-    """Merge this run's sub-agent transcripts into a STATE_SNAPSHOT in place.
-
-    ag-ui-strands echoes ``input_data.state`` back in its state snapshots but
-    never updates ``kaboo_history`` — that is kaboo's client-driven per-agent
-    history. We fold this run's transcripts over the client's ``inbound`` (see
-    ``HistoryExchange.written_back``) so the (authoritative) final snapshot
-    carries the up-to-date history for the frontend to persist and replay next
-    turn.
-    """
-    snapshot = getattr(agui_event, "snapshot", None)
-    if not isinstance(snapshot, dict):
-        return
-    merged_history = exchange.written_back()
-    if merged_history:
-        snapshot["kaboo_history"] = merged_history
-        logger.debug(
-            "kaboo_history write-back | keys=%s captured=%s",
-            list(merged_history),
-            {k: len(v) for k, v in exchange.outbound.items()},
-        )
-
-
-def _enrich_session_snapshot(agui_event: Any) -> None:
-    """Write the executing agent's session state into a STATE_SNAPSHOT in place.
-
-    The counterpart to :func:`_enrich_history_snapshot`, for the state that used
-    to be lost on restart: a paused approval. The host persists the snapshot and
-    replays it, so the next turn can resume a gate this process never saw.
-
-    Read at snapshot time rather than from a hook because an interrupt pauses the
-    run — the state we want is what the agent holds after it has stopped.
-    """
-    snapshot = getattr(agui_event, "snapshot", None)
-    if not isinstance(snapshot, dict):
-        return
-    state = session_state_snapshot()
-    if state is None:
-        return
-    exchange = get_session_exchange()
-    agent = exchange.agent if exchange is not None else None
-    pending = bridge.pending_interrupts(agent) if agent is not None else {}
-    state["approvals"] = approval_descriptors(pending.values())
-    snapshot["kaboo_session"] = state
-    logger.debug("kaboo_session write-back | %s", state.get("interrupt_state", {}).get("activated"))
-
-
-def _parse_session_state(input_data: RunAgentInput) -> dict[str, Any]:
-    """Read the client's ``kaboo_session`` state for this run."""
-    if not isinstance(input_data.state, dict):
-        return {}
-    raw = input_data.state.get("kaboo_session")
-    return raw if isinstance(raw, dict) else {}
-
-
-def _carries_active_gate(input_data: RunAgentInput) -> bool:
-    """Whether the client's ``kaboo_session`` state holds a gate still paused."""
-    carried = _parse_session_state(input_data).get("interrupt_state")
-    return isinstance(carried, dict) and bool(carried.get("activated"))
-
-
-def _restore_snapshot_user_content(agui_event: Any, originals: dict[str, Any]) -> None:
-    """Put structured multimodal user content back on a MESSAGES_SNAPSHOT.
-
-    ag-ui-strands seeds each ``MessagesSnapshotEvent`` from the input messages
-    but coerces every user ``content`` to text (``str(content)``), which turns a
-    multimodal message (text + attachment parts) into a Python repr string. The
-    frontend keys off these snapshots, so it would render that repr instead of
-    the file card. We swap the original parts (kept by message id) back in so the
-    snapshot the frontend persists matches what it sent.
-    """
-    for msg in getattr(agui_event, "messages", None) or []:
-        if getattr(msg, "role", None) != "user":
-            continue
-        original = originals.get(getattr(msg, "id", None))
-        if original is not None:
-            msg.content = original
-
-
 async def _consume_run(
     agui_agent: StrandsAgent,
     input_data: RunAgentInput,
     merged: asyncio.Queue[Any],
     exchange: HistoryExchange,
-    *,
-    backfill_tool_calls: list[str] | None = None,
 ) -> None:
     """Drive one ag-ui-strands run and forward its AG-UI events onto *merged*.
 
@@ -668,26 +326,10 @@ async def _consume_run(
     - On a genuine failure we close every still-open call before the error so no
       ``toolUse`` is left dangling.
 
-    ``backfill_tool_calls`` are ids for calls abandoned by a superseded
-    interrupt; their terminal results are emitted right after RUN_STARTED so the
-    frontend's persisted transcript stays balanced for subsequent turns. Also
-    enriches STATE_SNAPSHOT events with this run's client-driven sub-agent
-    history (``kaboo_history``).
+    Ends the run by writing the conversation's sessions back as a
+    ``STATE_DELTA`` (see :mod:`~kaboo_workflows.adapters._sessions`).
     """
     unresolved_tool_calls: dict[str, str] = {}
-    pending_backfill = list(backfill_tool_calls or [])
-    last_snapshot: Any = None
-    # Original multimodal user content, keyed by message id. ag-ui-strands
-    # rebuilds MESSAGES_SNAPSHOT with a stringified (`str(content)`) view of the
-    # user message, which would clobber the frontend's structured attachment
-    # parts with a Python repr. We restore the real parts on the way out.
-    original_user_content = {
-        mid: content
-        for m in (getattr(input_data, "messages", None) or [])
-        if getattr(m, "role", None) == "user"
-        and isinstance((content := getattr(m, "content", None)), list)
-        and (mid := getattr(m, "id", None))
-    }
     try:
         async for agui_event in agui_agent.run(input_data):
             etype = getattr(agui_event, "type", None)
@@ -697,30 +339,19 @@ async def _consume_run(
                 tc_id = getattr(agui_event, "tool_call_id", None)
                 if tc_id:
                     unresolved_tool_calls.pop(tc_id, None)
-            elif etype == AGUIEventType.STATE_SNAPSHOT:
-                _enrich_history_snapshot(agui_event, exchange)
-                _enrich_session_snapshot(agui_event)
-                last_snapshot = agui_event
-            elif etype == AGUIEventType.MESSAGES_SNAPSHOT and original_user_content:
-                _restore_snapshot_user_content(agui_event, original_user_content)
+            elif etype == AGUIEventType.STATE_SNAPSHOT and isinstance(agui_event.snapshot, dict):
+                fold_effects(agui_event.snapshot)
 
             if _is_run_finished(agui_event):
-                if await exchange.settle() and isinstance(
-                    getattr(last_snapshot, "snapshot", None), dict
-                ):
-                    await merged.put(
-                        StateSnapshotEvent(
-                            type=AGUIEventType.STATE_SNAPSHOT,
-                            snapshot={
-                                **last_snapshot.snapshot,
-                                "kaboo_history": exchange.written_back(),
-                            },
-                        )
-                    )
-                replaced = _maybe_inject_interrupt_outcome(
-                    agui_event, agui_agent, input_data.thread_id
-                )
-                paused = replaced is not agui_event
+                await exchange.settle()
+                if (delta := sessions_delta(exchange)) is not None:
+                    await merged.put(delta)
+                parked = bridge.get_thread_agent(agui_agent, input_data.thread_id)
+                # A run waiting on a browser tool is paused too, with nothing to
+                # report but the call itself.
+                paused = getattr(getattr(agui_event, "outcome", None), "type", None) == (
+                    "interrupt"
+                ) or (parked is not None and bridge.is_interrupt_active(parked))
                 # A paused (interrupt) run resumes and closes its own calls, so
                 # leave them open. A truly-finished run is terminal — no result
                 # can arrive after RUN_FINISHED — so close anything strands left
@@ -729,16 +360,7 @@ async def _consume_run(
                     for tc_id in list(unresolved_tool_calls):
                         await merged.put(_terminal_result_event(tc_id, _ERROR_RESULT))
                     unresolved_tool_calls.clear()
-                agui_event = replaced
             await merged.put(agui_event)
-
-            # Backfill abandoned calls immediately after the run has started so
-            # the frontend closes them in its store (ordering after RUN_STARTED
-            # keeps the AG-UI protocol valid).
-            if pending_backfill and etype == AGUIEventType.RUN_STARTED:
-                for tc_id in pending_backfill:
-                    await merged.put(_terminal_result_event(tc_id, _ABANDONED_RESULT))
-                pending_backfill = []
     except Exception as exc:
         logger.error("AG-UI agent run failed: %s", exc, exc_info=True)
         await exchange.settle(0)
@@ -752,210 +374,38 @@ async def _consume_run(
         await merged.put(_DONE)
 
 
-def _make_activity_pump(
-    event_queue: EventQueue,
-    registry: ActivityRegistry,
-    entry_name: str,
-    merged: asyncio.Queue[Any],
-    *,
-    entry_inline: bool = False,
-    deltas: bool = True,
-) -> Any:
-    """Build a task coroutine that folds queue events into the registry.
-
-    Events are routed by the ``thread_id`` stamped on them (via contextvars) so
-    the correct conversation's activity is updated regardless of which concurrent
-    request task drained the shared queue. Whenever a folded event changes the
-    state, a fresh ``ACTIVITY_SNAPSHOT`` is put onto *merged* so it interleaves
-    live on the run's ``/invocations`` stream.
-
-    Each wakeup drains whatever else is already queued and folds the lot before
-    snapshotting, emitting one snapshot per thread the burst touched rather than
-    one per event. Snapshots carry ``replace=True``, so an intermediate one only
-    ever gets overwritten by the next; sending it cost a ``deepcopy`` of the tree
-    and its full serialisation for a state the UI never rendered.
-
-    With *deltas* (the default) only the first emission for a thread carries the
-    whole tree; each later one is an ``ACTIVITY_DELTA`` holding the JSON Patch
-    against what was last sent. The baseline lives in this closure, and the pump
-    is built per request, so every response opens with a full snapshot and no
-    client can be asked to patch a tree it never received. Set it false to send
-    snapshots throughout.
-
-    The entry node's events are excluded from group rendering by default
-    because its text is the chat reply (rendered by the host) and re-surfacing
-    it would duplicate the answer — only its ``AGENT_COMPLETE`` token usage is
-    folded into the per-run rollup so run totals include the entry agent.
-    A plain-agent entry (``entry_inline``) is the exception: its events ARE
-    routed so its own tool calls enrich the inline tool rows — its group carries
-    ``inline_chat_owner`` so the UI never draws a duplicate card for it.
-    """
-
-    def fold(event: Any) -> str | None:
-        """Fold *event* into the registry; return its thread id if state changed."""
-        if not isinstance(event, StreamEvent):
-            return None
-        thread_id = event.data.get("thread_id") or bridge.DEFAULT_THREAD
-        if event.agent_name == entry_name and not entry_inline:
-            # The entry/manager agent's stream is not rendered as a group,
-            # but its completions still count toward the run's token total.
-            changed = registry.apply_usage(thread_id, event)
-        else:
-            changed = registry.apply(thread_id, event)
-        return thread_id if changed else None
-
-    # What the client is believed to hold, per thread, for diffing against.
-    # Scoped to this pump, so it resets with every response.
-    sent: dict[str, dict[str, Any]] = {}
-
-    def snapshot_for(thread_id: str, content: dict[str, Any]) -> ActivitySnapshotEvent:
-        sent[thread_id] = content
-        return ActivitySnapshotEvent(
-            message_id=f"kaboo.activity.{thread_id}",
-            activity_type="kaboo.activity",
-            content=content,
-            replace=True,
-        )
-
-    def update_for(thread_id: str) -> ActivitySnapshotEvent | ActivityDeltaEvent | None:
-        """The event bringing the client up to date, or ``None`` if it already is."""
-        content = registry.snapshot(thread_id)
-        baseline = sent.get(thread_id) if deltas else None
-        if baseline is None:
-            return snapshot_for(thread_id, content)
-        patch = jsonpatch.make_patch(baseline, content).patch
-        if not patch:
-            # A fold can report a change that leaves the rendered tree identical
-            # (an event for a group that never started, say).
-            return None
-        sent[thread_id] = content
-        return ActivityDeltaEvent(
-            message_id=f"kaboo.activity.{thread_id}",
-            activity_type="kaboo.activity",
-            patch=patch,
-        )
-
-    async def pump_activity() -> None:
-        while True:
-            try:
-                event = await asyncio.wait_for(event_queue.get(), timeout=0.15)
-            except (TimeoutError, asyncio.TimeoutError):
-                continue
-            if event is None:
-                break
-            # Fold the whole burst before snapshotting. Token events arrive one
-            # per streamed chunk and each one used to re-send the entire tree,
-            # which is most of a long run's bytes on the wire.
-            changed: dict[str, None] = {}
-            closed = False
-            thread_id = fold(event)
-            if thread_id is not None:
-                changed[thread_id] = None
-            while not event_queue.empty():
-                queued = event_queue.get_nowait()
-                if queued is None:
-                    closed = True
-                    break
-                thread_id = fold(queued)
-                if thread_id is not None:
-                    changed[thread_id] = None
-            for thread_id in changed:
-                update = update_for(thread_id)
-                if update is not None:
-                    await merged.put(update)
-            if closed:
-                break
-
-    def flush(thread_id: str) -> list[ActivitySnapshotEvent]:
-        """Drain the queue and return one final snapshot for *thread_id*.
-
-        Called when the run stream ends. The entry agent's final AGENT_COMPLETE
-        (carrying the run's token usage) lands on the queue just before
-        RUN_FINISHED — and even when the pump task dequeues it in time, the
-        snapshot it puts on *merged* can land after the stream loop has already
-        broken. Folding what is left and re-snapshotting the registry is
-        deterministic either way: the final snapshot reflects everything folded,
-        no matter which side got to the event first.
-
-        A snapshot rather than a delta even when deltas are on: this is the last
-        word on the run, and a whole tree cannot be misapplied the way a patch
-        against a disputed baseline can.
-        """
-        while True:
-            event = event_queue.get_nowait()
-            if event is None:
-                break
-            fold(event)
-        content = registry.snapshot(thread_id)
-        if not content.get("groups") and not content.get("usageByRun"):
-            return []
-        return [snapshot_for(thread_id, content)]
-
-    return pump_activity, flush
-
-
 async def _sse_response(
     consume: Any,
-    activity_pump: Any,
     encoder: EventEncoder,
     merged: asyncio.Queue[Any],
     cleanup: Callable[[], Awaitable[None]] | None = None,
-    activity_flush: Callable[[], list[Any]] | None = None,
-    budget: ResponseBudget | None = None,
+    run_events: RunEvents | None = None,
 ) -> AsyncIterator[str]:
-    """Stream encoded AG-UI events; run the run + activity pumps concurrently.
+    """Stream the run's AG-UI events, encoded, as the run produces them.
 
-    ``activity_flush`` drains the not-yet-pumped activity events when the run
-    stream ends, so the final snapshot (e.g. the entry agent's token usage,
-    emitted just before RUN_FINISHED) is delivered instead of being lost to
-    the pump-cancellation race.
+    ``run_events`` adds what the response itself contributes: the sub-agents'
+    events, which reach *merged* as they happen, and the closing of every
+    sub-agent before the run ends (see
+    :class:`~kaboo_workflows.adapters._subagents.RunEvents`).
 
     ``cleanup`` runs once the stream is finished, cancelled or errored — the last
     moment the run owns anything. A per-run session's MCP clients are released
     here, which is why they cannot go stale between runs.
-
-    ``budget`` is credited with every frame written, which is what lets
-    :class:`~kaboo_workflows.hooks.ContinuationHook` see how full the response
-    is and pause the run before the host cuts it off.
     """
     run_task = asyncio.create_task(consume())
-    activity_task = asyncio.create_task(activity_pump())
     try:
         while True:
             item = await merged.get()
             if item is _DONE:
                 break
-            terminal = getattr(item, "type", None) in (
-                AGUIEventType.RUN_FINISHED,
-                AGUIEventType.RUN_ERROR,
-            )
-            if terminal and activity_flush is not None:
-                # The terminal event closes the run for AG-UI clients, so any
-                # still-queued activity (the entry agent's final completion
-                # with the run's token usage) must be delivered first.
-                for snapshot in activity_flush():
-                    try:
-                        frame = encoder.encode(snapshot)
-                    except Exception:
-                        logger.debug("failed to encode flushed snapshot", exc_info=True)
-                        continue
-                    if budget is not None:
-                        budget.add(len(frame.encode()))
-                    yield frame
-            try:
-                frame = item.payload if isinstance(item, _RawSSE) else encoder.encode(item)
-            except Exception:
-                logger.debug("failed to encode event: %s", type(item).__name__, exc_info=True)
-                continue
-            if budget is not None:
-                budget.add(len(frame.encode()))
-            yield frame
+            for event in run_events.emit(item) if run_events is not None else [item]:
+                try:
+                    frame = event.payload if isinstance(event, _RawSSE) else encoder.encode(event)
+                except Exception:
+                    logger.debug("failed to encode event: %s", type(event).__name__, exc_info=True)
+                    continue
+                yield frame
     finally:
-        activity_task.cancel()
-        try:
-            await activity_task
-        except asyncio.CancelledError:
-            pass
         if not run_task.done():
             run_task.cancel()
             try:
@@ -1008,26 +458,15 @@ async def _verify_inbound(auth: AuthVerifier | None, request: Request) -> Princi
 def _add_kaboo_endpoint(
     app: FastAPI,
     resolve_session: Callable[[RunAgentInput], AguiSession],
-    registry: ActivityRegistry,
     path: str,
     *,
     auth: AuthVerifier | None = None,
-    activity_deltas: bool = True,
-    response_budget: int = 0,
 ) -> None:
     """Register the AG-UI endpoint, resolving the session serving each request.
 
     ``resolve_session`` returns the :class:`AguiSession` for a request — one built
     at boot when the process serves a single fixed config, or one built for this
-    run from the config it submitted. Only the activity registry spans requests.
-
-    ``activity_deltas`` sends activity as JSON Patches after the first snapshot
-    of each response; see :func:`_make_activity_pump`.
-
-    ``response_budget`` caps how many bytes one response may carry before the
-    run pauses at the next tool boundary and continues in the next response;
-    zero, the default, means no cap. See
-    :class:`~kaboo_workflows.hooks.ContinuationHook`.
+    run from the config it submitted.
     """
 
     @app.post(path)
@@ -1036,16 +475,11 @@ def _add_kaboo_endpoint(
         # but annotated str); passing the optional Accept header through is correct.
         encoder = EventEncoder(accept=request.headers.get("accept"))  # ty: ignore[invalid-argument-type]
         thread_id = input_data.thread_id or bridge.DEFAULT_THREAD
-        resume_entries = _parse_resume_entries(input_data)
-        if resume_entries:
-            _drop_replayed_tool_results(input_data, resume_entries)
-            if _skips_into_new_message(input_data, resume_entries):
-                logger.debug("thread=<%s> | requests skipped for a new message", thread_id)
-                input_data.resume = None
-                resume_entries = None
-        turn_id = _resolve_turn_id(
-            thread_id, input_data.run_id, is_resume=resume_entries is not None
-        )
+        take_a2ui_action(input_data)
+        carried = split_subagent_messages(input_data)
+        browser_answers = take_browser_answers(input_data, carried)
+        resuming = bool(input_data.resume or browser_answers)
+        turn_id = _resolve_turn_id(thread_id, input_data.run_id, is_resume=resuming)
         set_activity_context(thread_id, input_data.run_id, turn_id)
 
         # Inbound auth: validate/extract the caller identity and bind it to the
@@ -1054,33 +488,15 @@ def _add_kaboo_endpoint(
         # via contextvars.copy_context(). A raise here rejects the request.
         await _verify_inbound(auth, request)
 
-        # Client-driven per-agent history. Sub-agents seed their transcripts
-        # from this exchange (via HistoryHook) and capture back into it; the
-        # merged result is folded into the outgoing STATE_SNAPSHOT. Set before
-        # any task is created so the run task inherits the same exchange object.
-        inbound_history: dict[str, Any] = {}
-        if isinstance(input_data.state, dict):
-            raw_history = input_data.state.get("kaboo_history")
-            if isinstance(raw_history, dict):
-                inbound_history = raw_history
-        exchange = HistoryExchange(inbound=inbound_history)
+        # The conversation's sessions (see _sessions): every agent's transcript
+        # and the paused checkpoint, from the state the run carries. Agents seed
+        # from them and capture back into them, and the run writes them back as
+        # a STATE_DELTA. Set before any task is created so the run task inherits
+        # the same exchanges.
+        history, paused = inbound_sessions(input_data.state)
+        exchange = HistoryExchange(inbound=history)
         set_history_exchange(exchange)
-
-        # Client-driven session state, on the same channel and for the same
-        # reason: it lets a paused approval outlive this process. SessionStateHook
-        # restores it onto the executing agent; _enrich_session_snapshot writes
-        # back what the run leaves behind.
-        set_session_exchange(
-            SessionExchange(
-                inbound=_parse_session_state(input_data), resuming=bool(input_data.resume)
-            )
-        )
-
-        # How much this response may carry. Bound before any task is created so
-        # the run's hooks and the SSE writer below share the one counter: the
-        # writer credits it, ContinuationHook spends it.
-        budget = ResponseBudget(limit=response_budget)
-        set_response_budget(budget)
+        set_session_exchange(SessionExchange(inbound=paused, resuming=resuming))
 
         # Client-supplied references (file attachments on the message + custom
         # entities in state.kaboo_references). Parsed once per request and bound
@@ -1124,261 +540,115 @@ def _add_kaboo_endpoint(
             return StreamingResponse(config_error_gen(), media_type=encoder.get_content_type())
 
         agui_agent = session.agui_agent
-        entry_name = session.entry_name
+        browser_tools = prepare_run(input_data, session)
+
+        merged: asyncio.Queue[Any] = asyncio.Queue()
+        run_events = RunEvents(
+            merged, carried, subagents=not session.orchestrated, browser_tools=browser_tools
+        )
+        session.event_queue.flush()
+        session.event_queue.forward_to(run_events.sink)
+        open_state_channel(input_data, session, run_events)
 
         async def release() -> None:
-            """Release the session if this run owns it (see :class:`AguiSession`)."""
+            """Stop forwarding events; release the session if this run owns it."""
+            session.event_queue.forward_to(None)
             if session.transient:
                 await session.aclose()
 
-        merged: asyncio.Queue[Any] = asyncio.Queue()
-        activity_pump, _activity_flush = _make_activity_pump(
-            session.event_queue,
-            registry,
-            entry_name,
-            merged,
-            entry_inline=session.entry_inline,
-            deltas=activity_deltas,
-        )
+        # A Swarm or Graph entry runs on ag-ui-strands' own orchestrator bridge,
+        # which handles its interrupts and resumes itself.
+        if session.orchestrated:
 
-        def activity_flush() -> list[Any]:
-            return _activity_flush(thread_id)
-
-        # First-class Swarm/Graph entry: kaboo owns the run loop (ag-ui-strands
-        # cannot drive a MultiAgentBase). No chat-side tool blocks are produced,
-        # so the transcript-imbalance / abandoned-tool-call machinery below does
-        # not apply — a superseded interrupt is simply cleared.
-        if isinstance(agui_agent, StrandsMultiAgent):
-            if not resume_entries and agui_agent.is_interrupt_active(thread_id):
-                last_role = input_data.messages[-1].role if input_data.messages else None
-                if last_role == "user":
-                    logger.debug("multiagent: new user turn with stale interrupt; clearing")
-                    agui_agent.deactivate_interrupts(thread_id)
-                    registry.skip_waiting(thread_id)
-                else:
-                    pending = agui_agent.pending_interrupts(thread_id, unresolved_only=True)
-                    if pending:
-                        agui_interrupts = [
-                            _map_strands_interrupt_to_agui(intr) for intr in pending.values()
-                        ]
-                        run_id = input_data.run_id or str(uuid.uuid4())
-
-                        async def replay_multiagent_interrupt() -> AsyncIterator[str]:
-                            yield encoder.encode(
-                                RunStartedEvent(
-                                    type=AGUIEventType.RUN_STARTED,
-                                    thread_id=thread_id,
-                                    run_id=run_id,
-                                )
-                            )
-                            yield encoder.encode(
-                                RunFinishedEvent(
-                                    type=AGUIEventType.RUN_FINISHED,
-                                    thread_id=thread_id,
-                                    run_id=run_id,
-                                    outcome=RunFinishedInterruptOutcome.model_validate(
-                                        {"interrupts": agui_interrupts}
-                                    ),
-                                )
-                            )
-
-                        await release()
-                        return StreamingResponse(
-                            replay_multiagent_interrupt(),
-                            media_type=encoder.get_content_type(),
-                        )
-
-            async def consume_multiagent() -> None:
-                await agui_agent.consume(
-                    input_data, merged, exchange, resume_entries=resume_entries
-                )
+            async def consume_orchestrated() -> None:
+                await _consume_run(agui_agent, input_data, merged, exchange)
 
             return StreamingResponse(
                 _sse_response(
-                    consume_multiagent,
-                    activity_pump,
-                    encoder,
-                    merged,
-                    release,
-                    activity_flush=activity_flush,
-                    budget=budget,
+                    consume_orchestrated, encoder, merged, release, run_events=run_events
                 ),
                 media_type=encoder.get_content_type(),
             )
 
-        if resume_entries:
-            strands_agent = bridge.get_thread_agent(agui_agent, thread_id)
-            cold = strands_agent is None
-            if cold:
-                # This process has never run the thread — it restarted, or another
-                # replica served the turn that paused. The client still holds the
-                # gate on the state channel, so seed an agent and restore it rather
-                # than failing an approval over a lost in-memory clone.
-                try:
-                    strands_agent = await bridge.ensure_thread_agent(agui_agent, input_data)
-                except Exception as exc:
-                    logger.error(
-                        "could not build an agent for thread_id=%s during resume: %s",
-                        thread_id,
-                        exc,
-                        exc_info=True,
-                    )
-                    strands_agent = None
-            # Needed before the responses are built, because they are derived from
-            # the agent's pending interrupts. Idempotent: the hook calls it too.
-            restored = strands_agent is not None and restore_session_state(strands_agent)
-            if strands_agent is None or (cold and not restored):
-                logger.error("no resumable agent state for thread_id=%s", thread_id)
+        if resuming and not await _prepare_resume(agui_agent, input_data, browser_answers):
+            logger.error("no resumable agent state for thread_id=%s", thread_id)
 
-                async def error_gen() -> AsyncIterator[str]:
-                    yield encoder.encode(
-                        RunStartedEvent(
-                            type=AGUIEventType.RUN_STARTED,
-                            thread_id=thread_id,
-                            run_id=input_data.run_id,
-                        )
-                    )
-                    yield encoder.encode(
-                        RunErrorEvent(
-                            type=AGUIEventType.RUN_ERROR,
-                            message="No agent session found for resume",
-                            code="RESUME_NO_SESSION",
-                        )
-                    )
-
-                await release()
-                return StreamingResponse(error_gen(), media_type=encoder.get_content_type())
-
-            responses = build_resume_responses(
-                bridge.pending_interrupts(strands_agent), resume_entries
-            )
-            logger.debug("resume thread=%s responses=%d", thread_id, len(responses))
-
-            run_input = input_data.model_copy(update={"resume": None})
-
-            async def consume_resume() -> None:
-                with bridge.resume_prompt_override(strands_agent, responses):
-                    await _consume_run(agui_agent, run_input, merged, exchange)
-
-            return StreamingResponse(
-                _sse_response(
-                    consume_resume,
-                    activity_pump,
-                    encoder,
-                    merged,
-                    release,
-                    activity_flush=activity_flush,
-                    budget=budget,
-                ),
-                media_type=encoder.get_content_type(),
-            )
-
-        # Fresh (non-resume) run. Activity accumulates across the whole
-        # conversation and is deliberately not cleared per turn, so an agent's Nth
-        # group stays addressable as index N-1 by the frontend's monotonic cards.
-        superseded = False
-        existing_agent = bridge.get_thread_agent(agui_agent, thread_id)
-        last_role = input_data.messages[-1].role if input_data.messages else None
-        if existing_agent is None and last_role == "user":
-            superseded = _carries_active_gate(input_data)
-        if existing_agent is not None and bridge.is_interrupt_active(existing_agent):
-            if last_role == "user":
-                # A new user turn arrived while a prior interrupt is still
-                # pending (e.g. the user typed instead of resolving, or a prior
-                # run was abandoned). Drop the stale interrupt and process the
-                # new message — otherwise the conversation would be wedged in
-                # interrupt mode and follow-ups would never run. The paused tool
-                # call is now abandoned; the normalizer below closes it (in both
-                # this turn's history and the frontend store) so nothing dangles.
-                logger.debug("new user turn with stale interrupt; clearing it")
-                bridge.deactivate_interrupts(existing_agent)
-                superseded = True
-            else:
-                # Pure reconnect while genuinely paused (no new user input):
-                # re-emit the pending interrupt so the frontend can re-render it.
-                pending = bridge.pending_interrupts(existing_agent, unresolved_only=True)
-                if pending:
-                    agui_interrupts = [
-                        _map_strands_interrupt_to_agui(intr) for intr in pending.values()
-                    ]
-                    run_id = input_data.run_id or str(uuid.uuid4())
-
-                    async def replay_interrupt() -> AsyncIterator[str]:
-                        yield encoder.encode(
-                            RunStartedEvent(
-                                type=AGUIEventType.RUN_STARTED, thread_id=thread_id, run_id=run_id
-                            )
-                        )
-                        yield encoder.encode(
-                            RunFinishedEvent(
-                                type=AGUIEventType.RUN_FINISHED,
-                                thread_id=thread_id,
-                                run_id=run_id,
-                                outcome=RunFinishedInterruptOutcome.model_validate(
-                                    {"interrupts": agui_interrupts}
-                                ),
-                            )
-                        )
-
-                    await release()
-                    return StreamingResponse(
-                        replay_interrupt(), media_type=encoder.get_content_type()
-                    )
-
-        # Single boundary: turn the arbitrary client transcript into valid strands
-        # native history for the 1:1 replay below (stream_async(None)). Closes
-        # calls abandoned by a superseded interrupt (and reports their ids so we
-        # rebalance the frontend store), collapses HITL interrupt-resolution
-        # duplicates, and surfaces any residual (foreign/unrecoverable) imbalance.
-        repairs = normalize_client_transcript(input_data, close_dangling=superseded)
-        if superseded:
-            registry.skip_waiting(thread_id)
-        if repairs.backfill_ids:
-            logger.debug("closed abandoned tool calls on supersede: %s", repairs.backfill_ids)
-        if repairs.collapsed:
-            logger.debug("collapsed duplicate interrupt-resolution results: %s", repairs.collapsed)
-        if repairs.residual is not None:
-            logger.error("refusing malformed transcript: %s", repairs.residual)
-            run_id = input_data.run_id or str(uuid.uuid4())
-
-            async def malformed_gen() -> AsyncIterator[str]:
+            async def error_gen() -> AsyncIterator[str]:
                 yield encoder.encode(
                     RunStartedEvent(
-                        type=AGUIEventType.RUN_STARTED, thread_id=thread_id, run_id=run_id
+                        type=AGUIEventType.RUN_STARTED,
+                        thread_id=thread_id,
+                        run_id=input_data.run_id,
                     )
                 )
                 yield encoder.encode(
                     RunErrorEvent(
                         type=AGUIEventType.RUN_ERROR,
-                        message=f"Malformed conversation history: {repairs.residual}",
-                        code="MALFORMED_HISTORY",
+                        message="No agent session found for resume",
+                        code="RESUME_NO_SESSION",
                     )
                 )
 
             await release()
-            return StreamingResponse(malformed_gen(), media_type=encoder.get_content_type())
+            return StreamingResponse(error_gen(), media_type=encoder.get_content_type())
 
-        async def consume_fresh() -> None:
-            await _consume_run(
-                agui_agent,
-                input_data,
-                merged,
-                exchange,
-                backfill_tool_calls=repairs.backfill_ids,
-            )
+        await equip_entry_agent(input_data, session)
+
+        async def consume() -> None:
+            await _consume_run(agui_agent, input_data, merged, exchange)
 
         return StreamingResponse(
-            _sse_response(
-                consume_fresh,
-                activity_pump,
-                encoder,
-                merged,
-                release,
-                activity_flush=activity_flush,
-                budget=budget,
-            ),
+            _sse_response(consume, encoder, merged, release, run_events=run_events),
             media_type=encoder.get_content_type(),
         )
+
+
+def open_state_channel(
+    input_data: RunAgentInput, session: AguiSession, run_events: RunEvents
+) -> None:
+    """Bind the run's shared state and its state effects, before the run task starts."""
+    app_config = session.resolved.app_config
+    set_state_channel(
+        StateChannel(
+            state=copy.deepcopy(input_data.state) if isinstance(input_data.state, dict) else {},
+            effects=compile_effects(app_config.state_effects) if app_config is not None else [],
+            emit=run_events.delta,
+        )
+    )
+
+
+async def _prepare_resume(
+    agui_agent: StrandsAgent, input_data: RunAgentInput, browser_answers: dict[str, Any]
+) -> bool:
+    """Ready the paused agent for ag-ui-strands' native resume.
+
+    A process that never ran the thread — it restarted, or another replica
+    served the turn that paused — seeds the thread's agent and restores the
+    paused state the client sent, because ag-ui-strands checks a resume against
+    the agent's own checkpoint. The browser's answers to delegated agents'
+    browser tools join the resume as entries for the interrupts carrying them.
+
+    Returns:
+        ``False`` when there is no paused agent to resume.
+    """
+    thread_id = input_data.thread_id or bridge.DEFAULT_THREAD
+    strands_agent = bridge.get_thread_agent(agui_agent, thread_id)
+    cold = strands_agent is None
+    if cold:
+        try:
+            strands_agent = await bridge.ensure_thread_agent(agui_agent, input_data)
+        except Exception:
+            logger.error("could not build an agent for thread_id=%s", thread_id, exc_info=True)
+            return False
+        bridge.seed_history(strands_agent, input_data)
+    if not restore_session_state(strands_agent) and cold:
+        return False
+    if browser_answers:
+        input_data.resume = [
+            *(input_data.resume or []),
+            *browser_resume_entries(bridge.pending_interrupts(strands_agent), browser_answers),
+        ]
+    return True
 
 
 def _install_reference_fetching(app_config: Any) -> None:
@@ -1416,11 +686,13 @@ class AguiSession:
     each other's agents, hooks or activity stream.
     """
 
-    agui_agent: StrandsAgent | StrandsMultiAgent
+    agui_agent: StrandsAgent
     entry_name: str
     event_queue: EventQueue
     resolved: ResolvedConfig
-    entry_inline: bool = False
+    #: Whether the entry is a Swarm or Graph, which ag-ui-strands' orchestrator
+    #: bridge drives and streams itself.
+    orchestrated: bool = False
     #: The MCP client sessions opened for this session, owned so they can be
     #: closed with it. ``None`` when the clients belong to the process instead.
     mcp_clients: MCPLifecycle | None = None
@@ -1446,10 +718,9 @@ def _build_session(
     """Resolve a config into a runnable AG-UI session.
 
     Creates this session's own agents, orchestrations and entry from the shared
-    infra, wires their activity event queue, and wraps the entry in the right
-    AG-UI adapter — :class:`StrandsMultiAgent` for a swarm/graph entry, which
-    kaboo drives itself, or :class:`StrandsAgent` for a plain agent, which
-    ag-ui-strands drives.
+    infra, wires their event queue, and wraps the entry in ag-ui-strands'
+    :class:`StrandsAgent`, which drives an agent and, through its orchestrator
+    bridge, a Swarm or Graph.
 
     Args:
         app_config: The validated config for this session. May differ per run.
@@ -1469,18 +740,22 @@ def _build_session(
     entry_name = _resolve_entry_name(entry, resolved)
     event_queue = resolved.wire_event_queue()
 
-    entry_inline = False
-    agui_agent: StrandsAgent | StrandsMultiAgent
-    if isinstance(entry, MultiAgentBase):
-        # First-class Swarm/Graph entry — kaboo owns the run loop.
-        agui_agent = StrandsMultiAgent(
-            entry, name=entry_name, chat_output=_resolve_chat_output(app_config)
+    orchestrated = isinstance(entry, MultiAgentBase)
+    agui_agent: StrandsAgent
+    if orchestrated:
+        agui_agent = StrandsAgent(
+            agent=cast(Any, entry), name=entry_name, config=_build_agui_config(resolved)
         )
     elif isinstance(entry, Agent):
         # Plain agent or delegate (a forked Agent) — ag-ui-strands drives it.
         # Forward the entry node's kaboo hook providers so interrupt/HITL hooks
         # fire on the per-thread clone ag-ui-strands actually executes (the
         # clone does not inherit the blueprint's HookRegistry).
+        # ag-ui-strands streams the entry itself, so its publisher's group is the
+        # chat's, never a sub-agent's.
+        entry_publisher = getattr(entry, "_kaboo_event_publisher", None)
+        if entry_publisher is not None:
+            entry_publisher.mark_inline_chat_owner()
         forwarded_hooks = get_agent_hook_providers(entry)
 
         # Every per-thread clone gets the request's forwarded props in its
@@ -1499,25 +774,6 @@ def _build_session(
         if bool(getattr(runtime_def, "persist_session_state", True)):
             forwarded_hooks = [SessionStateHook(), *forwarded_hooks]
 
-        # Same reasoning: a continuation pause is an interrupt, so it has to be
-        # raised on the clone that actually executes. Inert without a budget.
-        forwarded_hooks = [ContinuationHook(), *forwarded_hooks]
-
-        # The entry agent, plain or a delegate's coordinator, also forwards its
-        # EventPublisher so its own tool calls land in the activity stream and
-        # enrich the inline tool rows (labels, formatted results, error status,
-        # the anchor a question is drawn at) — otherwise those rows render bare
-        # from the raw AG-UI message, and a turn the entry handled alone has no
-        # group at all. The publisher goes FIRST so TOOL_START is emitted before
-        # any HITL gate interrupts, registering the tool in run 1 so its result
-        # updates on resume. Its group is flagged inline_chat_owner so the UI
-        # enriches the rows but never draws a card: its text is the chat reply.
-        entry_pub = getattr(entry, "_kaboo_event_publisher", None)
-        if entry_pub is not None:
-            entry_pub.mark_inline_chat_owner()
-            entry_inline = True
-            forwarded_hooks = [entry_pub, *forwarded_hooks]
-
         agui_agent = StrandsAgent(
             agent=entry,
             name=entry_name,
@@ -1532,7 +788,7 @@ def _build_session(
         entry_name=entry_name,
         event_queue=event_queue,
         resolved=resolved,
-        entry_inline=entry_inline,
+        orchestrated=orchestrated,
         mcp_clients=mcp_clients,
         transient=transient,
     )
@@ -1570,6 +826,10 @@ class _ConversationSessions:
     def kept(self) -> list[AguiSession]:
         """The sessions still held, for closing their queues at shutdown."""
         return list(self._sessions.values())
+
+    def forget(self, thread_id: str) -> None:
+        """Drop a conversation's session; it resumes cold if it runs again."""
+        self._sessions.pop(thread_id, None)
 
 
 def _make_session_resolver(
@@ -1626,8 +886,6 @@ def create_agui_app(
     auth: AuthVerifier | None = None,
     session_config_key: str | None = None,
     allowed_mcp_hosts: list[str] | None = None,
-    activity_deltas: bool = True,
-    response_budget: int = 0,
 ) -> FastAPI:
     """Create a FastAPI app serving AG-UI SSE from a YAML config.
 
@@ -1671,15 +929,6 @@ def create_agui_app(
         allowed_mcp_hosts: Hosts a submitted config's MCP client URL may point
             at. Set this whenever configs are authored anywhere but this
             repository: an arbitrary URL needs no code to exfiltrate.
-        activity_deltas: Send activity as ``ACTIVITY_DELTA`` JSON Patches after
-            the first snapshot of each response, instead of a full tree every
-            time. Set false to fall back to snapshots throughout.
-        response_budget: Bytes one response may carry before the run pauses at
-            the next tool boundary and continues in a fresh response, so a host
-            that caps response size cannot cut a long turn short. Zero, the
-            default, means no cap. Set it below the host's own limit, leaving
-            room for the events that close the response. See
-            :class:`~kaboo_workflows.hooks.ContinuationHook`.
 
     Returns:
         A FastAPI application with AG-UI SSE streaming.
@@ -1707,8 +956,6 @@ def create_agui_app(
     # pinned for the process when the process owns them; per-run clients are
     # deliberately allowed to end with their run.
     infra.mcp_lifecycle.start(pin_clients=not per_run_configs)
-
-    registry = ActivityRegistry()
 
     resolve_session: Callable[[RunAgentInput], AguiSession]
     static_session: AguiSession | None = None
@@ -1750,15 +997,7 @@ def create_agui_app(
         allow_headers=["*"],
     )
 
-    _add_kaboo_endpoint(
-        app,
-        resolve_session,
-        registry,
-        endpoint,
-        auth=auth,
-        activity_deltas=activity_deltas,
-        response_budget=response_budget,
-    )
+    _add_kaboo_endpoint(app, resolve_session, endpoint, auth=auth)
     if ping_path is not None:
         add_ping(app, ping_path)
 
@@ -1766,11 +1005,55 @@ def create_agui_app(
     async def manifest() -> dict:
         return {"entry": static_session.entry_name if static_session else app_config.entry}
 
+    capabilities = agent_capabilities(app_config, per_run_configs=per_run_configs)
+
+    @app.get(f"{endpoint.rstrip('/')}/capabilities")
+    async def get_capabilities() -> dict:
+        return capabilities.model_dump(by_alias=True, exclude_none=True)
+
     return app
 
 
-def _build_agui_config(resolved: Any) -> StrandsAgentConfig | None:
-    """Build the ag-ui-strands config, wiring session persistence to ``thread_id``.
+def agent_capabilities(
+    app_config: AppConfig, *, per_run_configs: bool = False
+) -> AgentCapabilities:
+    """What a service built from ``app_config`` can do, as AG-UI ``AgentCapabilities``.
+
+    With per-run configs each run brings its own workflow, so the base config
+    only says what every run can rely on and the rest is declared possible.
+    """
+    modes = {orchestration.mode for orchestration in app_config.orchestrations.values()}
+    approvals = per_run_configs or any(
+        agent.interrupt is not None
+        and bool(agent.interrupt.tools or agent.interrupt.tool_approvals)
+        for agent in app_config.agents.values()
+    )
+    return AgentCapabilities(
+        identity=IdentityCapabilities(
+            name=app_config.entry,
+            type="kaboo-workflows",
+            version=pkg_version("kaboo-workflows"),
+        ),
+        multi_agent=MultiAgentCapabilities(
+            supported=per_run_configs or bool(modes),
+            delegation=per_run_configs or "delegate" in modes,
+            handoffs=per_run_configs or "swarm" in modes,
+        ),
+        human_in_the_loop=HumanInTheLoopCapabilities(
+            supported=True, interrupts=True, approvals=approvals
+        ),
+        state=StateCapabilities(snapshots=True, deltas=True),
+        tools=ToolsCapabilities(supported=True, client_provided=True),
+        custom={"perRunWorkflows": per_run_configs},
+    )
+
+
+def _build_agui_config(resolved: Any) -> StrandsAgentConfig:
+    """Build the ag-ui-strands config: browser tools that wait, sessions per thread, no snapshots.
+
+    Every browser tool the entry agent may call waits for the browser's answer
+    (see :mod:`~kaboo_workflows.adapters._client_tools`), so no call is ever
+    answered with a placeholder.
 
     A conversation has exactly one identity: the AG-UI ``thread_id``. When the
     YAML declares a global ``session_manager:``, we hand ag-ui-strands a
@@ -1778,19 +1061,29 @@ def _build_agui_config(resolved: Any) -> StrandsAgentConfig | None:
     (the provider is called once per thread). There is no separately-minted
     server session id — the thread *is* the session.
 
-    Returns ``None`` when no global session manager is configured (nothing to
-    persist), preserving the in-memory per-thread behavior.
+    A run streams only what it adds. ``MESSAGES_SNAPSHOT``, which repeats the
+    whole conversation at every step, is off: with it a response grows with the
+    thread times the steps of the turn, and a long thread reaches the response
+    cap. Clients build the transcript from the streamed events.
     """
     app_config = getattr(resolved, "app_config", None)
+    entry_def = entry_agent_def(app_config) if app_config is not None else None
+    behaviors = waiting(entry_def.client_tools) if entry_def is not None else {}
     session_def = getattr(app_config, "session_manager", None) if app_config else None
-    if session_def is None:
-        return None
 
-    def _session_manager_provider(input_data: RunAgentInput) -> Any:
-        thread_id = input_data.thread_id or bridge.DEFAULT_THREAD
-        return resolve_session_manager(session_def, session_id_override=thread_id)
+    provider = None
+    if session_def is not None:
+        definition = session_def
 
-    return StrandsAgentConfig(session_manager_provider=_session_manager_provider)
+        def provider(input_data: RunAgentInput) -> Any:
+            thread_id = input_data.thread_id or bridge.DEFAULT_THREAD
+            return resolve_session_manager(definition, session_id_override=thread_id)
+
+    return StrandsAgentConfig(
+        tool_behaviors=behaviors,
+        session_manager_provider=provider,
+        emit_messages_snapshot=False,
+    )
 
 
 def _resolve_entry_name(entry: Any, resolved: Any) -> str:

@@ -86,7 +86,7 @@ items:
 
 
 async def test_item_state_references_reach_the_run(tmp_path, monkeypatch):
-    import kaboo_workflows.evals.capture as capture_mod
+    import kaboo_workflows.testing.pipeline as capture_mod
     from kaboo_workflows.evals.capture import EvalPipeline
     from kaboo_workflows.evals.dataset import EvalItem
 
@@ -248,3 +248,87 @@ items:
         await run_eval(dataset)
     report = await run_eval(dataset, config=CONFIGS / "plain.yaml")
     assert report.ok
+
+
+async def test_an_item_answers_the_question_its_agent_asks(tmp_path):
+    dataset = _dataset(
+        tmp_path,
+        f"""
+config: {CONFIGS / "client_tools_plain.yaml"}
+browser_tools: [ask_user]
+items:
+  - id: asks
+    input: "go"
+    answers:
+      ask_user: {{"Which region?": "Europe"}}
+    expect:
+      - type: contains
+        value: Looking at Europe.
+""",
+    )
+    report = await run_eval(dataset)
+    capture = report.outcomes[0].capture
+    assert report.ok, report.outcomes[0].scores
+    assert capture.runs == 2
+    assert capture.open_requests == []
+
+
+async def test_an_unanswered_question_ends_the_item_and_is_reported(tmp_path):
+    dataset = _dataset(
+        tmp_path,
+        f"""
+config: {CONFIGS / "client_tools_plain.yaml"}
+browser_tools: [ask_user]
+items:
+  - id: asks
+    input: "go"
+""",
+    )
+    capture = (await run_eval(dataset)).outcomes[0].capture
+    assert capture.error is None
+    assert capture.open_requests == ["ask_user"]
+    assert "ask_user" in capture.tool_names()
+
+
+async def test_an_item_answers_a_delegated_agents_question(tmp_path):
+    dataset = _dataset(
+        tmp_path,
+        f"""
+config: {CONFIGS / "client_tools_delegate.yaml"}
+browser_tools: [ask_user]
+items:
+  - id: asks
+    input: "go"
+    answers:
+      ask_user: {{"Which region?": "APAC"}}
+""",
+    )
+    capture = (await run_eval(dataset)).outcomes[0].capture
+    assert capture.error is None and capture.open_requests == []
+    assert "Coordinator done." in capture.text
+
+
+@pytest.mark.parametrize(
+    ("approve", "ran", "open_requests"),
+    [(True, True, []), (False, False, []), (None, False, ["kaboo:approval"])],
+)
+async def test_an_item_approves_or_declines_or_leaves_approvals_open(
+    tmp_path, approve, ran, open_requests
+):
+    from tests.fakes import gated_tools
+
+    gated_tools.CALLS.clear()
+    line = "" if approve is None else f"\n    approve: {str(approve).lower()}"
+    dataset = _dataset(
+        tmp_path,
+        f"""
+config: {CONFIGS / "approval_gate.yaml"}
+items:
+  - id: gated
+    input: "file it"{line}
+""",
+    )
+    capture = (await run_eval(dataset)).outcomes[0].capture
+    assert capture.error is None
+    assert capture.open_requests == open_requests
+    assert bool(gated_tools.CALLS) is ran

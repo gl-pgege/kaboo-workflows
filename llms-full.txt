@@ -115,7 +115,7 @@ kaboo-workflows does three things:
 
 1. **YAML → Agents**: Your config defines models, agents, tools, hooks, MCP servers, and orchestrations. `load()` resolves everything into live strands objects.
 2. **Agents → AG-UI SSE**: `kaboo-serve` wraps the resolved agents with [ag-ui-strands](https://github.com/ag-ui-protocol/ag-ui/tree/main/integrations/aws-strands/python) and serves them as AG-UI Server-Sent Events.
-3. **AG-UI → CopilotKit**: Any CopilotKit frontend connects directly. Generative UI, shared state, and human-in-the-loop work out of the box.
+3. **AG-UI → CopilotKit**: Any CopilotKit frontend connects directly. Sub-agents stream as AG-UI's own `SUBAGENT_*` events, the browser's tools reach the agents their `client_tools` allow, approvals pause on native interrupts, tool results update the shared state, and a conversation's memory travels in the AG-UI state, so a run keeps nothing between turns. Generative UI (A2UI, Open Generative UI, MCP Apps) works from any agent.
 
 ```
 YAML config → load() → strands.Agent → StrandsAgent (AG-UI) → FastAPI SSE
@@ -277,9 +277,9 @@ Public subpackages (import directly for the rest of the surface):
 |-------------|-----------|
 | `kaboo_workflows.adapters` | `create_agui_app` — the primary serving entrypoint |
 | `kaboo_workflows.config` | `load`, `load_config`, `load_session`, schema models (`AgentDef`, `AppConfig`, …) |
-| `kaboo_workflows.hooks` | `EventPublisher`, `ContextHook`, `HistoryHook`, `InterruptHook`, guards, `ToolNameSanitizer` |
+| `kaboo_workflows.hooks` | `EventPublisher`, `ContextHook`, `HistoryHook`, `InterruptHook`, `StateEffectsHook`, guards, `ToolNameSanitizer` |
 | `kaboo_workflows.mcp` | `MCPClient`, `MCPServer`, `MCPLifecycle`, transports |
-| `kaboo_workflows.tools` | `ask_user`, tool loaders, `node_as_tool` |
+| `kaboo_workflows.tools` | tool loaders, `node_as_tool` |
 | `kaboo_workflows.converters` | `StreamConverter`, `OpenAIStreamConverter`, `RawStreamConverter` |
 | `kaboo_workflows.renderers` | `AnsiRenderer` |
 | `kaboo_workflows.types` | `EventType`, `StreamEvent`, `SessionManifest` family |
@@ -400,8 +400,9 @@ Loaders, interpolation, infra resolution, and the full YAML schema models
 ## Hooks — [`kaboo_workflows.hooks`](api/hooks.md)
 
 `EventPublisher`, `HistoryHook`, `InterruptHook`, `MaxToolCallsGuard`,
-`MultiAgentStopGuard`, `SessionStateHook`, `StopGuard`, `ToolNameSanitizer`,
-`restore_session_state`, `session_state_snapshot`, `stop_guard_from_event`.
+`MultiAgentStopGuard`, `SessionStateHook`, `StateEffectsHook`,
+`StateEffectCall`, `StopGuard`, `ToolNameSanitizer`, `restore_session_state`,
+`session_state_snapshot`, `stop_guard_from_event`.
 
 ## MCP — [`kaboo_workflows.mcp`](api/mcp.md)
 
@@ -410,7 +411,7 @@ Loaders, interpolation, infra resolution, and the full YAML schema models
 
 ## Tools — [`kaboo_workflows.tools`](api/tools.md)
 
-`ask_user`, the `load_tool*` discovery helpers, `node_as_tool` /
+The `load_tool*` discovery helpers, `node_as_tool` /
 `node_as_async_tool`, `resolve_tool_spec(s)`, `serialize_multiagent_result`.
 
 ## Converters — [`kaboo_workflows.converters`](api/converters.md)
@@ -710,8 +711,10 @@ chapter in the [Configuration reference](configuration/README.md)):
 
 Tools and hooks are not top-level sections — they are declared per agent, as
 `agents.<name>.tools` and `agents.<name>.hooks`. Tools are Python `@tool`
-functions loaded from files or modules, plus built-ins like `ask_user`; hooks are
-lifecycle callbacks for event publishing, interrupts and guards. The remaining
+functions loaded from files or modules; tools the browser runs, such as
+`ask_user`, arrive with each run and reach the agents whose `client_tools` name
+them. Hooks are lifecycle callbacks for event publishing, interrupts and
+guards. `state_effects` write tool results into the shared state. The remaining
 root keys are settings rather than wiring: `history`, `telemetry`, `runtime`,
 `log_level` and `version`, plus `vars` for interpolation.
 
@@ -737,51 +740,43 @@ own:
 
 `kaboo-serve` (or `create_agui_app` in `kaboo_workflows.adapters`) wraps the
 resolved entry with [ag-ui-strands](https://github.com/ag-ui-protocol/ag-ui) and
-exposes it as an AG-UI SSE endpoint. A single run emits a well-formed event
-stream:
+exposes it as an AG-UI 1.0 SSE endpoint. A run uses the protocol's own events
+throughout:
 
 ```text
-RUN_STARTED → TEXT_MESSAGE_* → TOOL_CALL_* → ACTIVITY_SNAPSHOT → ACTIVITY_DELTA* → RUN_FINISHED
+RUN_STARTED → STATE_SNAPSHOT → TEXT_MESSAGE_* / TOOL_CALL_* → SUBAGENT_STARTED → (tagged events) → SUBAGENT_FINISHED → STATE_DELTA → RUN_FINISHED
 ```
 
-`ACTIVITY_SNAPSHOT` events carry the hierarchical activity tree that
-[kaboo-react](https://github.com/gl-pgege/kaboo-react) renders, while
-[kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) can persist and
-replay the whole stream. Human-in-the-loop pauses surface as interrupts on
-`RUN_FINISHED` and resume cleanly — see
-[human-in-the-loop](workflows/human-in-the-loop.md).
+- **Sub-agents** are `SUBAGENT_*` events, with their text, reasoning and tool
+  calls tagged by `subagentRunId`, which
+  [kaboo-react](https://github.com/gl-pgege/kaboo-react) folds into cards
+  ([Sub-agents in a chat UI](recipes/chat-ui-activity.md)).
+- **Pauses** end the run with `RUN_FINISHED`: waiting on a tool the browser
+  runs (`pendingToolCallIds`), or on approvals (an `interrupt` outcome) — see
+  [human-in-the-loop](workflows/human-in-the-loop.md).
+- **State changes** — the conversation's sessions and the
+  [shared state](recipes/shared-state.md) — leave as `STATE_DELTA`s.
+- **Usage** on `RUN_FINISHED` counts every agent of the run.
 
-Each response carries one snapshot and then `ACTIVITY_DELTA` events holding a
-JSON Patch against it, so the tree crosses the wire once rather than in full on
-every change. The run's closing snapshot restates it whole. Pass
-`activity_deltas=False` to `create_agui_app` to send snapshots throughout.
+[kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime) persists the stream
+and replays it on reconnect. `GET /invocations/capabilities` describes what the
+service supports as AG-UI `AgentCapabilities`.
 
-The tree keeps one copy of everything it describes: a group's `tools` own its
-tool calls and its `timeline` refers to them by `toolUseId`, and the timeline's
-text entries are the only copy of its streamed prose.
+### Response size
 
-A group names the run that opened it (`runId`), its turn (`turnId`) and every
-run that streamed into it (`runIds`). A turn paused for an approval or a
-question resumes in a new run, which carries on in the turn's groups, so a
-client that keys anything by run (a reply, a version the run made) finds its
-turn through `runIds`.
+A run streams only what it adds: its text, its tool calls and their results,
+its sub-agents' events and its state changes. It never re-sends the
+conversation. ag-ui-strands' `MESSAGES_SNAPSHOT`, which repeats the whole
+transcript after every step, is turned off, because with it a response grows
+with the length of the thread times the steps of the turn, and a long thread
+eventually reaches a host's response cap (AWS AgentCore closes the socket at
+100 MiB). Clients build the transcript from the events, as CopilotKit does, and
+send it back with the next turn.
 
-### Runs larger than one response
-
-Some hosts cap how much a single HTTP response may carry — AWS AgentCore closes
-the socket at 100 MB, which reaches the browser as a dropped connection rather
-than an answer. Pass `response_budget=<bytes>` to `create_agui_app` and a run
-that fills its response stops at the next tool call instead: it pauses there,
-the response ends with a proper `RUN_FINISHED`, and the client resumes into a
-response with a fresh budget.
-
-The pause is an ordinary interrupt, which is what makes it cheap. The pending
-tool call and the agent's state are persisted and restored by the machinery
-that already serves approvals, so the tool runs exactly once and nothing is
-recomputed. It is marked `reason: "continuation"`, and clients resolve it
-immediately rather than prompting anyone; kaboo-react does this for you. The
-turn id is unchanged across the resume, so the two responses render as one
-turn. The default of `0` means no cap and no pausing.
+Measured in the lab, a deliberately long turn (twenty SQL results of up to 200
+rows, a 63-component A2UI surface, a 40 KB generated visual and a dashboard of
+twelve widgets) sends about 230 KB, and every turn of a twelve-turn thread sends
+the same 28 KB whatever came before it.
 
 ## References & attachments
 
@@ -832,9 +827,11 @@ in kaboo-runtime for where that goes on a Node host.
 ## Statelessness: what a run keeps and what it carries
 
 A run keeps nothing. Everything a conversation accumulates arrives with the turn
-on the AG-UI **state channel** — `kaboo_history` for sub-agent transcripts,
-`kaboo_session` for a pending human-in-the-loop gate — and leaves in the outgoing
-`STATE_SNAPSHOT` the host persists.
+on the AG-UI **state channel**, under `kaboo_sessions`: every agent's transcript
+(`history`), the paused checkpoint of a run waiting on the person (`paused`),
+and the approvals it waits on (`approvals`). The run writes it back as one
+`STATE_DELTA`, and the host persists it. kaboo-runtime keeps the key on the
+server, so a browser never sees or sends it.
 
 That is what makes the rest safe: a service can rebuild its agents every run,
 scale to a second replica, or restart mid-approval, and behave identically,
@@ -1908,11 +1905,11 @@ MCP servers are shared across sessions (started once), but agents and their conv
 
 ## Pending Interrupts Survive a Restart Without a Store
 
-A session manager persists the *conversation*. An interrupt is different: when an agent pauses on `ask_user` or a gated tool, what has to survive is the open gate, and it lives in the agent object's own interrupt state. That object is per-process, so before this existed a restart between the question and the answer stranded the approval — the user clicked approve and got "No agent session found for resume".
+A session manager persists the *conversation*. A pause is different: when an agent waits on a question or a gated tool, what has to survive is the open gate, and it lives in the agent object's own interrupt state. That object is per-process, so before this existed a restart between the question and the answer stranded the approval — the user clicked approve and got "No agent session found for resume".
 
-There is nothing to configure. Serving through `create_agui_app`, the pending interrupt travels on the AG-UI **state channel** under `kaboo_session`, the same channel that carries `kaboo_history`:
+There is nothing to configure. Serving through `create_agui_app`, the paused checkpoint travels on the AG-UI **state channel** under `kaboo_sessions.paused`, beside the agents' transcripts:
 
-- On the way out, it is written into the `STATE_SNAPSHOT` your host already persists.
+- On the way out, it is written in the run's closing `STATE_DELTA`, which your host already persists.
 - On the way in, it is read from `RunAgentInput.state` and restored onto the agent that runs the resume — including one that has never seen the conversation, which is how a resume works after a restart, on a second replica, or when the session is rebuilt per run.
 - A new message instead of a resume supersedes the gate, on a fresh process as on a warm one. Nothing is restored, the paused call is closed, and the cleared state goes out, so a host replaying an older snapshot cannot bring back a gate already answered.
 
@@ -3562,7 +3559,7 @@ the sessions leak for the life of the process.
 
 What is left at process level shrinks to what is genuinely process-level: the parsed base, the model objects, and any MCP server processes. Everything a conversation touches — agents, orchestrations, entry, client sessions — is built for the run and released with it.
 
-This is only safe because conversation state does not live in those objects. History arrives each turn in `state.kaboo_history`, and a pending interrupt arrives in `state.kaboo_session` ([Chapter 7](Chapter_07.md)). Rebuilding is therefore indistinguishable from retaining, which is what lets you run a second replica, restart mid-approval, or serve a workflow edited thirty seconds ago.
+This is only safe because conversation state does not live in those objects. History and a pending pause arrive each turn in `state.kaboo_sessions` ([Chapter 7](Chapter_07.md)). Rebuilding is therefore indistinguishable from retaining, which is what lets you run a second replica, restart mid-approval, or serve a workflow edited thirty seconds ago.
 
 ### Mental model
 
@@ -4381,9 +4378,9 @@ The active trace id rides outward so hosts can attach scores to the exact
 trace:
 
 - `AGENT_COMPLETE` events carry `trace_id`;
-- activity snapshots expose `traceId` per group and `traceByRun` per run
-  (`ACTIVITY_SNAPSHOT` → kaboo-react's `StreamGroup.traceId` /
-  `ActivityState.traceByRun`);
+- `RUN_FINISHED.metadata.traceId` names the run's root trace, and each
+  sub-agent's `SUBAGENT_STARTED.metadata.traceId` its own (kaboo-react's
+  `ActivityState.traceByRun` / `StreamGroup.traceId`);
 - `current_trace_id()` (exported from `kaboo_workflows`) returns the ambient
   trace id, `None` when telemetry is off.
 
@@ -4719,24 +4716,19 @@ public symbol has a docstring and an API page.
 
 # Ask the user, and request inputs
 
-An agent that guesses when it should ask produces confident wrong answers. The
-library pauses a run for a question with `ask_user`, gates risky tools behind
-an approval, and resumes the same run with the answer
-([Human-in-the-loop](../workflows/human-in-the-loop.md) has the protocol).
-This recipe adds the parts a product needs on top: custom requests — "attach a
-file", "pick a data source" — that a UI renders as its own panel.
+An agent that guesses when it should ask produces confident wrong answers. A
+question, a file upload or a choice of data source is a tool the browser runs:
+the client declares it with each run, the agent calls it, the run waits, and the
+person's answer goes back to the agent that asked
+([Human-in-the-loop](../workflows/human-in-the-loop.md) has the protocol). The
+server needs no code for it, only an allow-list.
 
 ## The agent side
 
 ```yaml
 agents:
   assistant:
-    tools:
-      - ./tools/requests.py:request_files
-      - ./tools/requests.py:request_datasources
-    interrupt:
-      tools: []             # tools that need approval before running
-      ask_user: true        # grant the built-in ask_user tool
+    client_tools: [ask_user, request_files, request_datasources]
     system_prompt: |
       When the question is ambiguous, ask once with ask_user, putting every
       open question into that one call with a few options each. When the data
@@ -4744,98 +4736,102 @@ agents:
       prose.
 ```
 
-Grant `ask_user` to the agent that talks to the user, and usually not to the
-analysts it delegates to: questions should come from one voice, and a
-sub-agent's question pauses the whole run anyway.
+`client_tools` names the browser's tools this agent may call. Any agent may
+have one, delegates included, and an agent never sees a browser tool its list
+doesn't name. Questions are usually best from one voice — the agent the person
+talks to — but an analyst deep in a delegate can ask too: its question shows in
+the main chat under its name, and its coordinator is told what was asked and
+answered.
 
-## Questions are multiple choice
+## The browser side
 
-`ask_user` only asks multiple-choice questions: two or more options each,
-`multiple` for multi-select, and an **Other** choice the person can always use
-to answer in their own words. Prompts do not need to mention Other — the card
-adds it, and the tool strips one the model lists. A free-text question is
-refused with a tool error that teaches the rule, so the model rephrases it with
-options.
+The client declares each tool, with its description and schema, and draws what
+the person answers. With kaboo-react:
 
-## A custom request is a tool that interrupts
+```tsx
+import { useAskUserTool, useRequestTool } from "@pgege/kaboo-react";
 
-An input that is not a question — a file, a data source — is its own request
-kind. Any tool can pause the run: declare it with `context=True` and call
-`tool_context.interrupt` with a reason whose `type` names your kind. Whatever
-the client sends back on resume becomes the interrupt's return value, and the
-tool turns it into a result the model can read:
+function BrowserTools() {
+  useAskUserTool();
+  useRequestTool({
+    name: "request_datasources",
+    description: "Ask the person to pick data sources and wait for the choice.",
+    parameters: RequestDatasourcesArgs,
+    render: DatasourcesPanel,
+  });
+  return null;
+}
+```
+
+- **`ask_user`** asks multiple-choice questions: two or more options each,
+  `multiple` for multi-select, and an **Other** choice for an answer in the
+  person's own words. The answer is a `{question: answer}` map.
+- **A request** is any other input. Its panel calls `answer` with what the
+  model should read; `skip` tells the model the person declined.
+- **Arguments are checked** against the tool's schema. A malformed call is
+  answered with an error that names the problem, so the model corrects it
+  instead of the person seeing a broken panel.
+- **Several requests show in order**: one agent's questions as one card, and
+  several agents' requests one after another.
+
+## What the user experiences
+
+- The run pauses; the chat shows the card or panel; the answer resumes the
+  agent that asked, mid-thought, rather than starting over.
+- There is no time limit. The paused agent travels in the conversation's state,
+  so the person can close the browser, come back days later on another device,
+  and answer; it also survives a restart or a second replica
+  ([A pause outlives the process](../workflows/human-in-the-loop.md#a-pause-outlives-the-process-that-opened-it)).
+- If the person sends a message instead of answering, the request is skipped
+  and the agent answers the message
+  ([The person can move on](../workflows/human-in-the-loop.md#the-person-can-move-on)).
+
+## A request that needs the server
+
+When answering a request takes server logic — checking the person may use a
+data source, say — make it a server tool that interrupts. Declare it with
+`context=True` and call `tool_context.interrupt` with a reason whose `type`
+names your kind. Whatever the client sends back on resume becomes the
+interrupt's return value:
 
 ```python
 import json
-from typing import Any, Literal
+from typing import Any
 
 from strands import tool
 from strands.types.tools import ToolContext
 
-Kind = Literal["sql", "kafka", "prometheus"]
-
 
 def _answer(response: Any) -> str:
-    if response is None:
-        return "The user did not provide a selection."
     if isinstance(response, dict) and response.get("status") == "cancelled":
         return "The user skipped the request."
     return json.dumps(response, ensure_ascii=False)
 
 
-@tool(name="request_datasources", context=True)
-def request_datasources(
-    tool_context: ToolContext, reason: str, kinds: list[Kind] | None = None
-) -> dict:
-    """Pause and ask the user to select one or more data sources.
-
-    Use this when the analysis needs a data source the run does not have.
+@tool(name="pick_account", context=True)
+def pick_account(tool_context: ToolContext, reason: str) -> dict:
+    """Pause and ask the user to pick one of their billing accounts.
 
     Args:
-        reason: Why the data source is needed, shown to the user.
-        kinds: The kinds of data source to offer; all when omitted.
+        reason: Why an account is needed, shown to the user.
     """
-    response = tool_context.interrupt(
-        name="request_datasources",
-        reason={
-            "type": "datasources",
-            "message": reason,
-            "kinds": list(kinds) if kinds else ["sql", "kafka", "prometheus"],
-        },
-    )
+    response = tool_context.interrupt(name="pick_account", reason={"type": "account", "message": reason})
     return {"status": "success", "content": [{"text": _answer(response)}]}
 ```
 
-The `reason` payload is the contract with your UI:
-
-- **`type`** names the kind. kaboo-react renders it with the component you
-  register for it (`interruptRenderers={{ datasources: DatasourcePicker }}`),
-  and shows a minimal card with the `message` and Skip wherever nothing is
-  registered, so the chat never stalls.
-- **`message`** says what the request is for.
-- **Your own fields** (`kinds` here) reach the renderer unchanged in the
-  interrupt's `metadata`.
-- **A skipped request is an answer.** It arrives as `{"status": "cancelled",
-  "skipped": True}`; tell the model the user skipped it, so it can continue
-  without the input instead of asking again.
-
-## What the user experiences
-
-- The run pauses; the chat shows the card or panel; the answer resumes the
-  *same* run, so the agent continues mid-thought rather than starting over.
-- There is no time limit. The pause lives in the stored conversation, so the
-  person can close the browser, come back days later on another device, and
-  answer; it also survives a restart or a second replica
-  ([A gate outlives the process](../workflows/human-in-the-loop.md#a-gate-outlives-the-process-that-opened-it)).
-- If the person sends a message instead of answering, the request is skipped
-  and the agent answers the message
-  ([The person can move on](../workflows/human-in-the-loop.md#the-person-can-move-on)).
+kaboo-react renders the interrupt with the component registered for its type
+(`interruptRenderers={{ account: AccountPicker }}`), and shows a minimal card
+with the `message` and Skip wherever nothing is registered.
 
 ## Test it
 
-A scripted model can call your request tool, and `Pipeline.turn(resume=...)`
-answers it, including on a fresh pipeline to prove the restart case
-([Testing](../testing.md#interrupts-and-resume)).
+A scripted model can call a browser tool, and `Pipeline.turn(tools=..., messages=...)`
+answers it the way a browser does ([Testing](../testing.md#browser-tools-approvals-and-resume)).
+Lab scenarios:
+[question-several](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-several.yaml),
+[question-subagent](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-subagent.yaml)
+and
+[request-datasources](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/request-datasources.yaml).
 
 # docs/recipes/attachments-and-images.md
 
@@ -4919,28 +4915,38 @@ attachment chips
 
 # docs/recipes/chat-ui-activity.md
 
-# Activity a chat UI can show
+# Sub-agents in a chat UI
 
 A multi-agent run can take minutes. Users trust it when they can see it
 working — which specialist is on the job, what it is doing right now, in
-words rather than function names. Two pieces of config produce that, and
-kaboo-react renders it.
+words rather than function names. Every agent a delegate runs streams on the
+wire as AG-UI's own sub-agent events, and kaboo-react folds them into cards.
 
 ## What the client receives
 
-`create_agui_app` folds every agent's stream into **activity groups** and sends
-them alongside the chat reply: a snapshot first, then JSON Patches as they
-change (`activity_deltas`). Each group is one card in the UI:
+The entry agent's stream *is* the chat reply: its text and tool calls arrive as
+ordinary AG-UI events. Each agent it delegates to, at any depth, arrives as one
+invocation:
 
-- **the agent's title**, and the task it was handed;
-- **its tool calls**, each with a readable label, arguments and result;
-- **its text**, its token usage, and any [structured output](structured-outputs.md);
-- **its children**, for agents it delegated to.
+- **`SUBAGENT_STARTED`** opens it, with a `subagentRunId`, the agent's `name`,
+  the `parentToolCallId` of the delegating call and the
+  `parentSubagentRunId` of the invocation that made that call. `metadata`
+  holds its `title` and the `task` it was handed.
+- **Its text, reasoning and tool calls** follow as the standard events, each
+  tagged with its `subagentRunId`. Tool arguments stream as the model writes
+  them, so a UI can draw a widget or a query while it is being written.
+- **`TOOL_CALL_RESULT`** carries each result, with `metadata.approval` when the
+  call needed one ([Human-in-the-loop](../workflows/human-in-the-loop.md#remembered-approvals)).
+- **`SUBAGENT_FINISHED`** closes it: `completed` with its `result`, or
+  `suspended` while it waits on a question or an approval. `metadata` holds its
+  token `usage`, its `cost` and, for a
+  [structured output](structured-outputs.md), the `outputSchema` name.
+- **`SUBAGENT_ERROR`** closes it when it fails.
 
-The entry agent has no card: its stream *is* the chat reply. Its own tool calls
-still arrive, in a group flagged `inlineChatOwner`, whether it is a plain agent
-or a delegate's coordinator, so the client can label those rows, draw a question
-at its call and see every group of a turn, without drawing that group.
+A paused invocation keeps its `subagentRunId`, so the run that resumes it opens
+a new segment of the same card. The events are stored and replayed like any
+others, so a reload draws the same cards. `RUN_FINISHED.usage` counts every
+agent, so a UI can show a true total.
 
 ## Name the cards
 
@@ -4978,23 +4984,19 @@ mcp_clients:
       web-research___read_pages: Reading web pages
 ```
 
-A tool call shows its label (`toolLabel`) instead of
-`web-research___read_pages`. Label every tool a user will see; an unlabelled
-one shows its raw name.
-
-## Keep it fast
-
-- **Leave `activity_deltas` on.** Sending a full tree on every change grows
-  with the run; on long multi-agent runs that is what fills a response
-  ([Serve on AgentCore in production](production-serving.md#stay-under-the-response-cap)).
-- **Do not route the chat reply through a group.** The entry agent's text is
-  the answer and streams as ordinary AG-UI text messages.
+A sub-agent's tool call carries its label in `TOOL_CALL_START.metadata.label`,
+and the card shows "Reading web pages" instead of `web-research___read_pages`.
+Labels can also be set per agent, under `agents.<name>.tool_labels`.
 
 ## Test it
 
-`TurnResult.groups` holds the cards as the UI would, so a test can assert the
-tree a user would see — which agents worked, nested under whom
-([Testing](../testing.md#multi-agent-runs-and-activity)).
+`TurnResult.groups` holds the cards as a client folds them, so a test can assert
+what a user would see — which agents worked, nested under whom, and with which
+tools ([Testing](../testing.md#multi-agent-runs)). Lab scenarios:
+[delegate-dashboard](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/delegate-dashboard.yaml),
+[nested-dashboard](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/nested-dashboard.yaml)
+and
+[parallel-dashboard](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/parallel-dashboard.yaml).
 
 # docs/recipes/cost-and-context.md
 
@@ -5126,6 +5128,107 @@ Token usage per run arrives in the activity stream and in `TurnResult.usage_by_r
 in tests; with [telemetry](../evaluation.md#enable-telemetry) on, every model
 call's tokens and latency land in your tracing backend. Measure before and
 after each change — caching in particular is easy to break silently.
+
+# docs/recipes/generative-ui.md
+
+# Generative UI from any agent
+
+CopilotKit draws UI from what an agent streams, at four levels of freedom:
+your own components for your own tools, declarative surfaces from a catalog
+(A2UI), one-off sandboxed visuals (Open Generative UI), and apps an MCP server
+ships (MCP Apps). The first three run in CopilotKit's runtime as middleware over
+the agent's stream; kaboo-workflows' part is to put every agent's tool calls on
+the wire, delegates included, and to give each agent only the tiers it may use.
+
+## Your components for your tools
+
+Every agent's tool calls stream with their arguments as the model writes them,
+sub-agents' tagged with their `subagentRunId`. A client renderer keyed by tool
+name (CopilotKit's `renderToolCalls`, or a kaboo-react card) draws a widget, a
+query or a dashboard while it is being written, in the chat or inside the
+sub-agent's card alike. Nothing to configure here.
+
+## Declarative surfaces (A2UI)
+
+```yaml
+agents:
+  analyst:
+    client_tools: [render_a2ui]
+```
+
+- **`render_a2ui` is offered to the agents allowed it.** The client sends its
+  catalog as context; kaboo-workflows gives each allowed agent a `render_a2ui`
+  tool described by that catalog, and the catalog reaches no other agent.
+- **The surface paints from the streamed arguments.** CopilotKit's A2UI
+  middleware draws it in the chat as the call streams, from a delegate as from
+  the entry agent.
+- **The tool doesn't wait.** It checks the components against the catalog and
+  answers "Rendered surface …", or names what is wrong so the model fixes it
+  and calls again.
+- **An action on a surface is the person's turn.** A button that isn't handled
+  in the browser reaches the agent as `forwardedProps.a2uiAction`, and the
+  agent reads it as a message: `I used "break_down" on the "churn" surface (by: segment).`
+
+Widgets in a catalog should take an id (a saved query's) rather than data, so a
+surface stays small and its numbers stay live.
+
+## One-off visuals (Open Generative UI)
+
+```yaml
+agents:
+  analyst:
+    client_tools: [generateSandboxedUi]
+```
+
+`generateSandboxedUi` is a browser tool: CopilotKit's Open Generative UI
+middleware renders its HTML, CSS and JavaScript in a sandboxed iframe as the
+arguments stream, and the browser answers the call once it has drawn it. Give
+the sandbox read-only functions that fetch data by id (the lab's
+`getQueryData`), so the visual carries no data of its own.
+
+## Apps from MCP servers (MCP Apps)
+
+A tool whose MCP server ships a UI resource reaches the run through
+CopilotKit's MCP Apps middleware, which adds the server's model-visible tools
+to `RunAgentInput.tools` under their own names. Allow them like any browser
+tool:
+
+```yaml
+agents:
+  analyst:
+    client_tools: [partner_benchmarks]
+```
+
+The call waits like a browser tool. The middleware runs it against its server
+when the run ends waiting on it, sends its result and the app to the chat, and
+kaboo-runtime goes on with the agent in the same run, so the turn finishes with
+the agent's answer. Tools the server marks as visible to the app only never
+reach a model.
+
+## Which one to use
+
+Use your own components, or A2UI, for anything that is yours to design; Open
+Generative UI for a visual no component covers; and MCP Apps for UI that comes
+from a server you don't own. Say where an answer goes in the agent's prompt,
+for example:
+
+```text
+Where an answer goes:
+- A short fact: one or two sentences.
+- A figure, a trend or a small table that answers the question now: render it
+  inline with render_a2ui.
+- Several parts, or anything worth keeping: a dashboard on the canvas.
+- A one-off visual no catalog component covers: generateSandboxedUi.
+```
+
+Lab scenarios:
+[a2ui-inline](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/a2ui-inline.yaml),
+[a2ui-subagent](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/a2ui-subagent.yaml),
+[a2ui-action](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/a2ui-action.yaml),
+[ogui-visual](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/ogui-visual.yaml),
+[mcp-partner](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/mcp-partner.yaml)
+and
+[viewer-parity](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/viewer-parity.yaml).
 
 # docs/recipes/guard-hooks.md
 
@@ -5413,10 +5516,12 @@ can lift it into your own project.
 | [Call MCP tools as the signed-in user](user-identity-mcp.md) | Tools behind a gateway must act with the caller's permissions |
 | [Tools that need run context](tools-with-run-context.md) | A tool keeps state per conversation or must act once per turn |
 | [Guard hooks for every agent](guard-hooks.md) | Runs should survive malformed transcripts, retry loops and expired sign-ins |
-| [Ask the user, and request inputs](asking-the-user.md) | An agent needs an answer, an approval, a file or a data source mid-run |
+| [Ask the user, and request inputs](asking-the-user.md) | An agent needs an answer, a file or a data source mid-run |
+| [Shared state](shared-state.md) | The person and every agent should see what the conversation built, without looking it up |
+| [Generative UI from any agent](generative-ui.md) | Answers should come as surfaces, visuals or partner apps in the chat |
 | [Structured outputs a UI can render](structured-outputs.md) | An agent's result should arrive as typed data for a card, not prose |
 | [Images and file attachments](attachments-and-images.md) | Users attach files, or tools return images |
-| [Activity a chat UI can show](chat-ui-activity.md) | Users should see which agent is working on what, in words |
+| [Sub-agents in a chat UI](chat-ui-activity.md) | Users should see which agent is working on what, in words |
 | [Cost and context control](cost-and-context.md) | Long, tool-heavy runs cost too much or outgrow the context window |
 
 [Testing your workflows](../testing.md) covers proving any of these with a
@@ -5605,8 +5710,6 @@ app = create_agui_app(
     allowed_mcp_hosts=["gateway.internal.example.com"],
     auth=verify_run_token,
     ping_path=None,
-    activity_deltas=True,
-    response_budget=CONTINUATION_BUDGET,
 )
 ```
 
@@ -5622,9 +5725,6 @@ app = create_agui_app(
   as them — see [Call MCP tools as the signed-in user](user-identity-mcp.md).
 - **`ping_path=None`** because the packaged health check always answers
   healthy, and AgentCore needs more than that (below).
-- **`activity_deltas`** sends activity as JSON Patches after the first
-  snapshot. Full snapshots on every change are what fill a response on long,
-  multi-agent runs.
 - **The Bedrock read timeout** defaults to strands' value, which a long
   thinking turn can exceed. Raise it for the slowest call you expect.
 
@@ -5663,25 +5763,18 @@ the response ends — in the ASGI middleware below, which sees both.
 AgentCore closes the socket once a response reaches 100 MiB, with no error of
 its own. The run dies without a terminal event, and CopilotKit reports
 whichever tool call was open as failed — the user is told a healthy tool broke.
-Two budgets keep that from happening:
 
-1. **`response_budget`** pauses the run at the next tool boundary once the
-   response has carried that many bytes, and continues the same turn in a fresh
-   response. The user loses nothing. Clients resolve the pause on their own; it
-   is an interrupt marked `reason: "continuation"`
-   ([Human-in-the-loop](../workflows/human-in-the-loop.md)).
-2. **A hard backstop** for a response that fills without ever reaching a tool
-   call: wrap the ASGI `send` so it forwards whole SSE frames, and once the
-   budget is spent, close the stream with a real `RUN_FINISHED` and a short
-   message saying the answer was cut off. A truncated answer with a reason
-   beats a failure with none.
-
-Give the pause room to fire first:
+A response carries only what its turn adds, never the conversation again (see
+[Response size](../concepts.md#response-size)), so a turn would need tens of
+megabytes of new tool results to come near the cap. Keep a backstop anyway:
+wrap the ASGI `send` so it forwards whole SSE frames, and once the budget is
+spent, close the stream with a real `RUN_FINISHED` and a short message saying
+the answer was cut off. A truncated answer with a reason beats a failure with
+none.
 
 ```{.python notest}
 AGENTCORE_RESPONSE_CAP = 104_857_600
 HARD_BUDGET = AGENTCORE_RESPONSE_CAP - 10 * 1024 * 1024
-CONTINUATION_BUDGET = HARD_BUDGET * 3 // 4
 ```
 
 The margin under the cap leaves room for the closing events and for
@@ -5796,6 +5889,111 @@ the run's clients stop with the call, as they do with a streamed run.
 - [Evaluation: enable telemetry](../evaluation.md#enable-telemetry) for traces
   in Langfuse or any OTLP backend
 - `examples/agentcore/` for inbound auth styles on AgentCore
+
+# docs/recipes/shared-state.md
+
+# Shared state: state effects and workspace views
+
+A conversation builds things — dashboards, saved queries, a report — and the
+person and every agent need to know what exists without asking for it. Two
+pieces of config keep that in the AG-UI state the conversation already carries:
+
+- **State effects** write a tool's result into the state the moment the call
+  succeeds. The client receives each change as a `STATE_DELTA`, so a canvas can
+  follow the agent while it works.
+- **Workspace views** show an agent parts of that state at every model call, so
+  it extends what was built instead of listing and reading it first.
+
+## Write what a tool did
+
+```yaml
+state_effects:
+  - tool: sql-workbench___create_queries
+    mapper: my_service.effects:queries_saved
+  - tool: "dashboard___*_widgets"          # an fnmatch glob
+    mapper: my_service.effects:dashboard_changed
+  - tool: project___get_context
+    path: /kaboo_workspace/project          # the parsed result, written whole
+```
+
+An effect names a tool, or a glob of names, and either a `path` to write the
+tool's parsed result to, or a `mapper`. A mapper receives a
+`StateEffectCall` — the tool, its input, its result (parsed as JSON when it is
+JSON), the agent, the run and the state before the effect — and returns JSON
+Patch operations:
+
+```python
+from typing import Any
+
+from kaboo_workflows.hooks import StateEffectCall
+
+ROOT = "/kaboo_workspace"
+
+
+def queries_saved(call: StateEffectCall) -> list[dict[str, Any]]:
+    operations: list[dict[str, Any]] = []
+    if "kaboo_workspace" not in call.state:
+        operations.append({"op": "add", "path": ROOT, "value": {"queries": {}, "changes": []}})
+    for query in (call.result or {}).get("created", []):
+        operations.append(
+            {"op": "add", "path": f"{ROOT}/queries/{query['query_id']}", "value": {"title": query["title"]}}
+        )
+    operations.append(
+        {"op": "add", "path": f"{ROOT}/changes/-", "value": {"agent": call.agent, "summary": "Saved queries"}}
+    )
+    return operations
+```
+
+- **Effects run for every agent**, delegates included, after a call succeeds. A
+  failed call writes nothing.
+- **Keep state small and by reference.** Write ids, titles and what changed,
+  never data rows: the state travels with every run, and widgets fetch their
+  own rows by id.
+- **One writer per key.** The agent's effects own `kaboo_workspace`; the
+  person's own edits go to the services, and the agent sees them through
+  context or the next effect. kaboo-runtime keeps server-owned keys away from
+  the browser ([state ownership](https://gl-pgege.github.io/kaboo-runtime/replay-and-state/)).
+
+## Show it to an agent
+
+```yaml
+agents:
+  analyst:
+    workspace: [/kaboo_workspace]
+  visualizer:
+    workspace: [/kaboo_workspace/dashboards]
+```
+
+`workspace` lists JSON Pointers into the state. Before every model call, delegates
+included, the agent's latest message opens with what they point at, current as
+of that call:
+
+```text
+The workspace — what this conversation has built, current as of now:
+/kaboo_workspace: {"dashboards":{"d_2":{"title":"Churn by region","version":3}},...}
+```
+
+The agent's own conversation is untouched; only what reaches its model changes.
+Point each agent at what it needs: a visualizer needs the dashboards, not every
+saved query.
+
+## What it saves
+
+In the lab, extending a dashboard the conversation built takes the agent two
+tool calls with a workspace view and four without, the extra two being lookups
+(`dashboard___list_dashboards`, `dashboard___get_dashboard`) that only re-read
+what the state already held. Run both sides with
+`yarn lab compare workspace-vs-read --live` for a real model's numbers.
+
+## Test it
+
+`TurnResult.state()` applies every `STATE_DELTA` the run sent, so a test can
+assert what the workspace holds after a turn. Lab scenarios:
+[workspace-extend](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/workspace-extend.yaml),
+[workspace-extend-read](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/workspace-extend-read.yaml),
+[workspace-refresh](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/workspace-refresh.yaml)
+and
+[delegate-dashboard](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/delegate-dashboard.yaml).
 
 # docs/recipes/skills.md
 
@@ -6029,15 +6227,17 @@ produced nothing say so, instead of inventing an ID to satisfy the schema.
 
 ## What the client receives
 
-The agent's activity group carries two extra fields once it finishes:
+The agent's `SUBAGENT_FINISHED` event carries the result:
 
 | Field | Value |
 |-------|-------|
-| `structuredOutput` | The filled schema, as JSON |
-| `outputSchemaName` | The class name, here `DashboardSnippet` |
+| `result` | The filled schema, as JSON |
+| `metadata.outputSchema` | The class name, here `DashboardSnippet` |
 
-Register one renderer per schema name in the UI; a group with no renderer for
-its schema falls back to plain text. Keep structured output for the agents
+kaboo-react keeps them on the agent's card as `structuredOutput` and
+`outputSchemaName`. Register one renderer per schema name in the UI
+(`structuredRenderers`); a card with no renderer for its schema shows the
+result as a readable list. Keep structured output for the agents
 whose result *is* a card — usually a specialist the orchestrator delegates to —
 and let the orchestrator answer the user in prose.
 
@@ -6106,7 +6306,7 @@ async def main() -> None:
 
     card = result.group("assistant.tracker")
     assert card["outputSchemaName"] == "OrderCard"
-    assert card["structuredOutput"] == {"order_id": "42", "status": "shipped"}
+    assert card["result"] == {"order_id": "42", "status": "shipped"}
 
 
 asyncio.run(main())
@@ -6438,8 +6638,9 @@ provider, no network and no server. Two pieces do the work:
   replays it the same way on every run.
 - **`Pipeline`** drives a config through the same AG-UI path
   `create_agui_app` serves, in-process, and returns what a client would have
-  seen as a `TurnResult`: the AG-UI events, the reply text, the state to carry
-  into the next turn, and the activity groups a chat UI renders.
+  seen as a `TurnResult`: the AG-UI events, the reply text, the transcript and
+  state to carry into the next turn, and the sub-agent cards a chat UI folds
+  from the events.
 
 Because the real strands event loop runs, a scripted test exercises your
 tools, hooks, prompts, orchestration wiring, interrupts and history exactly
@@ -6632,12 +6833,12 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## Multi-agent runs and activity
+## Multi-agent runs
 
-`TurnResult.groups` is the activity tree a chat UI renders: one group per
-agent stream, nested under the group that called it. The entry agent's own
-stream is the chat reply, so its group is flagged `inlineChatOwner` and never
-drawn as a card; it holds the entry's tool calls for the UI to label.
+`TurnResult.groups` holds what a chat UI folds from the sub-agent events: one
+group per sub-agent invocation, keyed by its `subagentRunId`, with the call that
+started it, its parent, its status, its tool calls, its result and its token
+usage. The entry agent's own stream is the chat reply, so it has no group.
 
 ```python
 import asyncio
@@ -6671,9 +6872,9 @@ async def main() -> None:
     result = await run_pipeline(CONFIG, "What was revenue last quarter?")
 
     assert result.text() == "Revenue was 42M."
-    assert result.agent_names() == {"team", "researcher"}
-    assert result.group_ids() == ["coordinator.researcher", "team"]
-    assert result.group("team")["inlineChatOwner"]
+    assert result.agent_names() == {"researcher"}
+    assert result.group_ids() == ["coordinator.researcher"]
+    assert result.group("coordinator.researcher")["status"] == "completed"
 
 
 asyncio.run(main())
@@ -6682,11 +6883,66 @@ asyncio.run(main())
 `children_of(group_id)` walks the tree for nested delegation, and
 `group(group_id)` returns one group as the UI holds it.
 
-## Interrupts and resume
+## Browser tools, approvals and resume
 
-A run that pauses on `ask_user` or a gated tool finishes with an `interrupt`
-outcome. To resume it, send the next turn the way a client does: the previous
-turn's `state()` and `messages()`, plus the answer in `resume`.
+A run pauses two ways, and a test answers each the way a client does.
+
+A **browser tool**, such as `ask_user`, is one the client declares and runs.
+Pass its declaration in `tools=`; the run ends with the call in
+`pendingToolCallIds`, and the next turn carries the answer as a tool message on
+the transcript from `messages()`:
+
+```python
+import asyncio
+
+from ag_ui.core import Tool, ToolMessage
+
+from kaboo_workflows.testing import Pipeline
+
+ASK_USER = Tool(
+    name="ask_user",
+    description="Ask the person multiple-choice questions.",
+    parameters={"type": "object", "properties": {"questions": {"type": "array"}}},
+)
+
+CONFIG = """
+agents:
+  assistant:
+    client_tools: [ask_user]
+    model:
+      provider: kaboo_workflows.testing:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - {tool: ask_user, input: {questions: [{question: "Which region?", options: ["Europe", "APAC"]}]}}
+        final_text: "Looking at Europe."
+entry: assistant
+"""
+
+
+async def main() -> None:
+    pipe = Pipeline(CONFIG)
+    first = await pipe.turn("How is churn?", thread_id="c1", run_id="r1", tools=[ASK_USER])
+    [call_id] = first.run_outcome().pending_tool_call_ids
+
+    answer = ToolMessage(id="a1", role="tool", tool_call_id=call_id, content='{"Which region?": "Europe"}')
+    second = await pipe.turn(
+        thread_id="c1",
+        run_id="r2",
+        tools=[ASK_USER],
+        state=first.state(),
+        messages=[*first.messages(), answer],
+    )
+    pipe.close()
+
+    assert second.text() == "Looking at Europe."
+
+
+asyncio.run(main())
+```
+
+An **approval** pauses with an `interrupt` outcome. Resume it with the previous
+turn's `state()` and `messages()`, plus the decision in `resume`:
 
 ```python
 import asyncio
@@ -6696,26 +6952,29 @@ from kaboo_workflows.testing import Pipeline
 CONFIG = """
 agents:
   assistant:
-    interrupt: true
+    tools: ["tests.fakes.gated_tools:submit_report"]
+    interrupt:
+      tools: [submit_report]
     model:
       provider: kaboo_workflows.testing:ScriptedModel
       model_id: scripted
       params:
         script:
-          - {tool: ask_user, input: {question: "Delete the draft?", options: ["yes", "no"]}}
-        final_text: "Deleted."
+          - {tool: submit_report, input: {title: "Q3 draft"}}
+        final_text: "Filed."
 entry: assistant
 """
 
 
 async def main() -> None:
     pipe = Pipeline(CONFIG)
-    first = await pipe.turn("Clean up my drafts", thread_id="c1", run_id="r1")
+    first = await pipe.turn("File the report", thread_id="c2", run_id="r1")
     outcome = first.run_outcome()
     assert outcome.type == "interrupt"
+    assert outcome.interrupts[0].reason == "kaboo:approval"
 
     second = await pipe.turn(
-        thread_id="c1",
+        thread_id="c2",
         run_id="r2",
         state=first.state(),
         messages=first.messages(),
@@ -6723,14 +6982,14 @@ async def main() -> None:
             {
                 "interruptId": outcome.interrupts[0].id,
                 "status": "resolved",
-                "payload": {"answer": "yes"},
+                "payload": {"status": "approved"},
             }
         ],
     )
     pipe.close()
 
     assert second.finished()
-    assert second.text() == "Deleted."
+    assert second.text() == "Filed."
 
 
 asyncio.run(main())
@@ -6942,6 +7201,144 @@ versions of the others send, and nothing an older piece sends can be mistaken
 for an approval. Features that span the stack light up once every piece is
 upgraded — see
 [Upgrading the stack](https://gl-pgege.github.io/kaboo-docs/start-here/#upgrading-the-stack).
+
+## 0.29
+
+0.29 moves kaboo-workflows onto AG-UI's own events and state: sub-agents,
+questions, approvals and a conversation's memory all use the protocol's
+standard fields. Upgrade it together with kaboo-runtime 0.8 and kaboo-react
+0.12; older clients don't read the new events. It needs ag-ui-strands 1.0.2 or
+later:
+
+```diff
+- "ag-ui-strands>=1.0.1,<2",
++ "ag-ui-strands>=1.0.2,<2",
+```
+
+### Sub-agents are `SUBAGENT_*` events
+
+**Who:** everyone serving through `create_agui_app`, and clients that read the
+`kaboo.activity` activity.
+
+Every agent a delegate runs streams as `SUBAGENT_STARTED`, its tagged text,
+reasoning and tool events, and `SUBAGENT_FINISHED` or `SUBAGENT_ERROR` (see
+[Sub-agents in a chat UI](recipes/chat-ui-activity.md)). The `kaboo.activity`
+snapshots and deltas are gone, and with them the option that tuned them:
+
+```diff
+- create_agui_app("config.yaml", activity_deltas=True)
++ create_agui_app("config.yaml")
+```
+
+A structured output's schema name is in `SUBAGENT_FINISHED.metadata.outputSchema`,
+a tool label in `TOOL_CALL_START.metadata.label`, the run's trace id in
+`RUN_FINISHED.metadata.traceId` and each sub-agent's in
+`SUBAGENT_STARTED.metadata.traceId`. `RUN_FINISHED.usage` counts every agent.
+
+### The browser's tools replace the built-in `ask_user`
+
+**Who:** agents with `interrupt: true` or `interrupt.ask_user`, and code that
+imports `kaboo_workflows.tools.ask_user`.
+
+A question is now a tool the browser runs, like a file request. Allow it with
+`client_tools`, on any agent, delegates included, and register it in the
+browser (kaboo-react's `useAskUserTool`):
+
+```diff
+  agents:
+    field_agent:
+-     interrupt: true
++     client_tools: [ask_user]
+```
+
+```diff
+  interrupt:
+    tools: [submit_report]
+-   ask_user: false
+```
+
+The run ends with the call in `RUN_FINISHED.outcome.pendingToolCallIds`, and the
+browser's tool message answers it. Questions are no longer interrupts; only
+approvals are. See [Human-in-the-loop](workflows/human-in-the-loop.md).
+
+### Approvals use ag-ui-strands' native interrupts
+
+**Who:** clients that render approvals.
+
+An approval is published by ag-ui-strands and filled in by kaboo:
+`reason: "kaboo:approval"`, the call's `toolCallId` (a delegate's own call),
+the delegate's `subagentRunId` and a `responseSchema`. `metadata` holds the
+same fields as before. Resume entries are unchanged.
+
+### A conversation's memory moves to `kaboo_sessions`
+
+**Who:** hosts that store or inspect `kaboo_history` or `kaboo_session`.
+
+```diff
+- state.kaboo_history            # sub-agent transcripts
+- state.kaboo_session            # a pending gate
++ state.kaboo_sessions.history   # every agent's transcript
++ state.kaboo_sessions.paused    # the paused checkpoint
++ state.kaboo_sessions.approvals # the approvals it waits on
+```
+
+A run writes it back as one `STATE_DELTA` instead of in a `STATE_SNAPSHOT`.
+kaboo-runtime 0.8 keeps it on the server. Conversations stored before 0.29 go on,
+but their sub-agents start without the old memory, and a pause opened before the
+upgrade can't be resumed: answer waiting approvals before upgrading.
+
+### No more `MESSAGES_SNAPSHOT`, and no continuation pause
+
+**Who:** clients that rebuilt their transcript from `MESSAGES_SNAPSHOT`, and
+hosts that pass `response_budget`.
+
+A run no longer re-sends the whole conversation after every step, so a response
+grows with its turn, not with the thread
+([Response size](concepts.md#response-size)). Build the transcript from the
+events, as CopilotKit does. With responses that small, the continuation pause is
+gone:
+
+```diff
+- create_agui_app("config.yaml", response_budget=CONTINUATION_BUDGET)
++ create_agui_app("config.yaml")
+```
+
+`ContinuationHook`, `CONTINUATION_TYPE`, `ResponseBudget`,
+`set_response_budget` and `get_response_budget` are removed, and no run pauses
+with `kaboo:continuation`. Keep a host-side backstop that closes a response just
+under the host's cap ([Serve on AgentCore](recipes/production-serving.md#stay-under-the-response-cap)).
+
+### Swarm and Graph entries run on ag-ui-strands' bridge
+
+**Who:** services whose entry is a swarm or a graph.
+
+kaboo's own multi-agent bridge is removed. A Swarm or Graph entry streams its
+nodes as steps, with their text in the main transcript, and a Graph's
+`chat_output` no longer picks the one node that speaks. A delegate entry is
+unaffected; see [Swarm + graph](workflows/swarm-and-graph.md).
+
+### New
+
+- **`client_tools`** on any agent: the browser's tools it may call, with their
+  context. See [Ask the user](recipes/asking-the-user.md).
+- **`state_effects`** and per-agent **`workspace`** views. See
+  [Shared state](recipes/shared-state.md).
+- **`render_a2ui`** for the agents allowed it, and surface actions as the
+  person's turn. See [Generative UI](recipes/generative-ui.md).
+- **`GET /invocations/capabilities`** answers AG-UI `AgentCapabilities`.
+
+### Testing
+
+**Who:** tests that read `TurnResult`.
+
+- `TurnResult.groups` holds the sub-agent groups folded from the events, keyed
+  by `subagentRunId`. The entry agent has no group (no `inlineChatOwner`), and a
+  structured output is `result`, with `outputSchemaName`.
+- `TurnResult.messages()` builds the transcript from what the run sent and
+  streamed, instead of reading the last `MESSAGES_SNAPSHOT`.
+- `TurnResult.text()` is the entry agent's reply alone.
+- Answer a browser tool with `turn(tools=[...], messages=[*r.messages(), tool_message])`
+  ([Testing](testing.md#browser-tools-approvals-and-resume)).
 
 ## 0.28.1
 
@@ -7397,63 +7794,71 @@ gate resumes to a clean `RUN_FINISHED` with no error and no hang.
 
 # Human-in-the-loop
 
-An agent can pause a run for the person in two ways, both on the same
-mechanism: it **asks a question** with the built-in `ask_user` tool, or a
-**gated tool waits for approval** before it runs. The run resumes with the
-person's answer — minutes or days later, on any replica — and the agent carries
-on mid-thought.
+An agent can pause a run for the person in two ways:
 
-```
-review_team (delegate):
-  coordinator ─▶ field_agent (interrupt: true, asks the user)
-```
+- It **asks for something** with a tool the browser runs: a question
+  (`ask_user`), a file, a data source. The run ends waiting on the call, the
+  browser answers it, and the agent that asked reads the answer.
+- A **gated tool waits for approval** before it runs. The run ends on an
+  interrupt, and the person's decision resumes it.
 
-## Config
+Either way the run resumes minutes or days later, on any replica, and the agent
+carries on mid-thought.
+
+## Asking the person
+
+Tools the browser runs are declared by the client with each run, in
+`RunAgentInput.tools`. An agent may call the ones its `client_tools` list
+names, delegates included:
 
 ```yaml
 agents:
-  field_agent:
-    interrupt: true          # grants the built-in ask_user tool
+  coordinator:
+    client_tools: [ask_user]
     system_prompt: |
-      Before finalizing anything risky, call ask_user to confirm. If several
-      details are unclear, ask them together in one ask_user call.
+      Ask the person (ask_user) only when the question is ambiguous in a way
+      that changes the answer.
+  analyst:
+    client_tools: [ask_user, request_datasources]
 
 orchestrations:
-  review_team:
+  team:
     mode: delegate
     entry_name: coordinator
     connections:
-      - { agent: field_agent, description: "Gated field work with user confirmation" }
+      - { agent: analyst, description: "Answers data questions" }
 
-entry: review_team
+entry: team
 ```
+
+- **The call waits.** The run ends with `RUN_FINISHED` whose outcome lists the
+  call in `pendingToolCallIds`. Nothing answers it on the server, and no result
+  is made up.
+- **The answer goes to the agent that asked.** The browser sends the next run
+  with a tool message for the call. When a delegate asked, the delegate resumes
+  with the answer, and its coordinator is told in plain words what was asked
+  and answered, so it doesn't ask again.
+- **A delegate's call is tagged** with the delegate's `subagentRunId`, so the
+  chat shows it in the main transcript, labelled with the agent.
+- **An agent never sees a tool it isn't allowed.** Tools the browser declares
+  but no `client_tools` list names reach no agent, and context the client sends
+  for a tool reaches only the agents allowed that tool.
 
 Full runnable project: [`examples/18_hitl`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/18_hitl).
 
-## Questions are multiple choice
+The client owns the tool: its name, its schema, and what the person sees.
+kaboo-react's `useAskUserTool` asks multiple-choice questions, with Other for
+an answer in the person's own words, and answers a call whose arguments don't
+match the schema with an error the model corrects; `useRequestTool` draws any
+other request as a panel. See [Ask the user](../recipes/asking-the-user.md).
 
-`ask_user` asks one or more questions, each with two or more options — like
-the question cards in Cursor:
-
-- `multiple` makes a question multi-select.
-- The person can always pick **Other** and answer in their own words; the card
-  adds it, so the agent never lists "Other".
-- A question without enough options is refused with a tool error that teaches
-  the rule, so the model asks again properly instead of reaching the person.
-
-```{.python notest}
-ask_user(question="Which market?", options=["AI", "Cloud", "IoT"])
-ask_user(questions=[
-    {"question": "Which market?", "options": ["AI", "Cloud"]},
-    {"question": "Which sectors?", "options": ["B2B", "B2C"], "multiple": True},
-])
-```
-
-The answer comes back as a `{question: answer}` map: a string, a list for a
-multi-select question, or the person's own words for Other. A skipped question
-returns "The person skipped this question." App-specific inputs — a file or a
-data source — are not questions: raise your own request kind
-([Ask the user](../recipes/asking-the-user.md)).
+Lab scenarios:
+[question-orchestrator](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-orchestrator.yaml),
+[question-subagent](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-subagent.yaml),
+[question-parallel](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-parallel.yaml),
+[question-malformed](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-malformed.yaml)
+and
+[request-datasources](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/request-datasources.yaml).
 
 ## Approving tool calls
 
@@ -7470,11 +7875,10 @@ agents:
       skip_read_only: true
       remember: thread
       ttl_seconds: 3600
-      ask_user: false
 ```
 
 - **`tools`** — names, `fnmatch` globs, or `{name, remember, subject}` objects.
-  The first match applies; `ask_user` is never gated.
+  The first match applies.
 - **`skip_read_only`** — tools annotated `readOnlyHint: true` run without
   asking. Tools without annotations follow MCP's defaults and count as not
   read-only. MCP servers declare annotations; localcore-gateway and AgentCore
@@ -7490,34 +7894,31 @@ agents:
 - **`ttl_seconds`** — an optional deadline. It travels in the request's
   `metadata.expiresAt` (never AG-UI's own `expiresAt`, which makes the client
   refuse the thread) and the agent enforces it: an approval answered after the
-  deadline does not run the call. Without it, approvals wait like questions.
+  deadline does not run the call. Without it, approvals wait with no limit.
 
-An approval request's `metadata` carries `tool_name`, `tool_input`, `subject`
-(`key`, `label`), `scopes` (what the person may choose), with a deadline
-`expiresAt`, and `request` when a tool asked for the approval itself
-([below](#tools-that-enforce-their-own-approvals)).
+A gated call pauses the run with an interrupt on `RUN_FINISHED`, published by
+ag-ui-strands and filled in by kaboo: `reason: "kaboo:approval"`, the
+`toolCallId` of the call it is about (a delegate's own call, not the one that
+delegated to it), the delegate's `subagentRunId`, a `message`, and a
+`responseSchema` for the answer. Its `metadata` carries `tool_name`,
+`tool_input`, `subject` (`key`, `label`), `scopes` (what the person may choose),
+with a deadline `expiresAt`, and `request` when a tool asked for the approval
+itself ([below](#tools-that-enforce-their-own-approvals)).
 
 ## Answers
 
-On pause the run finishes with an `interrupt` outcome listing the open requests
-(each with an `id`). The client resumes by answering each of them:
+The client resumes by answering each open interrupt by its `id`:
 
 | The person… | Resume entry | The agent |
 |---|---|---|
 | approves | `{"status": "resolved", "payload": {"status": "approved", "scope"?: "once" \| "thread" \| "always", "tool_input"?: {...}}}` | runs the call, with the person's edit if given |
 | denies | `{"status": "resolved", "payload": {"status": "cancelled", "reason"?: "..."}}` | cancels it; the model reads "Declined: <reason>" |
-| answers a question | `{"status": "resolved", "payload": {"<question>": "<answer>"}}` | returns the answers to the model |
 | skips | `{"status": "cancelled"}` | cancels it; the model reads "Skipped: …" |
 
 Only an `approved` answer runs a gated call; anything else does not. A request
 the resume leaves out counts as skipped, never as approved. A denial is sent as
 `cancelled` so an agent that predates denial reasons cannot mistake it for an
-approval.
-
-The resume is a new run of the same turn: the turn id is unchanged, and the run
-joins the `runIds` of the groups it carries on in
-([concepts](../concepts.md#serving-the-ag-ui-event-stream)), so a client shows
-both runs as one turn.
+approval. The tool body runs from the top on resume, with the person's edits.
 
 ## Remembered approvals
 
@@ -7525,7 +7926,7 @@ both runs as one turn.
 
 - **The agent** offers them when its `remember` allows, and only when the host
   remembers decisions: the host sends `forwardedProps.kaboo_grants`, and the run
-  publishes its open requests in `kaboo_session.approvals` (on by default; see
+  publishes its open requests in `kaboo_sessions.approvals` (on by default; see
   `runtime.persist_session_state`).
 - **The host** saves the person's decision and sends the permissions on every
   run as `kaboo_grants: [{tool, subject, scope}]`. A call matching one runs
@@ -7533,8 +7934,8 @@ both runs as one turn.
 
 The agent never stores a decision itself. The person's own answer on a request
 wins over a permission that answer created, so an edit still applies. The
-tool's activity entry records how each gated call was decided:
-`approval: {decision, by: "person" | "permission", scope?, reason?}`.
+call's `TOOL_CALL_RESULT` records how it was decided, in
+`metadata.approval: {decision, by: "person" | "permission", scope?, reason?}`.
 
 ## Tools that enforce their own approvals
 
@@ -7621,78 +8022,66 @@ that can make it mean anything:
    thread and shown on the card.
 9. **Audit:** record every decision: who, what, which scope, when.
 
+Lab scenarios:
+[approval-plain](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-plain.yaml),
+[approval-subagent](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-subagent.yaml),
+[approval-grant](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-grant.yaml),
+[approval-denied](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-denied.yaml),
+[approval-edited](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-edited.yaml)
+and
+[approval-tool-requested](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-tool-requested.yaml).
+
 ## The person can move on
 
 A question or approval waits with no time limit. If the person sends a message
-instead of answering, what was waiting is **skipped**: the open calls close as
-"Skipped: the person sent a message instead of answering", their activity cards
-close, and the agent answers the new message (and can ask again). This holds
-for a plain new message and for the AG-UI form — a resume that cancels every
-open request and ends with the new message, which kaboo-react sends.
+instead of answering, what was waiting is **skipped**: the client answers each
+open browser call with "Skipped: the person sent a message instead of
+answering" and cancels each open interrupt, the agent closes them, and it
+answers the new message (and can ask again). kaboo-react does this when a
+message is sent. Lab scenarios:
+[question-skipped](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-skipped.yaml)
+and
+[approval-skipped](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-skipped.yaml).
 
 ## Key behaviours
 
-- **Interrupts bubble up.** A gate fired by a nested sub-agent surfaces to the
-  single top-level handler and pauses the entire run — no matter how deep it is.
-- **Parallel gated tool calls.** An agent can raise several gates in one turn
-  (a multi-question form, or two tool calls). Each becomes its own interrupt with
-  a distinct tool-call id, and the run resumes once all are answered.
-- **Positions.** HITL works for a plain entry agent, a delegate sub-agent, and
-  swarm/graph nodes alike.
+- **A pause stops the whole run.** A gate or a browser call deep in a delegate
+  ends the top-level run, and the answer resumes every level that was waiting.
+- **Parallel pauses.** An agent can raise several in one turn, and parallel
+  delegates can each ask. Each waits under its own call id, and the run resumes
+  once all are answered.
+- **Positions.** Questions and approvals work for a plain entry agent and its
+  delegates at any depth. Swarm and Graph members go through ag-ui-strands; see
+  [Swarm + graph](swarm-and-graph.md) for what they support.
 
-## Run
+## A pause outlives the process that opened it
 
-HITL needs a client with a resume UI — serve it and connect a CopilotKit
-frontend:
+A pause can last hours, which makes it the thing most likely to be interrupted
+by a deploy. The paused agent's checkpoint, and the place of every delegate it
+left paused, travel on the AG-UI state channel in `kaboo_sessions.paused` and
+are restored onto whichever process runs the next turn, including one that has
+never seen the conversation. A resume therefore works after a restart, on a
+second replica, and when the session is rebuilt per run.
 
-```bash
-OPENROUTER_API_KEY=... uv run kaboo-serve examples/18_hitl/config.yaml
-```
-
-## A gate outlives the process that opened it
-
-An approval is the one pause that can last hours, which makes it the pause most
-likely to be interrupted by a deploy. The gate itself lives in the agent object's
-interrupt state, so a restart between the question and the answer used to strand
-it: the user clicked approve and got `No agent session found for resume`.
-
-Served through `create_agui_app`, the pending gate now travels on the AG-UI state
-channel under `kaboo_session` and is restored onto whichever agent runs the
-resume — including one that has never seen the conversation. A resume therefore
-works after a restart, on a second replica, and when the session is rebuilt per
-run. Only a resume restores it: a new message supersedes the gate, on a fresh
-process as on a warm one, so a host that replays an older snapshot cannot bring
-back a gate already answered. A run restores it once: when a hook sends the agent
-back for another pass in the same run, the answered gate stays answered and its
-tools don't run again. Nothing to configure; see
+Only a resume restores it: a new message supersedes the pause, on a fresh
+process as on a warm one, so a host that replays an older state cannot bring
+back a gate already answered. A run restores it once: when a hook sends the
+agent back for another pass in the same run, the answered gate stays answered
+and its tools don't run again. Nothing to configure; see
 [Chapter 7](../configuration/Chapter_07.md#pending-interrupts-survive-a-restart-without-a-store)
 for the switch that turns it off and why you would.
 
-The exception is a Swarm or Graph *entry*: strands does not yet persist state for
-orchestration node agents, so a multi-agent entry still needs the process to stay
-up between question and answer. A plain agent, with or without delegates, is
-covered.
-
-## A pause nobody answers
-
-Not every interrupt is a question. When a host caps the size of one HTTP
-response, `create_agui_app(response_budget=...)` uses the same machinery to
-split a large turn across two: the run stops at the next tool call, the
-response closes properly, and the client resumes at once. The interrupt is
-marked `reason: "continuation"` so a client can tell it apart and resolve it
-without showing anyone a prompt. Everything above still applies — the tool runs
-once, the state travels on `kaboo_session`, a different replica can pick it up
-— and the turn id is unchanged, so the user sees one turn. See
-[concepts](../concepts.md#runs-larger-than-one-response).
-
 ## Proven by
 
+- `tests/e2e/test_client_tools.py` — the entry agent and a delegate wait for the
+  browser and read its answer; the coordinator reads what its delegate asked; a
+  delegated question is answered in another process; only allowed agents get a
+  browser tool and its context.
 - `tests/e2e/test_approvals.py` — a gated call waits and the host is told what
   it waits on; wider scopes only with a host that remembers; approval runs the
   call; a remembered permission runs it without asking; a denial does not run it
   and the agent hears why; a skip does not run it; the decision is recorded on
-  the tool's activity entry; a message sent while a request waits starts a new
-  turn.
+  the call's result; a message sent while a request waits starts a new turn.
 - `tests/runtime/test_approval_gate.py` — matching, scopes, subjects, answers,
   deadlines and the host-facing descriptors.
 - `tests/e2e/test_tool_approvals.py` — a tool's reply pauses the run with the
@@ -7700,15 +8089,8 @@ once, the state travels on `kaboo_session`, a different replica can pick it up
   more, with edits; a denial or skip never calls it again; an approval the
   service never heard of doesn't loop; a decision for the chat covers only the
   store it named; the reply never reaches the model and a forged request
-  changes nothing; with the flag off the reply reaches the model; a sub-agent's
-  decision is recorded on its activity entry.
-- `tests/runtime/test_tool_approvals.py` — reading replies, and which tools the
-  hook wraps.
-- `tests/runtime/test_ask_user.py` and
-  `tests/e2e/test_cross_cutting.py::test_a_free_text_question_is_refused_and_the_model_asks_with_options`.
-- `tests/e2e/test_cross_cutting.py::test_a_full_response_pauses_the_run_and_the_next_one_finishes_it`
-  (the budget pauses an ungated tool call and the resume completes it, once).
-- `tests/e2e/test_cross_cutting.py::test_ask_user_interrupt_then_resume`
+  changes nothing; with the flag off the reply reaches the model.
+- `tests/e2e/test_cross_cutting.py::test_an_interrupt_then_resume`
   (plain / delegate / swarm / graph positions).
 - `tests/e2e/test_complex.py::test_parallel_interrupts_surface_together_and_resume`
   (two gates in one step, distinct ids, both resumed).
@@ -7725,8 +8107,8 @@ once, the state travels on `kaboo_session`, a different replica can pick it up
 # Multi-turn history
 
 A delegate sub-agent starts fresh every turn by default. Set `history: true` and
-its transcript is seeded from `state.kaboo_history` on the way in and captured
-back into the outgoing snapshot on the way out — so it can remember across turns.
+its transcript is seeded from `state.kaboo_sessions.history` on the way in and
+written back at the end of the run — so it can remember across turns.
 
 ```
 assistant_team (delegate):
@@ -7888,11 +8270,11 @@ The keys are those of strands' `CacheConfig` (`strategy`, `ttl`,
 config loads. strands deprecates the older `cache_prompt` and `cache_tools`
 params in their favor.
 
-The run's usage in the activity stream (`usageByRun`) carries `cacheHitRate`,
-the share of the prompt read from the cache, for any run that read or wrote it:
-`cacheReadInputTokens / (inputTokens + cacheReadInputTokens + cacheWriteInputTokens)`.
-Bedrock counts the three separately, so `inputTokens` alone is only the
-uncached part.
+The run's usage on `RUN_FINISHED` counts cache reads (`cachedInputTokens`) and
+writes (`cacheWriteInputTokens`) apart from `inputTokens`, per model. Bedrock
+counts the three separately, so `inputTokens` alone is only the uncached part,
+and the share of the prompt read from the cache is
+`cachedInputTokens / (inputTokens + cachedInputTokens + cacheWriteInputTokens)`.
 
 ## What the model is sent is not what is stored
 
@@ -7907,20 +8289,21 @@ written back keep the original calls.
 ## The client owns storage
 
 kaboo enriches the data structure; it does **not** choose your datastore. The
-captured transcript comes back in the run's outgoing history snapshot, and the
-client feeds it back in `state.kaboo_history` on the next turn. For turnkey
-persistence (in-memory or Postgres `ThreadStore`s behind a CopilotKit runtime),
-use [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime).
+captured transcript leaves in the run's closing `STATE_DELTA`, under
+`kaboo_sessions.history`, and the client sends it back on the next turn. For
+turnkey persistence (in-memory or Postgres `ThreadStore`s behind a CopilotKit
+runtime), use [kaboo-runtime](https://github.com/gl-pgege/kaboo-runtime), which
+also keeps the key from the browser.
 
 ## The state channel carries more than history
 
-`kaboo_history` has a sibling. A pending human-in-the-loop gate travels the same
-way, under `kaboo_session`, for the same reason: the run is stateless, so anything
-the conversation accumulates has to arrive with the turn. That is what lets an
-approval survive a restart — see
-[human-in-the-loop](human-in-the-loop.md#a-gate-outlives-the-process-that-opened-it).
+`kaboo_sessions` carries the paused checkpoint of a run waiting on the person
+too, under `paused`, for the same reason: the run is stateless, so anything the
+conversation accumulates has to arrive with the turn. That is what lets an
+approval or a question survive a restart — see
+[human-in-the-loop](human-in-the-loop.md#a-pause-outlives-the-process-that-opened-it).
 
-Together, the two keys are the reason a server can rebuild its agents per run and
+Together, they are the reason a server can rebuild its agents per run and
 still be indistinguishable from one that kept them: a session holds behaviour,
 the state channel holds memory.
 
@@ -8053,12 +8436,30 @@ Full runnable project: [`examples/16_swarm_in_graph`](https://github.com/gl-pgeg
 uv run python examples/16_swarm_in_graph/main.py
 ```
 
-## What you'll observe
+## What a Swarm or Graph entry supports
 
-- Swarm members (`researcher_a`, `researcher_b`) nest under the swarm node.
-- The delegate's `checker` nests under the audit sub-tree via its tool call.
-- Only the `editor` (the `chat_output`) carries the chat reply.
+A Swarm or Graph *entry* runs on ag-ui-strands' own orchestrator bridge, not on
+kaboo's sub-agent stream. Inside a delegate — a coordinator that calls a swarm
+or a graph as a tool — they are ordinary sub-agents and get everything a
+delegate does. As the entry, what they get differs:
+
+| Capability | Swarm or Graph entry |
+|---|---|
+| Streaming | Each node is a step (`STEP_STARTED` / `STEP_FINISHED`, named by node) with its handoffs; its text streams in the main transcript. |
+| Sub-agent cards | No: nodes are steps, not `SUBAGENT_*` events. Only a Graph's top-level nodes are on the wire; agents inside a nested node or behind a delegate node are not. |
+| Approvals | Yes, in one process. A paused node does not survive a restart: strands does not yet persist state for orchestration node agents. |
+| Browser tools, state effects, workspace views, generative UI | Not tested through the bridge; use a delegate entry for these. |
+
+Kaboo's workflows all use a delegate entry, which is why these gaps are
+documented rather than closed. Lab scenarios:
+[swarm-dashboard](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/swarm-dashboard.yaml)
+and
+[graph-dashboard](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/graph-dashboard.yaml).
 
 ## Proven by
 
-`tests/e2e/test_compositions.py::test_kitchen_sink_mixes_swarm_and_delegate_in_one_graph`.
+- `tests/e2e/test_compositions.py` — every composition streams a well-formed
+  run, and the expected agents run as sub-agents or as steps.
+- `tests/e2e/test_compositions.py::test_kitchen_sink_mixes_swarm_and_delegate_in_one_graph`.
+- `tests/e2e/test_cross_cutting.py::test_an_interrupt_then_resume` (the swarm
+  and graph positions).

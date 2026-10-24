@@ -63,7 +63,7 @@ async def test_a_tool_reply_pauses_the_run_with_the_tools_own_request() -> None:
     assert reason["message"] == "Set the price of A1 to 10.0"
     assert reason["tool_input"] == SUMMIT
     assert SERVICE.calls == []
-    published = r1.state()["kaboo_session"]["approvals"]
+    published = r1.state()["kaboo_sessions"]["approvals"]
     assert [(a["interruptId"], a["request"]) for a in published] == [(waiting.id, "req-1")]
 
 

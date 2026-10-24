@@ -10,6 +10,144 @@ for an approval. Features that span the stack light up once every piece is
 upgraded — see
 [Upgrading the stack](https://gl-pgege.github.io/kaboo-docs/start-here/#upgrading-the-stack).
 
+## 0.29
+
+0.29 moves kaboo-workflows onto AG-UI's own events and state: sub-agents,
+questions, approvals and a conversation's memory all use the protocol's
+standard fields. Upgrade it together with kaboo-runtime 0.8 and kaboo-react
+0.12; older clients don't read the new events. It needs ag-ui-strands 1.0.2 or
+later:
+
+```diff
+- "ag-ui-strands>=1.0.1,<2",
++ "ag-ui-strands>=1.0.2,<2",
+```
+
+### Sub-agents are `SUBAGENT_*` events
+
+**Who:** everyone serving through `create_agui_app`, and clients that read the
+`kaboo.activity` activity.
+
+Every agent a delegate runs streams as `SUBAGENT_STARTED`, its tagged text,
+reasoning and tool events, and `SUBAGENT_FINISHED` or `SUBAGENT_ERROR` (see
+[Sub-agents in a chat UI](recipes/chat-ui-activity.md)). The `kaboo.activity`
+snapshots and deltas are gone, and with them the option that tuned them:
+
+```diff
+- create_agui_app("config.yaml", activity_deltas=True)
++ create_agui_app("config.yaml")
+```
+
+A structured output's schema name is in `SUBAGENT_FINISHED.metadata.outputSchema`,
+a tool label in `TOOL_CALL_START.metadata.label`, the run's trace id in
+`RUN_FINISHED.metadata.traceId` and each sub-agent's in
+`SUBAGENT_STARTED.metadata.traceId`. `RUN_FINISHED.usage` counts every agent.
+
+### The browser's tools replace the built-in `ask_user`
+
+**Who:** agents with `interrupt: true` or `interrupt.ask_user`, and code that
+imports `kaboo_workflows.tools.ask_user`.
+
+A question is now a tool the browser runs, like a file request. Allow it with
+`client_tools`, on any agent, delegates included, and register it in the
+browser (kaboo-react's `useAskUserTool`):
+
+```diff
+  agents:
+    field_agent:
+-     interrupt: true
++     client_tools: [ask_user]
+```
+
+```diff
+  interrupt:
+    tools: [submit_report]
+-   ask_user: false
+```
+
+The run ends with the call in `RUN_FINISHED.outcome.pendingToolCallIds`, and the
+browser's tool message answers it. Questions are no longer interrupts; only
+approvals are. See [Human-in-the-loop](workflows/human-in-the-loop.md).
+
+### Approvals use ag-ui-strands' native interrupts
+
+**Who:** clients that render approvals.
+
+An approval is published by ag-ui-strands and filled in by kaboo:
+`reason: "kaboo:approval"`, the call's `toolCallId` (a delegate's own call),
+the delegate's `subagentRunId` and a `responseSchema`. `metadata` holds the
+same fields as before. Resume entries are unchanged.
+
+### A conversation's memory moves to `kaboo_sessions`
+
+**Who:** hosts that store or inspect `kaboo_history` or `kaboo_session`.
+
+```diff
+- state.kaboo_history            # sub-agent transcripts
+- state.kaboo_session            # a pending gate
++ state.kaboo_sessions.history   # every agent's transcript
++ state.kaboo_sessions.paused    # the paused checkpoint
++ state.kaboo_sessions.approvals # the approvals it waits on
+```
+
+A run writes it back as one `STATE_DELTA` instead of in a `STATE_SNAPSHOT`.
+kaboo-runtime 0.8 keeps it on the server. Conversations stored before 0.29 go on,
+but their sub-agents start without the old memory, and a pause opened before the
+upgrade can't be resumed: answer waiting approvals before upgrading.
+
+### No more `MESSAGES_SNAPSHOT`, and no continuation pause
+
+**Who:** clients that rebuilt their transcript from `MESSAGES_SNAPSHOT`, and
+hosts that pass `response_budget`.
+
+A run no longer re-sends the whole conversation after every step, so a response
+grows with its turn, not with the thread
+([Response size](concepts.md#response-size)). Build the transcript from the
+events, as CopilotKit does. With responses that small, the continuation pause is
+gone:
+
+```diff
+- create_agui_app("config.yaml", response_budget=CONTINUATION_BUDGET)
++ create_agui_app("config.yaml")
+```
+
+`ContinuationHook`, `CONTINUATION_TYPE`, `ResponseBudget`,
+`set_response_budget` and `get_response_budget` are removed, and no run pauses
+with `kaboo:continuation`. Keep a host-side backstop that closes a response just
+under the host's cap ([Serve on AgentCore](recipes/production-serving.md#stay-under-the-response-cap)).
+
+### Swarm and Graph entries run on ag-ui-strands' bridge
+
+**Who:** services whose entry is a swarm or a graph.
+
+kaboo's own multi-agent bridge is removed. A Swarm or Graph entry streams its
+nodes as steps, with their text in the main transcript, and a Graph's
+`chat_output` no longer picks the one node that speaks. A delegate entry is
+unaffected; see [Swarm + graph](workflows/swarm-and-graph.md).
+
+### New
+
+- **`client_tools`** on any agent: the browser's tools it may call, with their
+  context. See [Ask the user](recipes/asking-the-user.md).
+- **`state_effects`** and per-agent **`workspace`** views. See
+  [Shared state](recipes/shared-state.md).
+- **`render_a2ui`** for the agents allowed it, and surface actions as the
+  person's turn. See [Generative UI](recipes/generative-ui.md).
+- **`GET /invocations/capabilities`** answers AG-UI `AgentCapabilities`.
+
+### Testing
+
+**Who:** tests that read `TurnResult`.
+
+- `TurnResult.groups` holds the sub-agent groups folded from the events, keyed
+  by `subagentRunId`. The entry agent has no group (no `inlineChatOwner`), and a
+  structured output is `result`, with `outputSchemaName`.
+- `TurnResult.messages()` builds the transcript from what the run sent and
+  streamed, instead of reading the last `MESSAGES_SNAPSHOT`.
+- `TurnResult.text()` is the entry agent's reply alone.
+- Answer a browser tool with `turn(tools=[...], messages=[*r.messages(), tool_message])`
+  ([Testing](testing.md#browser-tools-approvals-and-resume)).
+
 ## 0.28.1
 
 **Who:** agents with `attachments: { tool: true }` whose model opens a picture,

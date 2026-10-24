@@ -97,9 +97,11 @@ nav:
       - Tools that need run context: recipes/tools-with-run-context.md
       - Guard hooks: recipes/guard-hooks.md
       - Ask the user: recipes/asking-the-user.md
+      - Shared state: recipes/shared-state.md
+      - Generative UI: recipes/generative-ui.md
       - Structured outputs: recipes/structured-outputs.md
       - Images and attachments: recipes/attachments-and-images.md
-      - Activity in a chat UI: recipes/chat-ui-activity.md
+      - Sub-agents in a chat UI: recipes/chat-ui-activity.md
       - Cost and context: recipes/cost-and-context.md
   - Testing: testing.md
   - Evaluation: evaluation.md

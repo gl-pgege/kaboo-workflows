@@ -1,30 +1,34 @@
 """Drive a config end to end in-process, the way the AG-UI endpoint does.
 
 :class:`Pipeline` mirrors the production drive path of
-:func:`~kaboo_workflows.adapters.create_agui_app`: it resolves a config, wires
-the activity event queue, builds the same AG-UI adapter (a multi-agent adapter
-for a swarm or graph entry, a single-agent adapter otherwise) and drives a run,
-then returns both the AG-UI event stream and the folded activity groups as a
-:class:`TurnResult`.
-
-Unlike the HTTP endpoint, the activity pump here drains to completion before
-the result is returned (the endpoint cancels it at ``RUN_FINISHED``), so group
-state is deterministic and race-free.
+:func:`~kaboo_workflows.adapters.create_agui_app`: it resolves a config, builds
+the same AG-UI adapter and drives a run, with the sub-agents' events forwarded
+into it the same way, then returns the AG-UI events as a :class:`TurnResult`,
+along with the sub-agent groups a client would fold them into.
 
 A :class:`Pipeline` is reusable across turns (multi-turn history, interrupt and
-resume) because it keeps one resolved config, one wired event queue and one
-activity registry alive for the whole conversation — call ``await turn(...)``
-repeatedly within a single event loop.
+resume) because it keeps one resolved config and every event the conversation
+has streamed — call ``await turn(...)`` repeatedly within a single event loop.
 """
 
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass, field
 from typing import Any
 
+import jsonpatch
+from ag_ui.core import (
+    AssistantMessage,
+    FunctionCall,
+    ResumeEntry,
+    RunAgentInput,
+    ToolCall,
+    ToolMessage,
+    UserMessage,
+)
 from ag_ui.core import EventType as AGUIEventType
-from ag_ui.core import RunAgentInput, UserMessage
 
 from .._context import (
     HistoryExchange,
@@ -32,42 +36,46 @@ from .._context import (
     set_activity_context,
     set_forwarded_props,
     set_history_exchange,
+    set_references,
     set_session_exchange,
 )
 from ..adapters import _strands_bridge as bridge
-from ..adapters._activity import ActivityRegistry
-from ..adapters._interrupts import build_resume_responses
-from ..adapters._multiagent import StrandsMultiAgent
+from ..adapters._a2ui_actions import take_a2ui_action
+from ..adapters._client_tools import equip_entry_agent, prepare_run, take_browser_answers
+from ..adapters._sessions import inbound_sessions
+from ..adapters._subagents import RunEvents, fold_subagents, split_subagent_messages
 from ..adapters.agui import (
     _consume_run,
     _ConversationSessions,
-    _drop_replayed_tool_results,
     _make_session_resolver,
-    _parse_session_state,
+    _parse_references,
+    _prepare_resume,
+    open_state_channel,
 )
 from ..config import ConfigInput, parse_config_sources, resolve_infra, validate_raw_config
-from ..hooks import restore_session_state
-from ..types import StreamEvent
 
 _DONE = bridge.STREAM_DONE
 
 
 @dataclass
 class TurnResult:
-    """Outcome of one run: the AG-UI events and the activity-group snapshot.
+    """Outcome of one run: the AG-UI events and the sub-agent groups.
 
     Attributes:
         events: Every AG-UI event the run streamed, in order.
-        groups: The activity groups (one per agent stream) as the UI would hold
-            them once the run finished, keyed by group id.
+        groups: One group per sub-agent invocation of the thread so far,
+            keyed by its ``subagentRunId``, as a client folds them (see
+            :func:`~kaboo_workflows.adapters._subagents.fold_subagents`).
         exchange: The history carried in and out of the run.
-        usage_by_run: Token usage per run id.
+        usage_by_run: The run's token totals per run id, from ``RUN_FINISHED``.
+        sent: The messages the client sent with the run.
     """
 
     events: list[Any]
     groups: dict[str, dict[str, Any]]
     exchange: HistoryExchange = field(default_factory=HistoryExchange)
     usage_by_run: dict[str, dict[str, int]] = field(default_factory=dict)
+    sent: list[Any] = field(default_factory=list)
 
     def types(self) -> list[str]:
         """Return the AG-UI event types, in order.
@@ -92,12 +100,14 @@ class TurnResult:
         """Return the chat reply the run streamed.
 
         Returns:
-            Every ``TEXT_MESSAGE_CONTENT`` delta, concatenated.
+            Every ``TEXT_MESSAGE_CONTENT`` delta of the entry agent,
+            concatenated; sub-agents' text belongs to their cards.
         """
         return "".join(
             getattr(e, "delta", "")
             for e in self.events
             if e.type == AGUIEventType.TEXT_MESSAGE_CONTENT
+            and not getattr(e, "subagent_run_id", None)
         )
 
     def finished(self) -> bool:
@@ -128,34 +138,79 @@ class TurnResult:
         return None
 
     def messages(self) -> list[Any]:
-        """Return the last ``MESSAGES_SNAPSHOT``, as a host would persist it.
+        """Return the transcript a client holds after the run.
+
+        The messages it sent, followed by the ones the run's text, tool-call
+        and tool-result events build, sub-agents' included. Pass it back as
+        ``messages=`` on the next turn, the way a client does.
 
         Returns:
-            The snapshot's messages, or an empty list when none was streamed.
+            The messages, in order.
         """
-        for event in reversed(self.events):
-            if event.type == AGUIEventType.MESSAGES_SNAPSHOT:
-                return list(getattr(event, "messages", None) or [])
-        return []
+        messages = [message.model_copy(deep=True) for message in self.sent]
+        by_id: dict[str, Any] = {message.id: message for message in messages}
+        calls: dict[str, ToolCall] = {}
+
+        def assistant(message_id: str, subagent_run_id: str | None) -> Any:
+            if message_id not in by_id:
+                by_id[message_id] = AssistantMessage(
+                    id=message_id, role="assistant", subagent_run_id=subagent_run_id
+                )
+                messages.append(by_id[message_id])
+            return by_id[message_id]
+
+        for event in self.events:
+            if event.type == AGUIEventType.TEXT_MESSAGE_START:
+                assistant(event.message_id, event.subagent_run_id)
+            elif event.type == AGUIEventType.TEXT_MESSAGE_CONTENT:
+                message = by_id[event.message_id]
+                message.content = (message.content or "") + event.delta
+            elif event.type == AGUIEventType.TOOL_CALL_START:
+                message = assistant(
+                    event.parent_message_id or event.tool_call_id, event.subagent_run_id
+                )
+                call = ToolCall(
+                    id=event.tool_call_id,
+                    type="function",
+                    function=FunctionCall(name=event.tool_call_name, arguments=""),
+                )
+                message.tool_calls = [*(message.tool_calls or []), call]
+                calls[event.tool_call_id] = call
+            elif event.type == AGUIEventType.TOOL_CALL_ARGS and event.tool_call_id in calls:
+                calls[event.tool_call_id].function.arguments += event.delta
+            elif event.type == AGUIEventType.TOOL_CALL_RESULT and event.message_id not in by_id:
+                by_id[event.message_id] = ToolMessage(
+                    id=event.message_id,
+                    role="tool",
+                    content=event.content,
+                    tool_call_id=event.tool_call_id,
+                    subagent_run_id=event.subagent_run_id,
+                )
+                messages.append(by_id[event.message_id])
+        return messages
 
     def state(self) -> dict[str, Any]:
-        """Return the last ``STATE_SNAPSHOT``, as a host would persist it.
+        """Return the state the run left, as a host would persist it.
 
+        The last ``STATE_SNAPSHOT`` with every ``STATE_DELTA`` after it applied.
         Pass it back as ``state=`` on the next turn to carry history and pending
         interrupts forward, the way a client does.
 
         Returns:
-            The snapshot, or an empty dict when none was streamed.
+            The state, or an empty dict when none was streamed.
         """
-        for event in reversed(self.events):
+        state: dict[str, Any] = {}
+        for event in self.events:
             if event.type == AGUIEventType.STATE_SNAPSHOT:
                 snapshot = getattr(event, "snapshot", None)
-                if isinstance(snapshot, dict):
-                    return snapshot
-        return {}
+                state = copy.deepcopy(snapshot) if isinstance(snapshot, dict) else {}
+            elif event.type == AGUIEventType.STATE_DELTA:
+                delta = event.model_dump(by_alias=True, exclude_none=True)["delta"]
+                state = jsonpatch.apply_patch(state, delta)
+        return state
 
     def group_ids(self) -> list[str]:
-        """Return the activity group ids.
+        """Return the sub-agent group ids.
 
         Returns:
             The ids, sorted.
@@ -163,7 +218,7 @@ class TurnResult:
         return sorted(self.groups.keys())
 
     def agent_names(self) -> set[str]:
-        """Return the names of the agents that produced activity.
+        """Return the names of the sub-agents that ran.
 
         Returns:
             The agent names across all groups.
@@ -171,7 +226,7 @@ class TurnResult:
         return {str(g["agentName"]) for g in self.groups.values() if g.get("agentName") is not None}
 
     def group(self, group_id: str) -> dict[str, Any]:
-        """Return one activity group.
+        """Return one sub-agent group.
 
         Args:
             group_id: The group's id.
@@ -203,7 +258,6 @@ class Pipeline:
         self,
         config: ConfigInput | list[ConfigInput],
         *,
-        entry_name: str | None = None,
         session_config_key: str | None = None,
     ) -> None:
         """Resolve ``config`` once for every turn this pipeline drives.
@@ -219,8 +273,6 @@ class Pipeline:
                 :func:`~kaboo_workflows.config.parse_config_sources` accepts.
                 With ``session_config_key`` set this is the base config each
                 submitted config layers over.
-            entry_name: Treat this agent as the entry when folding activity,
-                instead of the config's entry.
             session_config_key: The ``forwarded_props`` key each turn's own
                 config arrives under. ``None`` serves ``config`` alone.
         """
@@ -228,8 +280,8 @@ class Pipeline:
         self.app_config = validate_raw_config(self.base_raw)
         self.infra = resolve_infra(self.app_config)
         self.infra.mcp_lifecycle.start(pin_clients=session_config_key is None)
-        self.registry = ActivityRegistry()
-        self._entry_name_override = entry_name
+        self._events: dict[str, list[Any]] = {}
+        self._usage_by_run: dict[str, dict[str, int]] = {}
         self._resolver = (
             None
             if session_config_key is None
@@ -266,6 +318,8 @@ class Pipeline:
         messages: list[Any] | None = None,
         resume: list[dict[str, Any]] | None = None,
         forwarded_props: dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
+        context: list[Any] | None = None,
     ) -> TurnResult:
         """Drive one run and collect what a client would see.
 
@@ -281,6 +335,8 @@ class Pipeline:
                 to resume a paused run.
             forwarded_props: The run's forwarded props, such as a run token or,
                 with ``session_config_key``, the run's own config.
+            tools: The browser tools the client declares, as AG-UI ``Tool``s.
+            context: The client's context items, as AG-UI ``Context``s.
 
         Returns:
             The events and activity groups the run produced.
@@ -290,10 +346,8 @@ class Pipeline:
                 thread and the state carries no gate to restore.
         """
         set_activity_context(thread_id, run_id)
-        inbound: dict[str, Any] = {}
-        if isinstance(state, dict) and isinstance(state.get("kaboo_history"), dict):
-            inbound = state["kaboo_history"]
-        exchange = HistoryExchange(inbound=inbound)
+        history, paused = inbound_sessions(state)
+        exchange = HistoryExchange(inbound=history)
         set_history_exchange(exchange)
 
         if messages is None:
@@ -303,89 +357,77 @@ class Pipeline:
             run_id=run_id,
             state=state or {},
             messages=messages,
-            tools=[],
-            context=[],
+            tools=tools or [],
+            context=context or [],
             forwarded_props=forwarded_props or {},
+            resume=[ResumeEntry.model_validate(entry) for entry in resume] if resume else None,
         )
-        if resume:
-            # Mirror kaboo_endpoint: the client transcript carries a tool-result
-            # message for the answered card; the resume payload is authoritative.
-            _drop_replayed_tool_results(input_data, resume)
+        sent = list(input_data.messages)
+        take_a2ui_action(input_data)
+        carried = split_subagent_messages(input_data)
+        browser_answers = take_browser_answers(input_data, carried)
         set_session_exchange(
-            SessionExchange(inbound=_parse_session_state(input_data), resuming=bool(resume))
+            SessionExchange(inbound=paused, resuming=bool(resume or browser_answers))
         )
         set_forwarded_props(forwarded_props or {})
+        set_references(_parse_references(input_data))
 
         session = self._resolve_session(input_data)
-        event_queue = session.event_queue
         agui = session.agui_agent
-        entry_name = self._entry_name_override or session.entry_name
-
+        browser_tools = prepare_run(input_data, session)
         merged: asyncio.Queue[Any] = asyncio.Queue()
+        run_events = RunEvents(
+            merged, carried, subagents=not session.orchestrated, browser_tools=browser_tools
+        )
+        session.event_queue.flush()
+        session.event_queue.forward_to(run_events.sink)
+        open_state_channel(input_data, session, run_events)
 
-        async def pump() -> None:
-            while True:
-                ev = await event_queue.get()
-                if ev is None:
-                    break
-                if not isinstance(ev, StreamEvent):
-                    continue
-                tid = ev.data.get("thread_id") or bridge.DEFAULT_THREAD
-                if ev.agent_name != entry_name or session.entry_inline:
-                    self.registry.apply(tid, ev)
-                else:
-                    # Mirror the endpoint pump: a swarm or graph entry's stream is
-                    # not rendered, but its completions count toward the run total.
-                    self.registry.apply_usage(tid, ev)
-
-        pump_task = asyncio.create_task(pump())
-
-        if isinstance(agui, StrandsMultiAgent):
-            await agui.consume(input_data, merged, exchange, resume_entries=resume)
-        elif resume:
-            # Mirror kaboo_endpoint's resume branch: feed the interrupt responses
-            # into the paused per-thread agent through ag-ui-strands' run loop.
-            # ensure_thread_agent + restore cover the cold case, where the paused
-            # clone is gone and the gate arrives on the state channel instead.
-            cold = bridge.get_thread_agent(agui, thread_id) is None
-            strands_agent = await bridge.ensure_thread_agent(agui, input_data)
-            if not restore_session_state(strands_agent) and cold:
-                # The endpoint answers RUN_ERROR / RESUME_NO_SESSION here; in-process
-                # the equivalent is refusing to drive a run with nothing to resume.
-                raise LookupError("no resumable agent state for thread")
-            responses = build_resume_responses(bridge.pending_interrupts(strands_agent), resume)
-            with bridge.resume_prompt_override(strands_agent, responses):
-                await _consume_run(agui, input_data, merged, exchange)
-        else:
+        try:
+            if (resume or browser_answers) and not session.orchestrated:
+                # Mirror kaboo_endpoint: ready the paused agent, then hand the
+                # resume to ag-ui-strands as it came.
+                if not await _prepare_resume(agui, input_data, browser_answers):
+                    # The endpoint answers RUN_ERROR / RESUME_NO_SESSION here;
+                    # in-process the equivalent is refusing to drive the run.
+                    raise LookupError("no resumable agent state for thread")
+            await equip_entry_agent(input_data, session)
             await _consume_run(agui, input_data, merged, exchange)
-
-        # Flush the activity queue fully, then stop the pump deterministically.
-        # A transient session is released here for the same reason the endpoint
-        # releases it when the stream ends.
-        if session.transient:
-            await session.aclose()
-        else:
-            await event_queue.close()
-        await pump_task
+        finally:
+            session.event_queue.forward_to(None)
+            if session.transient:
+                await session.aclose()
 
         events: list[Any] = []
         while not merged.empty():
             item = merged.get_nowait()
-            if item is _DONE:
-                continue
-            events.append(item)
-
-        full_snapshot = self.registry.snapshot(thread_id)
-        groups = full_snapshot.get("groups", {})
-        # Deep-ish copy of the mutable group dicts so later turns can't rewrite
-        # what a prior TurnResult observed.
-        snapshot = {gid: dict(g) for gid, g in groups.items()}
+            if item is not _DONE:
+                events.extend(run_events.emit(item))
+        conversation = self._events.setdefault(thread_id, [])
+        conversation.extend(events)
+        for finished in (e for e in events if e.type == AGUIEventType.RUN_FINISHED):
+            totals: dict[str, int] = {}
+            for entry in getattr(finished, "usage", None) or []:
+                for key, value in entry.model_dump(by_alias=True, exclude_none=True).items():
+                    if isinstance(value, int):
+                        totals[key] = totals.get(key, 0) + value
+            self._usage_by_run[finished.run_id] = totals
         return TurnResult(
             events=events,
-            groups=snapshot,
+            groups=fold_subagents(conversation),
             exchange=exchange,
-            usage_by_run=full_snapshot.get("usageByRun", {}),
+            usage_by_run=dict(self._usage_by_run),
+            sent=sent,
         )
+
+    def forget(self, thread_id: str) -> None:
+        """Drop a conversation's session and events, as a process that never saw it.
+
+        Args:
+            thread_id: The conversation id.
+        """
+        self._conversations.forget(thread_id)
+        self._events.pop(thread_id, None)
 
     def close(self) -> None:
         """Stop the MCP servers and clients the config started."""

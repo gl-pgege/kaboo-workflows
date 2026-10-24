@@ -1,8 +1,8 @@
 """End-to-end tool approvals: a gated call waits, and only an approval runs it.
 
 Driven through real agents (``ScriptedModel``) and the ``Pipeline`` harness, plus
-the AG-UI endpoint itself for the one behaviour that lives there: a message sent
-while a request waits skips it and starts a new turn.
+the AG-UI endpoint itself for a message sent while a request waits: the client
+cancels the request, then sends the message as a new turn.
 """
 
 from __future__ import annotations
@@ -19,12 +19,12 @@ from ag_ui.core import (
     ResumeEntry,
     RunAgentInput,
     ToolCall,
+    ToolMessage,
     UserMessage,
 )
 from ag_ui.core import EventType as AGUIEventType
 from fastapi import FastAPI
 
-from kaboo_workflows.adapters._activity import ActivityRegistry
 from kaboo_workflows.adapters.agui import _add_kaboo_endpoint, _build_session
 from kaboo_workflows.config import parse_config_sources, resolve_infra, validate_raw_config
 from kaboo_workflows.testing import Pipeline
@@ -53,7 +53,7 @@ async def test_a_gated_call_waits_and_the_host_is_told_what_it_waits_on() -> Non
 
     gate = _gate(r1)
     assert CALLS == []
-    approvals = r1.state()["kaboo_session"]["approvals"]
+    approvals = r1.state()["kaboo_sessions"]["approvals"]
     assert [a["interruptId"] for a in approvals] == [gate.id]
     assert approvals[0]["tool"] == "submit_report"
     assert approvals[0]["input"] == {"title": "Q3 draft"}
@@ -193,72 +193,66 @@ async def _post(endpoint: Any, input_data: RunAgentInput) -> list[dict[str, Any]
     return _events("".join([chunk async for chunk in response.body_iterator]))
 
 
-async def test_a_message_sent_while_a_request_waits_skips_it_and_starts_a_new_turn() -> None:
+def _input(
+    run_id: str, messages: list[Any], resume: list[ResumeEntry] | None = None
+) -> RunAgentInput:
+    return RunAgentInput(
+        thread_id="s1",
+        run_id=run_id,
+        state={},
+        messages=messages,
+        tools=[],
+        context=[],
+        forwarded_props={},
+        resume=resume,
+    )
+
+
+async def test_a_message_sent_while_a_request_waits_skips_it_then_runs_as_a_new_turn() -> None:
+    """The client cancels the open request first, then sends the message as its own run."""
     app_config = validate_raw_config(parse_config_sources(GATE))
     session = _build_session(app_config, resolve_infra(app_config))
     app = FastAPI()
-    _add_kaboo_endpoint(app, lambda _input: session, ActivityRegistry(), "/invocations")
+    _add_kaboo_endpoint(app, lambda _input: session, "/invocations")
     endpoint = cast("Any", app.routes[-1]).endpoint
+    asked = UserMessage(id="m1", role="user", content="file it")
 
-    first = await _post(
-        endpoint,
-        RunAgentInput(
-            thread_id="s1",
-            run_id="r1",
-            state={},
-            messages=[UserMessage(id="m1", role="user", content="file it")],
-            tools=[],
-            context=[],
-            forwarded_props={},
-        ),
-    )
+    first = await _post(endpoint, _input("r1", [asked]))
     paused_call = next(e for e in first if e["type"] == "TOOL_CALL_START")["toolCallId"]
     gate_id = next(e for e in first if e["type"] == "RUN_FINISHED")["outcome"]["interrupts"][0][
         "id"
     ]
+    call = AssistantMessage(
+        id="a1",
+        role="assistant",
+        tool_calls=[
+            ToolCall(
+                id=paused_call,
+                type="function",
+                function=FunctionCall(name="submit_report", arguments='{"title": "Q3 draft"}'),
+            )
+        ],
+    )
 
-    second = await _post(
+    skip = await _post(
         endpoint,
-        RunAgentInput(
-            thread_id="s1",
-            run_id="r2",
-            state={},
-            messages=[
-                UserMessage(id="m1", role="user", content="file it"),
-                AssistantMessage(
-                    id="a1",
-                    role="assistant",
-                    tool_calls=[
-                        ToolCall(
-                            id=paused_call,
-                            type="function",
-                            function=FunctionCall(
-                                name="submit_report", arguments='{"title": "Q3 draft"}'
-                            ),
-                        )
-                    ],
-                ),
-                UserMessage(id="m2", role="user", content="actually, file the final one"),
-            ],
-            tools=[],
-            context=[],
-            forwarded_props={},
-            resume=[ResumeEntry(interrupt_id=gate_id, status="cancelled")],
-        ),
+        _input("r2", [asked, call], [ResumeEntry(interrupt_id=gate_id, status="cancelled")]),
     )
+    closed = [e for e in skip if e["type"] == "TOOL_CALL_RESULT" and e["toolCallId"] == paused_call]
+    assert not [e for e in skip if e["type"] == "RUN_ERROR"]
+    assert len(closed) == 1 and "Skipped" in closed[0]["content"]
 
-    assert not [e for e in second if e["type"] == "RUN_ERROR"]
-    closed = [
-        e for e in second if e["type"] == "TOOL_CALL_RESULT" and e["toolCallId"] == paused_call
-    ]
-    assert len(closed) == 1, "the waiting call is closed once, as skipped"
-    assert "".join(e["delta"] for e in second if e["type"] == "TEXT_MESSAGE_CONTENT")
-    assert CALLS == []
-    activity = [e for e in second if e["type"] == "ACTIVITY_SNAPSHOT"][-1]["content"]
-    paused_group = next(
-        g
-        for g in activity["groups"].values()
-        if any(t["toolUseId"] == paused_call for t in g["tools"])
+    message = UserMessage(id="m2", role="user", content="actually, file the final one")
+    skipped = {
+        "id": "t1",
+        "role": "tool",
+        "toolCallId": paused_call,
+        "content": closed[0]["content"],
+    }
+    turn = await _post(
+        endpoint,
+        _input("r3", [asked, call, ToolMessage.model_validate(skipped), message]),
     )
-    assert paused_group["status"] == "completed"
-    assert paused_group["tools"][0]["approval"]["decision"] == "skipped"
+    assert not [e for e in turn if e["type"] == "RUN_ERROR"]
+    assert "".join(e["delta"] for e in turn if e["type"] == "TEXT_MESSAGE_CONTENT")
+    assert CALLS == []

@@ -1,6 +1,6 @@
 """Carry agent session state on the AG-UI state channel.
 
-An interrupt — an approval gate, an ``ask_user`` form — pauses a run. What the
+An interrupt — an approval gate, a browser tool's wait — pauses a run. What the
 agent was waiting for lives in ``agent._interrupt_state``, in memory, on the
 per-thread clone. Nothing persists it unless the config declares a
 ``session_manager``, so restarting the runtime silently drops every pending
@@ -8,11 +8,11 @@ approval: the analyst clicks approve and it reaches an agent that has no idea
 what is being approved.
 
 This hook removes the need for an external store by treating the state the same
-way kaboo already treats per-agent history — as client-driven state on the wire.
-``RunAgentInput.state['kaboo_session']`` comes in, the enricher in the AG-UI
-adapter writes it back into the outgoing ``STATE_SNAPSHOT``, and the host
-persists it alongside the transcript it is already keeping. A restart costs
-nothing: the next turn restores the paused gate from the state the host replayed.
+way kaboo treats per-agent history — as server-owned state on the wire.
+``RunAgentInput.state['kaboo_sessions']['paused']`` comes in, the AG-UI adapter
+writes it back as a ``STATE_DELTA`` at the end of the run, and the host persists
+it alongside the transcript it is already keeping. A restart costs nothing: the
+next turn restores the paused gate from the state the host replayed.
 
 That is only sound because the AG-UI client is a server. Behind kaboo-runtime
 the state channel is server-to-server, so its content is as trustworthy as the
@@ -84,10 +84,10 @@ def restore_session_state(agent: Any) -> bool:
     try:
         agent._interrupt_state = _InterruptState.from_dict(state)
     except Exception:
-        logger.exception("kaboo_session restore failed; starting with clean state")
+        logger.exception("paused session restore failed; starting with clean state")
         return False
     logger.debug(
-        "kaboo_session restored | activated=%s interrupts=%s",
+        "paused session restored | activated=%s interrupts=%s",
         state.get("activated"),
         list(state.get("interrupts") or {}),
     )
@@ -127,11 +127,14 @@ def session_state_snapshot() -> dict[str, Any] | None:
     try:
         serialized = state.to_dict()
     except Exception:
-        logger.exception("kaboo_session capture failed; snapshot left unchanged")
+        logger.exception("paused session capture failed; state left unchanged")
         return None
     if not serialized.get("activated") and not serialized.get("interrupts"):
         # Nothing pending. Send it anyway if the client sent state, so a
         # resolved gate is cleared rather than replayed on the next turn.
         if not _is_interrupt_state(exchange.inbound.get("interrupt_state")):
             return None
-    return {"interrupt_state": serialized}
+    snapshot: dict[str, Any] = {"interrupt_state": serialized}
+    if exchange.delegates:
+        snapshot["delegates"] = exchange.delegates
+    return snapshot

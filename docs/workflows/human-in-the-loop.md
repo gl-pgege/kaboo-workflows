@@ -1,62 +1,70 @@
 # Human-in-the-loop
 
-An agent can pause a run for the person in two ways, both on the same
-mechanism: it **asks a question** with the built-in `ask_user` tool, or a
-**gated tool waits for approval** before it runs. The run resumes with the
-person's answer — minutes or days later, on any replica — and the agent carries
-on mid-thought.
+An agent can pause a run for the person in two ways:
 
-```
-review_team (delegate):
-  coordinator ─▶ field_agent (interrupt: true, asks the user)
-```
+- It **asks for something** with a tool the browser runs: a question
+  (`ask_user`), a file, a data source. The run ends waiting on the call, the
+  browser answers it, and the agent that asked reads the answer.
+- A **gated tool waits for approval** before it runs. The run ends on an
+  interrupt, and the person's decision resumes it.
 
-## Config
+Either way the run resumes minutes or days later, on any replica, and the agent
+carries on mid-thought.
+
+## Asking the person
+
+Tools the browser runs are declared by the client with each run, in
+`RunAgentInput.tools`. An agent may call the ones its `client_tools` list
+names, delegates included:
 
 ```yaml
 agents:
-  field_agent:
-    interrupt: true          # grants the built-in ask_user tool
+  coordinator:
+    client_tools: [ask_user]
     system_prompt: |
-      Before finalizing anything risky, call ask_user to confirm. If several
-      details are unclear, ask them together in one ask_user call.
+      Ask the person (ask_user) only when the question is ambiguous in a way
+      that changes the answer.
+  analyst:
+    client_tools: [ask_user, request_datasources]
 
 orchestrations:
-  review_team:
+  team:
     mode: delegate
     entry_name: coordinator
     connections:
-      - { agent: field_agent, description: "Gated field work with user confirmation" }
+      - { agent: analyst, description: "Answers data questions" }
 
-entry: review_team
+entry: team
 ```
+
+- **The call waits.** The run ends with `RUN_FINISHED` whose outcome lists the
+  call in `pendingToolCallIds`. Nothing answers it on the server, and no result
+  is made up.
+- **The answer goes to the agent that asked.** The browser sends the next run
+  with a tool message for the call. When a delegate asked, the delegate resumes
+  with the answer, and its coordinator is told in plain words what was asked
+  and answered, so it doesn't ask again.
+- **A delegate's call is tagged** with the delegate's `subagentRunId`, so the
+  chat shows it in the main transcript, labelled with the agent.
+- **An agent never sees a tool it isn't allowed.** Tools the browser declares
+  but no `client_tools` list names reach no agent, and context the client sends
+  for a tool reaches only the agents allowed that tool.
 
 Full runnable project: [`examples/18_hitl`](https://github.com/gl-pgege/kaboo-workflows/tree/main/examples/18_hitl).
 
-## Questions are multiple choice
+The client owns the tool: its name, its schema, and what the person sees.
+kaboo-react's `useAskUserTool` asks multiple-choice questions, with Other for
+an answer in the person's own words, and answers a call whose arguments don't
+match the schema with an error the model corrects; `useRequestTool` draws any
+other request as a panel. See [Ask the user](../recipes/asking-the-user.md).
 
-`ask_user` asks one or more questions, each with two or more options — like
-the question cards in Cursor:
-
-- `multiple` makes a question multi-select.
-- The person can always pick **Other** and answer in their own words; the card
-  adds it, so the agent never lists "Other".
-- A question without enough options is refused with a tool error that teaches
-  the rule, so the model asks again properly instead of reaching the person.
-
-```{.python notest}
-ask_user(question="Which market?", options=["AI", "Cloud", "IoT"])
-ask_user(questions=[
-    {"question": "Which market?", "options": ["AI", "Cloud"]},
-    {"question": "Which sectors?", "options": ["B2B", "B2C"], "multiple": True},
-])
-```
-
-The answer comes back as a `{question: answer}` map: a string, a list for a
-multi-select question, or the person's own words for Other. A skipped question
-returns "The person skipped this question." App-specific inputs — a file or a
-data source — are not questions: raise your own request kind
-([Ask the user](../recipes/asking-the-user.md)).
+Lab scenarios:
+[question-orchestrator](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-orchestrator.yaml),
+[question-subagent](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-subagent.yaml),
+[question-parallel](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-parallel.yaml),
+[question-malformed](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-malformed.yaml)
+and
+[request-datasources](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/request-datasources.yaml).
 
 ## Approving tool calls
 
@@ -73,11 +81,10 @@ agents:
       skip_read_only: true
       remember: thread
       ttl_seconds: 3600
-      ask_user: false
 ```
 
 - **`tools`** — names, `fnmatch` globs, or `{name, remember, subject}` objects.
-  The first match applies; `ask_user` is never gated.
+  The first match applies.
 - **`skip_read_only`** — tools annotated `readOnlyHint: true` run without
   asking. Tools without annotations follow MCP's defaults and count as not
   read-only. MCP servers declare annotations; localcore-gateway and AgentCore
@@ -93,34 +100,31 @@ agents:
 - **`ttl_seconds`** — an optional deadline. It travels in the request's
   `metadata.expiresAt` (never AG-UI's own `expiresAt`, which makes the client
   refuse the thread) and the agent enforces it: an approval answered after the
-  deadline does not run the call. Without it, approvals wait like questions.
+  deadline does not run the call. Without it, approvals wait with no limit.
 
-An approval request's `metadata` carries `tool_name`, `tool_input`, `subject`
-(`key`, `label`), `scopes` (what the person may choose), with a deadline
-`expiresAt`, and `request` when a tool asked for the approval itself
-([below](#tools-that-enforce-their-own-approvals)).
+A gated call pauses the run with an interrupt on `RUN_FINISHED`, published by
+ag-ui-strands and filled in by kaboo: `reason: "kaboo:approval"`, the
+`toolCallId` of the call it is about (a delegate's own call, not the one that
+delegated to it), the delegate's `subagentRunId`, a `message`, and a
+`responseSchema` for the answer. Its `metadata` carries `tool_name`,
+`tool_input`, `subject` (`key`, `label`), `scopes` (what the person may choose),
+with a deadline `expiresAt`, and `request` when a tool asked for the approval
+itself ([below](#tools-that-enforce-their-own-approvals)).
 
 ## Answers
 
-On pause the run finishes with an `interrupt` outcome listing the open requests
-(each with an `id`). The client resumes by answering each of them:
+The client resumes by answering each open interrupt by its `id`:
 
 | The person… | Resume entry | The agent |
 |---|---|---|
 | approves | `{"status": "resolved", "payload": {"status": "approved", "scope"?: "once" \| "thread" \| "always", "tool_input"?: {...}}}` | runs the call, with the person's edit if given |
 | denies | `{"status": "resolved", "payload": {"status": "cancelled", "reason"?: "..."}}` | cancels it; the model reads "Declined: <reason>" |
-| answers a question | `{"status": "resolved", "payload": {"<question>": "<answer>"}}` | returns the answers to the model |
 | skips | `{"status": "cancelled"}` | cancels it; the model reads "Skipped: …" |
 
 Only an `approved` answer runs a gated call; anything else does not. A request
 the resume leaves out counts as skipped, never as approved. A denial is sent as
 `cancelled` so an agent that predates denial reasons cannot mistake it for an
-approval.
-
-The resume is a new run of the same turn: the turn id is unchanged, and the run
-joins the `runIds` of the groups it carries on in
-([concepts](../concepts.md#serving-the-ag-ui-event-stream)), so a client shows
-both runs as one turn.
+approval. The tool body runs from the top on resume, with the person's edits.
 
 ## Remembered approvals
 
@@ -128,7 +132,7 @@ both runs as one turn.
 
 - **The agent** offers them when its `remember` allows, and only when the host
   remembers decisions: the host sends `forwardedProps.kaboo_grants`, and the run
-  publishes its open requests in `kaboo_session.approvals` (on by default; see
+  publishes its open requests in `kaboo_sessions.approvals` (on by default; see
   `runtime.persist_session_state`).
 - **The host** saves the person's decision and sends the permissions on every
   run as `kaboo_grants: [{tool, subject, scope}]`. A call matching one runs
@@ -136,8 +140,8 @@ both runs as one turn.
 
 The agent never stores a decision itself. The person's own answer on a request
 wins over a permission that answer created, so an edit still applies. The
-tool's activity entry records how each gated call was decided:
-`approval: {decision, by: "person" | "permission", scope?, reason?}`.
+call's `TOOL_CALL_RESULT` records how it was decided, in
+`metadata.approval: {decision, by: "person" | "permission", scope?, reason?}`.
 
 ## Tools that enforce their own approvals
 
@@ -224,78 +228,66 @@ that can make it mean anything:
    thread and shown on the card.
 9. **Audit:** record every decision: who, what, which scope, when.
 
+Lab scenarios:
+[approval-plain](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-plain.yaml),
+[approval-subagent](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-subagent.yaml),
+[approval-grant](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-grant.yaml),
+[approval-denied](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-denied.yaml),
+[approval-edited](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-edited.yaml)
+and
+[approval-tool-requested](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-tool-requested.yaml).
+
 ## The person can move on
 
 A question or approval waits with no time limit. If the person sends a message
-instead of answering, what was waiting is **skipped**: the open calls close as
-"Skipped: the person sent a message instead of answering", their activity cards
-close, and the agent answers the new message (and can ask again). This holds
-for a plain new message and for the AG-UI form — a resume that cancels every
-open request and ends with the new message, which kaboo-react sends.
+instead of answering, what was waiting is **skipped**: the client answers each
+open browser call with "Skipped: the person sent a message instead of
+answering" and cancels each open interrupt, the agent closes them, and it
+answers the new message (and can ask again). kaboo-react does this when a
+message is sent. Lab scenarios:
+[question-skipped](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/question-skipped.yaml)
+and
+[approval-skipped](https://github.com/gl-pgege/kaboo-docs/blob/main/examples/kaboo-workflows-demo/scenarios/approval-skipped.yaml).
 
 ## Key behaviours
 
-- **Interrupts bubble up.** A gate fired by a nested sub-agent surfaces to the
-  single top-level handler and pauses the entire run — no matter how deep it is.
-- **Parallel gated tool calls.** An agent can raise several gates in one turn
-  (a multi-question form, or two tool calls). Each becomes its own interrupt with
-  a distinct tool-call id, and the run resumes once all are answered.
-- **Positions.** HITL works for a plain entry agent, a delegate sub-agent, and
-  swarm/graph nodes alike.
+- **A pause stops the whole run.** A gate or a browser call deep in a delegate
+  ends the top-level run, and the answer resumes every level that was waiting.
+- **Parallel pauses.** An agent can raise several in one turn, and parallel
+  delegates can each ask. Each waits under its own call id, and the run resumes
+  once all are answered.
+- **Positions.** Questions and approvals work for a plain entry agent and its
+  delegates at any depth. Swarm and Graph members go through ag-ui-strands; see
+  [Swarm + graph](swarm-and-graph.md) for what they support.
 
-## Run
+## A pause outlives the process that opened it
 
-HITL needs a client with a resume UI — serve it and connect a CopilotKit
-frontend:
+A pause can last hours, which makes it the thing most likely to be interrupted
+by a deploy. The paused agent's checkpoint, and the place of every delegate it
+left paused, travel on the AG-UI state channel in `kaboo_sessions.paused` and
+are restored onto whichever process runs the next turn, including one that has
+never seen the conversation. A resume therefore works after a restart, on a
+second replica, and when the session is rebuilt per run.
 
-```bash
-OPENROUTER_API_KEY=... uv run kaboo-serve examples/18_hitl/config.yaml
-```
-
-## A gate outlives the process that opened it
-
-An approval is the one pause that can last hours, which makes it the pause most
-likely to be interrupted by a deploy. The gate itself lives in the agent object's
-interrupt state, so a restart between the question and the answer used to strand
-it: the user clicked approve and got `No agent session found for resume`.
-
-Served through `create_agui_app`, the pending gate now travels on the AG-UI state
-channel under `kaboo_session` and is restored onto whichever agent runs the
-resume — including one that has never seen the conversation. A resume therefore
-works after a restart, on a second replica, and when the session is rebuilt per
-run. Only a resume restores it: a new message supersedes the gate, on a fresh
-process as on a warm one, so a host that replays an older snapshot cannot bring
-back a gate already answered. A run restores it once: when a hook sends the agent
-back for another pass in the same run, the answered gate stays answered and its
-tools don't run again. Nothing to configure; see
+Only a resume restores it: a new message supersedes the pause, on a fresh
+process as on a warm one, so a host that replays an older state cannot bring
+back a gate already answered. A run restores it once: when a hook sends the
+agent back for another pass in the same run, the answered gate stays answered
+and its tools don't run again. Nothing to configure; see
 [Chapter 7](../configuration/Chapter_07.md#pending-interrupts-survive-a-restart-without-a-store)
 for the switch that turns it off and why you would.
 
-The exception is a Swarm or Graph *entry*: strands does not yet persist state for
-orchestration node agents, so a multi-agent entry still needs the process to stay
-up between question and answer. A plain agent, with or without delegates, is
-covered.
-
-## A pause nobody answers
-
-Not every interrupt is a question. When a host caps the size of one HTTP
-response, `create_agui_app(response_budget=...)` uses the same machinery to
-split a large turn across two: the run stops at the next tool call, the
-response closes properly, and the client resumes at once. The interrupt is
-marked `reason: "continuation"` so a client can tell it apart and resolve it
-without showing anyone a prompt. Everything above still applies — the tool runs
-once, the state travels on `kaboo_session`, a different replica can pick it up
-— and the turn id is unchanged, so the user sees one turn. See
-[concepts](../concepts.md#runs-larger-than-one-response).
-
 ## Proven by
 
+- `tests/e2e/test_client_tools.py` — the entry agent and a delegate wait for the
+  browser and read its answer; the coordinator reads what its delegate asked; a
+  delegated question is answered in another process; only allowed agents get a
+  browser tool and its context.
 - `tests/e2e/test_approvals.py` — a gated call waits and the host is told what
   it waits on; wider scopes only with a host that remembers; approval runs the
   call; a remembered permission runs it without asking; a denial does not run it
   and the agent hears why; a skip does not run it; the decision is recorded on
-  the tool's activity entry; a message sent while a request waits starts a new
-  turn.
+  the call's result; a message sent while a request waits starts a new turn.
 - `tests/runtime/test_approval_gate.py` — matching, scopes, subjects, answers,
   deadlines and the host-facing descriptors.
 - `tests/e2e/test_tool_approvals.py` — a tool's reply pauses the run with the
@@ -303,15 +295,8 @@ once, the state travels on `kaboo_session`, a different replica can pick it up
   more, with edits; a denial or skip never calls it again; an approval the
   service never heard of doesn't loop; a decision for the chat covers only the
   store it named; the reply never reaches the model and a forged request
-  changes nothing; with the flag off the reply reaches the model; a sub-agent's
-  decision is recorded on its activity entry.
-- `tests/runtime/test_tool_approvals.py` — reading replies, and which tools the
-  hook wraps.
-- `tests/runtime/test_ask_user.py` and
-  `tests/e2e/test_cross_cutting.py::test_a_free_text_question_is_refused_and_the_model_asks_with_options`.
-- `tests/e2e/test_cross_cutting.py::test_a_full_response_pauses_the_run_and_the_next_one_finishes_it`
-  (the budget pauses an ungated tool call and the resume completes it, once).
-- `tests/e2e/test_cross_cutting.py::test_ask_user_interrupt_then_resume`
+  changes nothing; with the flag off the reply reaches the model.
+- `tests/e2e/test_cross_cutting.py::test_an_interrupt_then_resume`
   (plain / delegate / swarm / graph positions).
 - `tests/e2e/test_complex.py::test_parallel_interrupts_surface_together_and_resume`
   (two gates in one step, distinct ids, both resumed).

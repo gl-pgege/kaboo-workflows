@@ -1,0 +1,12 @@
+# One agent that records what its model reads, for an A2UI action's turn.
+x-model: &m tests.e2e.test_client_tools:RecordingModel
+
+agents:
+  analyst:
+    model:
+      provider: *m
+      model_id: analyst
+      params:
+        final_text: "Here it is by segment."
+
+entry: analyst
