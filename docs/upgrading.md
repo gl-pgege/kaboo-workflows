@@ -10,6 +10,36 @@ for an approval. Features that span the stack light up once every piece is
 upgraded — see
 [Upgrading the stack](https://gl-pgege.github.io/kaboo-docs/start-here/#upgrading-the-stack).
 
+## 0.30
+
+0.30 adds working views and actor stamps for the services agents call, and state
+effects read structured results. Nothing is removed, and the other kaboo
+libraries need no change.
+
+### State effects read `structuredContent`
+
+**Who:** state effects, with a `path` or a `mapper`, on MCP tools that return
+`structuredContent`.
+
+An effect's result is the tool's `structuredContent` when the server sends one,
+and its text otherwise, parsed as JSON when it is JSON. A mapper written against
+such a tool's text now receives the structured value, so the tool can answer the
+model in prose and the effect in data (see
+[Shared state](recipes/shared-state.md)).
+
+### New
+
+- **Working views.** An agent's `views:` names callables that return a `View`:
+  a base rendered at the invocation's first model call and kept on the latest
+  person message, where a prompt cache keeps applying, and the changes since,
+  rendered at every call. A visualizer sees the dashboard it is building
+  without reading it again (see
+  [Shared state](recipes/shared-state.md#show-what-a-service-holds-working-views)).
+- **Actor stamps.** `MCPCallMetaHook` with `stamp_actor: true` puts
+  `kaboo/actor` (`agent`, `thread`, `run`) in each MCP call's `_meta`, so a
+  service can attribute every change to the agent and conversation that made it
+  (see [Hooks](configuration/Chapter_06.md)).
+
 ## 0.29
 
 0.29 moves kaboo-workflows onto AG-UI's own events and state: sub-agents,
