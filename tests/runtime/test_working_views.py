@@ -12,7 +12,7 @@ from typing import Any
 
 from strands import Agent, tool
 
-from kaboo_workflows._context import set_activity_context
+from kaboo_workflows._context import StateChannel, set_activity_context, set_state_channel
 from kaboo_workflows.config.resolvers.agents import build_agent_from_def
 from kaboo_workflows.hooks import ContextHook, View, ViewRequest
 from kaboo_workflows.testing import ScriptedModel
@@ -94,3 +94,35 @@ async def test_agents_take_views_from_config() -> None:
     await agent.invoke_async("hello")
     sent: list[Any] = model.calls[0]
     assert {"text": "view for analyst"} in sent[0]["content"]
+
+
+async def test_a_view_reads_the_shared_state_as_of_each_call() -> None:
+    seen: list[list[str]] = []
+
+    def workspace(request: ViewRequest) -> View:
+        seen.append(sorted(request.state.get("dashboards", {})))
+        return View(changes=f"dashboards: {sorted(request.state.get('dashboards', {}))}")
+
+    channel = StateChannel(state={"dashboards": {"d-1": {"title": "Sales"}}})
+
+    @tool
+    def add_dashboard() -> str:
+        """Add a dashboard."""
+        channel.state["dashboards"]["d-2"] = {"title": "Churn"}
+        return "added"
+
+    model = ScriptedModel(script=[{"tool": "add_dashboard", "input": {}}], final_text="done")
+    agent = Agent(
+        model=model,
+        tools=[add_dashboard],
+        hooks=[ContextHook(views=[workspace])],
+        callback_handler=None,
+    )
+    set_state_channel(channel)
+    try:
+        await agent.invoke_async("extend it")
+    finally:
+        set_state_channel(None)
+
+    assert seen == [["d-1"], ["d-1", "d-2"]]
+    assert model.calls[1][-1]["content"][-1] == {"text": "dashboards: ['d-1', 'd-2']"}

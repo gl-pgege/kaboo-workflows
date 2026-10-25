@@ -47,8 +47,8 @@ from __future__ import annotations
 
 import logging
 import sys
-from collections.abc import Callable, Collection
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Collection, Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from strands import Agent
@@ -71,7 +71,7 @@ except ImportError:  # strands 1.44 to 1.61 kept the stages private
         InvokeModelStage,
     )
 
-from .._context import get_run_context, get_run_id, get_thread_id
+from .._context import get_run_context, get_run_id, get_state_channel, get_thread_id
 from ..tools.wrappers import delegate_tool_names
 from ..utils import load_object
 from ._run_context import context_for, format_context
@@ -103,6 +103,8 @@ class ViewRequest:
     """Whether this is the invocation's first model call, when the base is kept."""
     context: list[dict[str, Any]]
     """The run's AG-UI context items, such as what the canvas has open."""
+    state: Mapping[str, Any] = field(default_factory=dict)
+    """The shared state as of this call, state effects included. Read it; never modify it."""
 
 
 @dataclass(frozen=True)
@@ -221,12 +223,14 @@ class ContextHook(HookProvider):
         state = context.invocation_state
         first = VIEW_BASES not in state
         bases: list[str] = state.setdefault(VIEW_BASES, [])
+        channel = get_state_channel()
         request = ViewRequest(
             agent=str(context.agent.name),
             thread_id=get_thread_id(),
             run_id=get_run_id(),
             first_call=first,
             context=get_run_context(),
+            state=channel.state if channel else {},
         )
         changes: list[str] = []
         for provider in self._views:

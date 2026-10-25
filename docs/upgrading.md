@@ -10,6 +10,17 @@ for an approval. Features that span the stack light up once every piece is
 upgraded — see
 [Upgrading the stack](https://gl-pgege.github.io/kaboo-docs/start-here/#upgrading-the-stack).
 
+## 0.31
+
+0.31 passes the shared state to working views. Nothing is removed, and the other
+kaboo libraries need no change.
+
+### New
+
+- **Views read the shared state.** `ViewRequest.state` is the shared state as of
+  the call, state effects included, so a view can render what the effects keep
+  (see [Shared state](recipes/shared-state.md#show-what-a-service-holds-working-views)).
+
 ## 0.30
 
 0.30 adds working views and actor stamps for the services agents call, and state

@@ -98,8 +98,8 @@ agents:
 ```
 
 A view is a callable that takes a `ViewRequest` (the agent, the thread and run
-ids, whether this is the invocation's first model call, and the run's AG-UI
-context) and returns a `View` or `None`:
+ids, whether this is the invocation's first model call, the run's AG-UI context
+and the shared state as of the call) and returns a `View` or `None`:
 
 ```python
 from kaboo_workflows.hooks import View, ViewRequest
@@ -119,6 +119,23 @@ def dashboards(request: ViewRequest) -> View | None:
   since the base, so the agent keeps their edits without reading the service
   again.
 - A view that raises is left out of that call and logged; the run goes on.
+
+A view can also render the state the effects keep. `request.state` is the shared
+state as of the call, effects included, so the agent sees its own last write and
+what parallel agents built. Text written for a model is shorter and easier to
+read than the raw JSON `workspace` pastes:
+
+```python
+from kaboo_workflows.hooks import View, ViewRequest
+
+
+def workspace(request: ViewRequest) -> View | None:
+    dashboards = request.state.get("kaboo_workspace", {}).get("dashboards", {})
+    if not dashboards:
+        return None
+    lines = [f'{handle} "{entry["title"]}" v{entry.get("version", 1)}' for handle, entry in dashboards.items()]
+    return View(changes="Dashboards in this conversation:\n" + "\n".join(lines))
+```
 
 ## What it saves
 
