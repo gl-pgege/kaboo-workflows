@@ -23,6 +23,14 @@ wrong, reaches its model as the call and its error.
 With a ``clear_trigger`` it also clears old tool results once the estimated
 input grows past it (``context.clear_tool_results`` on an agent).
 
+With ``views`` (``views`` on an agent) it shows the agent working views: what a
+service holds that the agent is working on, such as its dashboards. Each view's
+base is rendered once, at the invocation's first model call, and opens the latest
+human message with the run's context, so it stays put for the whole invocation
+and a prompt cache over it keeps applying. What changed since the base is
+rendered at every model call and ends the latest message, after the tool results
+it follows.
+
 When a :class:`~kaboo_workflows.hooks.HistoryHook` seeded the agent with memory
 and the model is a ``BedrockModel`` that does not manage its own cache points
 (no ``cache_config``), it ends the last loaded message with a ``cachePoint``, so
@@ -39,8 +47,8 @@ from __future__ import annotations
 
 import logging
 import sys
-from collections.abc import Collection
-from dataclasses import replace
+from collections.abc import Callable, Collection
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
 from strands import Agent
@@ -63,8 +71,9 @@ except ImportError:  # strands 1.44 to 1.61 kept the stages private
         InvokeModelStage,
     )
 
-from .._context import get_run_context
+from .._context import get_run_context, get_run_id, get_thread_id
 from ..tools.wrappers import delegate_tool_names
+from ..utils import load_object
 from ._run_context import context_for, format_context
 from ._transcript import (
     DEFAULT_MIN_CHARS,
@@ -80,6 +89,29 @@ from .state_effects import workspace_view
 
 logger = logging.getLogger(__name__)
 
+VIEW_BASES = "kaboo_view_bases"
+
+
+@dataclass(frozen=True)
+class ViewRequest:
+    """What a working view is asked to render at one model call."""
+
+    agent: str
+    thread_id: str | None
+    run_id: str | None
+    first_call: bool
+    """Whether this is the invocation's first model call, when the base is kept."""
+    context: list[dict[str, Any]]
+    """The run's AG-UI context items, such as what the canvas has open."""
+
+
+@dataclass(frozen=True)
+class View:
+    """A working view: a base for the whole invocation and the changes since it."""
+
+    base: str | None = None
+    changes: str | None = None
+
 
 class ContextHook(HookProvider):
     """Rewrites the copy of an agent's conversation its model is sent."""
@@ -93,6 +125,7 @@ class ContextHook(HookProvider):
         keep_tools: Collection[str] = (),
         client_tools: Collection[str] = (),
         workspace: Collection[str] = (),
+        views: Collection[str | Callable[[ViewRequest], View | None]] = (),
     ) -> None:
         """Initialize the ContextHook.
 
@@ -113,6 +146,9 @@ class ContextHook(HookProvider):
             workspace: JSON Pointers into the shared state the agent sees at
                 every model call (see
                 :func:`~kaboo_workflows.hooks.state_effects.workspace_view`).
+            views: Working views: callables taking a :class:`ViewRequest` and
+                returning a :class:`View` or ``None``, or import specs of them.
+                A view that raises is skipped for that call and logged.
         """
         self._clear_trigger = clear_trigger
         self._keep_last = keep_last
@@ -120,6 +156,10 @@ class ContextHook(HookProvider):
         self._keep_tools = frozenset(keep_tools)
         self._client_tools = frozenset(client_tools)
         self._workspace = tuple(workspace)
+        self._views = tuple(
+            load_object(view, target="working view") if isinstance(view, str) else view
+            for view in views
+        )
 
     @override
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
@@ -167,10 +207,45 @@ class ContextHook(HookProvider):
             )
         block = format_context(context_for(get_run_context(), self._client_tools))
         view = workspace_view(self._workspace) if self._workspace else None
-        for text in (view, block):
+        bases, changes = self._working_views(context)
+        for text in (*bases, view, block):
             if text:
                 messages = with_context(messages, text)
+        if changes:
+            messages = with_tail(messages, "\n\n".join(changes))
         return replace(context, messages=cast("Messages", settle_cache_points(messages)))
+
+    def _working_views(self, context: InvokeModelContext) -> tuple[list[str], list[str]]:
+        if not self._views:
+            return [], []
+        state = context.invocation_state
+        first = VIEW_BASES not in state
+        bases: list[str] = state.setdefault(VIEW_BASES, [])
+        request = ViewRequest(
+            agent=str(context.agent.name),
+            thread_id=get_thread_id(),
+            run_id=get_run_id(),
+            first_call=first,
+            context=get_run_context(),
+        )
+        changes: list[str] = []
+        for provider in self._views:
+            try:
+                rendered = provider(request)
+            except Exception:
+                logger.warning(
+                    "agent=<%s> | a working view failed; it is left out of this call",
+                    context.agent.name,
+                    exc_info=True,
+                )
+                continue
+            if rendered is None:
+                continue
+            if first and rendered.base:
+                bases.append(rendered.base)
+            if rendered.changes:
+                changes.append(rendered.changes)
+        return list(bases), changes
 
 
 def _manual_bedrock_cache(model: Model) -> bool:
@@ -196,3 +271,11 @@ def with_context(messages: list[dict[str, Any]], block: str) -> list[dict[str, A
             copied[index] = {**message, "content": [{"text": block}, *content]}
             return copied
     return [{"role": "user", "content": [{"text": block}]}, *messages]
+
+
+def with_tail(messages: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
+    """End the latest message with ``text``, after any tool results, in a copy."""
+    if messages and messages[-1].get("role") == "user":
+        last = messages[-1]
+        return [*messages[:-1], {**last, "content": [*(last.get("content") or []), {"text": text}]}]
+    return [*messages, {"role": "user", "content": [{"text": text}]}]

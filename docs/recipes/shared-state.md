@@ -24,9 +24,11 @@ state_effects:
 
 An effect names a tool, or a glob of names, and either a `path` to write the
 tool's parsed result to, or a `mapper`. A mapper receives a
-`StateEffectCall` — the tool, its input, its result (parsed as JSON when it is
-JSON), the agent, the run and the state before the effect — and returns JSON
-Patch operations:
+`StateEffectCall` — the tool, its input, its result (the tool's MCP
+`structuredContent` when it sends one, otherwise its text, parsed as JSON when it
+is JSON), the agent, the run and the state before the effect — and returns JSON
+Patch operations. A tool can therefore answer the model in prose and the mapper
+in structured data:
 
 ```python
 from typing import Any
@@ -82,6 +84,41 @@ The workspace — what this conversation has built, current as of now:
 The agent's own conversation is untouched; only what reaches its model changes.
 Point each agent at what it needs: a visualizer needs the dashboards, not every
 saved query.
+
+## Show what a service holds: working views
+
+The workspace holds what the conversation noted. When the thing itself lives in a
+service — the dashboards an agent is building, with every widget and who changed
+what — a working view asks the service:
+
+```yaml
+agents:
+  analyst:
+    views: [my_service.views:dashboards]
+```
+
+A view is a callable that takes a `ViewRequest` (the agent, the thread and run
+ids, whether this is the invocation's first model call, and the run's AG-UI
+context) and returns a `View` or `None`:
+
+```python
+from kaboo_workflows.hooks import View, ViewRequest
+
+
+def dashboards(request: ViewRequest) -> View | None:
+    if request.first_call:
+        return View(base=render_dashboards(request.thread_id))
+    return View(changes=changes_since_base(request.thread_id, request.agent))
+```
+
+- **The base** is kept from the invocation's first model call and opens the
+  latest human message with the run's context, so it stays put for the whole
+  invocation and a prompt cache over the conversation keeps applying.
+- **The changes** are rendered at every model call and end the latest message,
+  after the tool results it follows: what the person or other agents changed
+  since the base, so the agent keeps their edits without reading the service
+  again.
+- A view that raises is left out of that call and logged; the run goes on.
 
 ## What it saves
 

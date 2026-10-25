@@ -195,7 +195,11 @@ def build_agent_from_def(
     clearing = agent_def.context.clear_tool_results if agent_def.context is not None else None
     if clearing is None:
         hooks.append(
-            ContextHook(client_tools=agent_def.client_tools, workspace=agent_def.workspace)
+            ContextHook(
+                client_tools=agent_def.client_tools,
+                workspace=agent_def.workspace,
+                views=agent_def.views,
+            )
         )
     else:
         hooks.append(
@@ -206,6 +210,7 @@ def build_agent_from_def(
                 keep_tools=clearing.keep_tools,
                 client_tools=agent_def.client_tools,
                 workspace=agent_def.workspace,
+                views=agent_def.views,
             )
         )
     hooks.append(StateEffectsHook(agent_name=name))

@@ -578,6 +578,13 @@ class AgentDef(BaseModel):
     """Parts of the shared state this agent sees at every model call, as JSON
     Pointers (``/kaboo_workspace/dashboards``): what the conversation has built
     so far, current as of that call, so the agent need not look it up."""
+    views: list[str] = Field(default_factory=list)
+    """Working views, as import specs (``module.path:name`` or ``./file.py:name``)
+    of callables taking a :class:`~kaboo_workflows.hooks.ViewRequest`. Each
+    returns a :class:`~kaboo_workflows.hooks.View`: a base the agent sees for the
+    whole invocation, rendered once at its first model call, and the changes
+    since that base, rendered at every call (see
+    :class:`~kaboo_workflows.hooks.ContextHook`)."""
     hooks: list[HookDef | str] = Field(default_factory=list)
     mcp: list[str] = Field(default_factory=list)
     tool_labels: dict[str, str] = Field(default_factory=dict)

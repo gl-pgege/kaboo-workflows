@@ -78,6 +78,9 @@ def compile_effects(defs: Iterable[Any]) -> list[tuple[str, Effect]]:
 
 
 def _result_value(result: Any) -> Any:
+    structured = (result or {}).get("structuredContent")
+    if structured is not None:
+        return structured
     for block in (result or {}).get("content") or []:
         text = block.get("text") if isinstance(block, dict) else None
         if isinstance(text, str):

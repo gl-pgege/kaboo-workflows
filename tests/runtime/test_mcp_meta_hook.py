@@ -19,6 +19,7 @@ from strands.hooks.events import BeforeToolCallEvent
 from strands.tools.mcp import MCPAgentTool, MCPClient
 from strands.types.tools import ToolUse
 
+from kaboo_workflows._context import set_activity_context
 from kaboo_workflows.hooks import MCPCallMetaHook
 from kaboo_workflows.hooks.mcp_meta_hook import _MetaCallTool
 from tests.fakes import FakeModel
@@ -94,6 +95,22 @@ async def test_provider_none_still_stamps_tool_call_id() -> None:
     event = _fire(MCPCallMetaHook(), _mcp_tool(client), _tool_use())
     await _drain(event.selected_tool, _tool_use())
     assert client.calls[0]["meta"] == {"toolCallId": "use-42"}
+
+
+@pytest.mark.asyncio
+async def test_stamp_actor_names_the_agent_thread_and_run() -> None:
+    client = RecordingMCPClient()
+    set_activity_context("thread-7", "run-3")
+    try:
+        event = _fire(MCPCallMetaHook(stamp_actor=True), _mcp_tool(client), _tool_use())
+    finally:
+        set_activity_context(None)
+    await _drain(event.selected_tool, _tool_use())
+    assert client.calls[0]["meta"]["kaboo/actor"] == {
+        "agent": "Strands Agents",
+        "thread": "thread-7",
+        "run": "run-3",
+    }
 
 
 def test_provider_tool_call_id_wins_over_stamp() -> None:

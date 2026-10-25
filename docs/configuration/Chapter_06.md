@@ -97,6 +97,14 @@ agents:
 
 The provider is a callable `(tool_use) -> dict | None` (or an import spec resolving to one). Its result is merged into `_meta`; unless the provider set one, `toolCallId` is stamped with the strands `toolUseId`, giving the server a stable idempotency/correlation key per tool invocation. Omit `provider` to stamp only `toolCallId`. Non-MCP tools are untouched.
 
+With `stamp_actor: true` it also stamps `kaboo/actor` — `{"agent", "thread", "run"}`, the calling agent's name and the run's ids — so a service can attribute each change to the agent and conversation that made it, and keep a per-agent ledger or lease:
+
+```yaml
+hooks:
+  - type: kaboo_workflows.hooks:MCPCallMetaHook
+    params: {stamp_actor: true}
+```
+
 ### `StopGuard`
 
 A cooperative stop mechanism — set a flag on the guard and the agent stops cleanly at the next opportunity. Useful for external cancellation (e.g., user disconnects from a web socket).

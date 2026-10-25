@@ -13,7 +13,10 @@ client. Metadata attached here rides the JSON-RPC message itself, so it is
 always request-accurate regardless of which task performs the HTTP send.
 
 The hook also stamps ``toolCallId`` (the strands ``toolUseId``) by default,
-giving servers a stable idempotency/correlation key per tool invocation.
+giving servers a stable idempotency/correlation key per tool invocation. With
+``stamp_actor`` it also stamps ``kaboo/actor`` — the calling agent's name and
+the run's ``thread`` and ``run`` ids — so a service can attribute each change to
+the agent and conversation that made it.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from strands.tools.mcp import MCPAgentTool
 from strands.types._events import ToolResultEvent
 from strands.types.tools import AgentTool, ToolGenerator, ToolSpec, ToolUse
 
+from .._context import get_run_id, get_thread_id
 from ..utils import load_object
 
 if sys.version_info >= (3, 12):
@@ -51,6 +55,9 @@ class MCPCallMetaHook(HookProvider):
             only ``toolCallId``.
         stamp_tool_call_id: When ``True`` (default), ``toolCallId`` is set to
             the strands ``toolUseId`` unless the provider already supplied one.
+        stamp_actor: When ``True``, ``kaboo/actor`` is set to
+            ``{"agent", "thread", "run"}`` for the calling agent unless the
+            provider already supplied one.
     """
 
     def __init__(
@@ -58,6 +65,7 @@ class MCPCallMetaHook(HookProvider):
         provider: Any | None = None,
         *,
         stamp_tool_call_id: bool = True,
+        stamp_actor: bool = False,
     ) -> None:
         if isinstance(provider, str):
             provider = load_object(provider, target="MCP call-meta provider")
@@ -68,6 +76,7 @@ class MCPCallMetaHook(HookProvider):
             )
         self._provider = provider
         self._stamp_tool_call_id = stamp_tool_call_id
+        self._stamp_actor = stamp_actor
 
     @override
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
@@ -82,6 +91,11 @@ class MCPCallMetaHook(HookProvider):
             meta.update(self._provider(event.tool_use) or {})
         if self._stamp_tool_call_id:
             meta.setdefault("toolCallId", event.tool_use.get("toolUseId"))
+        if self._stamp_actor:
+            meta.setdefault(
+                "kaboo/actor",
+                {"agent": event.agent.name, "thread": get_thread_id(), "run": get_run_id()},
+            )
         if meta:
             event.selected_tool = _MetaCallTool(tool, meta)
 

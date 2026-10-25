@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .context_hook import ContextHook
+from .context_hook import ContextHook, View, ViewRequest
 from .event_publisher import EventPublisher
 from .forwarded_props_hook import ForwardedPropsHook
 from .history_hook import HistoryHook, HistoryPolicy
@@ -43,6 +43,8 @@ __all__ = [
     "ToolApprovalHook",
     "ToolAttachmentsHook",
     "ToolNameSanitizer",
+    "View",
+    "ViewRequest",
     "restore_session_state",
     "session_state_snapshot",
     "stop_guard_from_event",
