@@ -18,8 +18,12 @@ invocation:
 - **Its text, reasoning and tool calls** follow as the standard events, each
   tagged with its `subagentRunId`. Tool arguments stream as the model writes
   them, so a UI can draw a widget or a query while it is being written.
-- **`TOOL_CALL_RESULT`** carries each result, with `metadata.approval` when the
-  call needed one ([Human-in-the-loop](../workflows/human-in-the-loop.md#remembered-approvals)).
+- **`TOOL_CALL_RESULT`** carries each result. Its `metadata` holds the tool's
+  `label`, a `status` of `success` or `error` and, for a failed call, the
+  `error` to show and the `fix` when the service suggests one; `approval` when
+  the call needed one
+  ([Human-in-the-loop](../workflows/human-in-the-loop.md#remembered-approvals)).
+  A long JSON result stays valid JSON ([Long tool results](#long-tool-results)).
 - **`SUBAGENT_FINISHED`** closes it: `completed` with its `result`, or
   `suspended` while it waits on a question or an approval. `metadata` holds its
   token `usage`, its `cost` and, for a
@@ -67,9 +71,24 @@ mcp_clients:
       web-research___read_pages: Reading web pages
 ```
 
-A sub-agent's tool call carries its label in `TOOL_CALL_START.metadata.label`,
-and the card shows "Reading web pages" instead of `web-research___read_pages`.
-Labels can also be set per agent, under `agents.<name>.tool_labels`.
+A sub-agent's tool call carries its label in the `metadata.label` of its
+`TOOL_CALL_START` and `TOOL_CALL_RESULT`, and the card shows "Reading web pages"
+instead of `web-research___read_pages`. Labels can also be set per agent, under
+`agents.<name>.tool_labels`.
+
+## Long tool results
+
+A result longer than 16,000 characters is cut to fit. A JSON result stays valid
+JSON: lists are cut to their first items and long strings end in "…", and the
+object that held each cut key records in `_truncated` how many items or
+characters it lost, so a table can say "+190 more":
+
+```json
+{"columns":["id","name"],"untrusted_content":{"rows":[[1,"Acme"],[2,"Globex"]],"_truncated":{"rows":190}}}
+```
+
+A cut top-level list arrives as `{"items": [...], "_truncated": {"items": N}}`.
+Text that is not JSON is cut and ends in `...`.
 
 ## Test it
 

@@ -9,10 +9,13 @@ Key Features:
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import json
 import logging
+import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from strands.hooks import HookProvider, HookRegistry
@@ -46,6 +49,10 @@ logger = logging.getLogger(__name__)
 EventCallback = Callable[[StreamEvent], None]
 
 _MAX_RESULT_LEN = 16_000
+_MAX_ERROR_LEN = 500
+_PREVIEW_ITEMS = (50, 20, 10, 5, 3, 1)
+_PREVIEW_CHARS = (4000, 1000, 300)
+_HTTP_ERROR = re.compile(r"HTTP error \d+: .*? - (.+)", re.DOTALL)
 
 
 # ============================================================================
@@ -53,10 +60,10 @@ _MAX_RESULT_LEN = 16_000
 # ============================================================================
 
 
-def _extract_result_text(result: Any, max_len: int = _MAX_RESULT_LEN) -> str | None:
-    """Extract a plain-text summary from a strands tool result (for streaming TOOL_END)."""
+def _result_text(result: Any) -> str:
+    """Join the text and json blocks of a strands tool result."""
     if result is None:
-        return None
+        return ""
     content = result.get("content", [])
     content = unpack_attachments(content) or content
     parts: list[str] = []
@@ -64,11 +71,148 @@ def _extract_result_text(result: Any, max_len: int = _MAX_RESULT_LEN) -> str | N
         if "text" in block:
             parts.append(block["text"])
         elif "json" in block:
-            parts.append(str(block["json"]))
-    raw = "\n".join(parts)
+            parts.append(
+                json.dumps(block["json"], ensure_ascii=False, separators=(",", ":"), default=str)
+            )
+    return "\n".join(parts)
+
+
+def _extract_result_text(result: Any, max_len: int = _MAX_RESULT_LEN) -> str | None:
+    """Extract a plain-text summary from a strands tool result (for streaming TOOL_END).
+
+    Text over ``max_len`` is cut, except a JSON object or array, which is cut down
+    to valid JSON that fits (see :func:`_json_preview`).
+    """
+    raw = _result_text(result)
     if not raw:
         return None
-    return raw[:max_len] + "..." if len(raw) > max_len else raw
+    if len(raw) <= max_len:
+        return raw
+    return _json_preview(raw, max_len) or raw[:max_len] + "..."
+
+
+def _parse_json(text: str) -> Any:
+    """Return ``text`` parsed as JSON, or ``None`` when it is not JSON."""
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+
+
+def _json_preview(raw: str, max_len: int) -> str | None:
+    """Return the JSON in ``raw`` re-serialized compactly within ``max_len``.
+
+    Each pass cuts more: lists under a key to their first 50, 20, 10, 5, 3 or 1
+    items, and strings to 4000, 1000 or 300 characters and an ellipsis. The dict
+    holding a cut key records in ``_truncated`` how many items or characters it
+    lost; a cut top-level list becomes ``{"items": [...], "_truncated": {"items": N}}``.
+    ``None`` when ``raw`` is not a JSON object or array, or no pass fits.
+    """
+    value = _parse_json(raw)
+    if not isinstance(value, (dict, list)):
+        return None
+    try:
+        for preview in _previews(value):
+            text = json.dumps(preview, ensure_ascii=False, separators=(",", ":"))
+            if len(text) <= max_len:
+                return text
+    except RecursionError:
+        return None
+    return None
+
+
+def _previews(value: Any) -> Iterator[Any]:
+    """Yield ``value`` whole, then cut down further on each pass."""
+    yield value
+    for max_items in _PREVIEW_ITEMS:
+        for max_chars in _PREVIEW_CHARS:
+            if isinstance(value, list) and len(value) > max_items:
+                yield {
+                    "items": _shrink(value[:max_items], max_items, max_chars),
+                    "_truncated": {"items": len(value) - max_items},
+                }
+            else:
+                yield _shrink(value, max_items, max_chars)
+
+
+def _shrink(value: Any, max_items: int, max_chars: int) -> Any:
+    """Return ``value`` with lists under a key and strings cut, cuts recorded in ``_truncated``."""
+    if isinstance(value, str):
+        return value if len(value) <= max_chars else value[:max_chars] + "…"
+    if isinstance(value, list):
+        return [_shrink(item, max_items, max_chars) for item in value]
+    if not isinstance(value, dict):
+        return value
+    shrunk: dict[str, Any] = {}
+    omitted: dict[str, int] = {}
+    for key, item in value.items():
+        if isinstance(item, list) and len(item) > max_items:
+            omitted[key] = len(item) - max_items
+            item = item[:max_items]
+        elif isinstance(item, str) and len(item) > max_chars:
+            omitted[key] = len(item) - max_chars
+        shrunk[key] = _shrink(item, max_items, max_chars)
+    if omitted:
+        shrunk["_truncated"] = omitted
+    return shrunk
+
+
+def _result_failure(result: Any) -> dict[str, str] | None:
+    """Return the ``error`` (and ``fix``) a failed strands tool result reports, or ``None``.
+
+    A result failed when strands marks it ``status: "error"`` or its JSON says so
+    at the top level: an ``errorMessage`` (how the MCP gateway reports an HTTP
+    failure), an ``error``, ``status: "error"`` or ``success: false``. The error
+    is the most specific message found, at most 500 characters.
+    """
+    if not isinstance(result, dict):
+        return None
+    text = _result_text(result)
+    body = _parse_json(text)
+    if not isinstance(body, dict):
+        body = {}
+    if result.get("status") != "error" and not (
+        body.get("errorMessage")
+        or body.get("error")
+        or body.get("status") == "error"
+        or body.get("success") is False
+    ):
+        return None
+    error_message = str(body.get("errorMessage") or "")
+    match = _HTTP_ERROR.match(error_message)
+    detail = (match.group(1) if match else error_message).strip()
+    inner = _literal_dict(detail)
+    message = (
+        _first_text(inner, "message")
+        or detail
+        or _first_text(body, "message", "error", "reason")
+        or text.strip()
+    )
+    failure = {"error": message[:_MAX_ERROR_LEN]}
+    fix = inner.get("fix") or body.get("fix")
+    if fix:
+        failure["fix"] = str(fix)
+    return failure
+
+
+def _literal_dict(text: str) -> dict[str, Any]:
+    """Return ``text`` read as a Python dict literal, or ``{}`` when it is not one."""
+    if not text.startswith("{"):
+        return {}
+    try:
+        value = ast.literal_eval(text)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _first_text(values: dict[str, Any], *keys: str) -> str:
+    """Return the first non-blank string under ``keys`` in ``values``, stripped."""
+    for key in keys:
+        value = values.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _resolve_tool_label(
@@ -210,7 +354,8 @@ class EventPublisher(HookProvider):
                 attribution. Empty string when not configured.
             stream_title: Human-readable title for the stream group.
             max_result_len: Maximum character length for tool result text
-                in TOOL_END events. Default: 16,000.
+                in TOOL_END events; longer JSON is cut down to valid JSON
+                that records what it left out in ``_truncated``. Default: 16,000.
 
         Example::
 
@@ -380,8 +525,10 @@ class EventPublisher(HookProvider):
         tool_label = _resolve_tool_label(raw_name, self._tool_labels) or raw_name
         tool_use_id = event.tool_use.get("toolUseId", "")
 
-        result_status = event.result.get("status") if isinstance(event.result, dict) else None
-        status = "error" if event.exception or result_status == "error" else "success"
+        failure = _result_failure(event.result) or {}
+        if event.exception:
+            failure["error"] = str(event.exception)[:_MAX_ERROR_LEN]
+        status = "error" if failure else "success"
 
         logger.debug(
             "TOOL_END agent=%s tool=%s tool_use_id=%s status=%s",
@@ -395,7 +542,8 @@ class EventPublisher(HookProvider):
             "tool_label": tool_label,
             "tool_use_id": tool_use_id,
             "status": status,
-            "error": str(event.exception) if event.exception else None,
+            "error": failure.get("error") or None,
+            "fix": failure.get("fix"),
             "tool_result": _extract_result_text(event.result, self._max_result_len),
         }
         approvals = (getattr(event, "invocation_state", None) or {}).get(APPROVALS_STATE_KEY)

@@ -214,3 +214,51 @@ entry: team
     assert start.metadata == {"label": "Filing the report"}
     [group] = r.groups.values()
     assert group["tools"][0]["toolLabel"] == "Filing the report"
+
+
+async def test_a_sub_agents_tool_results_say_whether_they_failed_and_why() -> None:
+    config = """
+x-model: &m kaboo_workflows.testing:ScriptedModel
+agents:
+  coordinator:
+    model: {provider: *m, model_id: scripted, params: {script: [{tool: builder, input: "build it"}], final_text: "Done."}}
+  builder:
+    tools:
+      - "tests.fakes.failing_tools:query_warehouse"
+      - "tests.fakes.failing_tools:create_panel"
+      - "tests.fakes.data_tools:run_query"
+    tool_labels: {create_panel: "Creating a panel"}
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: query_warehouse, input: {sql: "select 1"}}
+          - {tool: create_panel, input: {kind: "pie3d"}}
+          - {tool: run_query, input: {sql: "select region"}}
+        final_text: "Built."
+orchestrations:
+  team: {mode: delegate, entry_name: coordinator, connections: [{agent: builder, description: "Builds dashboards"}]}
+entry: team
+"""
+    r = await run_pipeline(config, "go")
+
+    assert not r.errored()
+    names = {
+        e.tool_call_id: e.tool_call_name
+        for e in r.events
+        if e.type.value == "TOOL_CALL_START" and e.subagent_run_id
+    }
+    results = {
+        names[e.tool_call_id]: e.metadata
+        for e in r.events
+        if e.type.value == "TOOL_CALL_RESULT" and e.subagent_run_id
+    }
+    assert results["query_warehouse"] == {"status": "error", "error": "The warehouse is offline."}
+    assert results["create_panel"] == {
+        "label": "Creating a panel",
+        "status": "error",
+        "error": "Unknown panel type: pie3d",
+        "fix": "Use one of: bar, line, table",
+    }
+    assert results["run_query"] == {"status": "success"}

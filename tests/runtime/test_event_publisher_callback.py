@@ -11,8 +11,10 @@ import json
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
+import pytest
+
 from kaboo_workflows.hooks import EventPublisher
-from kaboo_workflows.hooks.event_publisher import _extract_incoming_task
+from kaboo_workflows.hooks.event_publisher import _extract_incoming_task, _extract_result_text
 from kaboo_workflows.types import EventType
 
 if TYPE_CHECKING:
@@ -159,3 +161,97 @@ def test_tool_end_streams_the_names_of_attachments_and_never_their_data():
     assert "Rows 1-2" in streamed
     assert data not in streamed
     assert "attachments" not in streamed
+
+
+def _text_result(text: str) -> dict:
+    return {"status": "success", "content": [{"text": text}]}
+
+
+def test_a_long_json_result_keeps_whole_rows_and_counts_the_rest():
+    rows = [[n, f"customer-{n}", "north"] for n in range(2_000)]
+    body = {
+        "columns": ["id", "name", "region"],
+        "untrusted_content": {"rows": rows},
+        "page": {"next": "p2"},
+    }
+
+    preview = _extract_result_text(_text_result(json.dumps(body)), 16_000)
+
+    assert preview is not None and len(preview) <= 16_000
+    parsed = json.loads(preview)
+    kept = parsed["untrusted_content"]["rows"]
+    assert 0 < len(kept) < len(rows)
+    assert kept == rows[: len(kept)]
+    assert parsed["untrusted_content"]["_truncated"] == {"rows": len(rows) - len(kept)}
+    assert parsed["columns"] == body["columns"]
+    assert parsed["page"] == body["page"]
+
+
+def test_a_long_json_block_result_is_previewed_as_json_too():
+    rows = [[n, f"customer-{n}"] for n in range(2_000)]
+    result = {"status": "success", "content": [{"json": {"columns": ["id", "name"], "rows": rows}}]}
+
+    preview = _extract_result_text(result, 4_000)
+
+    assert preview is not None and len(preview) <= 4_000
+    parsed = json.loads(preview)
+    assert parsed["rows"] == rows[: len(parsed["rows"])]
+    assert parsed["_truncated"] == {"rows": len(rows) - len(parsed["rows"])}
+
+
+def test_a_long_json_list_result_becomes_items_with_the_count_left_out():
+    panels = [{"id": n, "title": f"panel-{n}"} for n in range(1_000)]
+
+    preview = _extract_result_text(_text_result(json.dumps(panels)), 2_000)
+
+    assert preview is not None and len(preview) <= 2_000
+    parsed = json.loads(preview)
+    kept = parsed["items"]
+    assert 0 < len(kept) < len(panels)
+    assert kept == panels[: len(kept)]
+    assert parsed["_truncated"] == {"items": len(panels) - len(kept)}
+
+
+def test_a_long_json_string_is_cut_with_an_ellipsis_and_its_count():
+    content = "".join(chr(ord("a") + n % 26) for n in range(50_000))
+    body = {"title": "Q3 report", "content": content}
+
+    preview = _extract_result_text(_text_result(json.dumps(body)), 16_000)
+
+    assert preview is not None and len(preview) <= 16_000
+    parsed = json.loads(preview)
+    kept = parsed["content"].removesuffix("…")
+    assert parsed["content"].endswith("…")
+    assert content.startswith(kept)
+    assert parsed["_truncated"] == {"content": len(content) - len(kept)}
+    assert parsed["title"] == "Q3 report"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param("a log line\n" * 5_000, id="text"),
+        pytest.param(json.dumps({f"key-{n}": n for n in range(5_000)}), id="json-too-wide"),
+        pytest.param("[" * 3_000 + "]" * 3_000, id="json-too-deep"),
+    ],
+)
+def test_a_long_result_without_a_json_preview_keeps_the_plain_cut(raw: str):
+    assert _extract_result_text(_text_result(raw), 1_000) == raw[:1_000] + "..."
+
+
+@pytest.mark.parametrize(
+    ("body", "status", "error"),
+    [
+        ({"error": "Dashboard not found"}, "error", "Dashboard not found"),
+        ({"status": "error", "message": "Dashboard not found"}, "error", "Dashboard not found"),
+        ({"success": False, "reason": "Dashboard not found"}, "error", "Dashboard not found"),
+        ({"error": None, "rows": []}, "success", None),
+    ],
+)
+def test_tool_end_reads_a_failure_the_json_result_reports(body, status, error):
+    pub, events = _publisher()
+    event = _tool_end_event(status="success")
+    event.result["content"] = [{"text": json.dumps(body)}]
+    pub._on_tool_end(event)
+    assert _tool_end(events).data["status"] == status
+    assert _tool_end(events).data["error"] == error

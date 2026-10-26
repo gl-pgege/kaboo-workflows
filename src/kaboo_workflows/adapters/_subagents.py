@@ -338,7 +338,20 @@ class SubagentStream:
         )
         message_id = _new_id()
         invocation.step_id = None
+        label = event.data.get("tool_label")
         approval = event.data.get("approval")
+        failed = event.data.get("status") == "error"
+        metadata = {
+            key: value
+            for key, value in (
+                ("label", label if label != event.data.get("tool_name") else None),
+                ("approval", approval if isinstance(approval, dict) else None),
+                ("status", "error" if failed else "success"),
+                ("error", event.data.get("error") if failed else None),
+                ("fix", event.data.get("fix") if failed else None),
+            )
+            if value
+        }
         out.append(
             ToolCallResultEvent(
                 type=AGUIEventType.TOOL_CALL_RESULT,
@@ -347,7 +360,7 @@ class SubagentStream:
                 content=content,
                 role="tool",
                 subagent_run_id=invocation.run_id,
-                metadata={"approval": approval} if isinstance(approval, dict) else None,
+                metadata=metadata,
             )
         )
         return out

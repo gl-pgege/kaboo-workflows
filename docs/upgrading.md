@@ -10,6 +10,34 @@ for an approval. Features that span the stack light up once every piece is
 upgraded — see
 [Upgrading the stack](https://gl-pgege.github.io/kaboo-docs/start-here/#upgrading-the-stack).
 
+## 0.32
+
+0.32 keeps a sub-agent's long tool results valid JSON and marks the tool calls
+that failed. Nothing is removed, and the other kaboo libraries need no change.
+
+### Long JSON results stay JSON
+
+**Who:** clients that read a sub-agent's long tool results.
+
+A tool result over 16,000 characters was cut mid-value, so a JSON result no
+longer parsed. A JSON result is now cut down to valid JSON that fits, with
+`_truncated` saying what it left out (see
+[Long tool results](recipes/chat-ui-activity.md#long-tool-results)). Other text
+is cut as before.
+
+```diff
+- {"columns":["id","name"],"untrusted_content":{"rows":[[1,"Acme"],[2,"Globex"],[3,"Init...
++ {"columns":["id","name"],"untrusted_content":{"rows":[[1,"Acme"],[2,"Globex"]],"_truncated":{"rows":190}}}
+```
+
+### New
+
+- **Failed tool calls say so.** A sub-agent's `TOOL_CALL_RESULT.metadata` has a
+  `status` of `success` or `error`, and a failed call's `error` and, when the
+  service suggests one, `fix`. A call fails when strands marks its result an
+  error or its JSON reports one, as the MCP gateway does for a rejected HTTP
+  call. The result carries the tool's `label` too.
+
 ## 0.31
 
 0.31 passes the shared state to working views. Nothing is removed, and the other
