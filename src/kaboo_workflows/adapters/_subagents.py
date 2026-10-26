@@ -51,6 +51,7 @@ from ag_ui.core import EventType as AGUIEventType
 from ..tools._browser import browser_wait_call
 from ..types import EventType, StreamEvent
 from ._interrupts import kaboo_reason, lift_interrupt
+from ._order import AppendOnly
 
 _OPENING = frozenset(
     {
@@ -195,7 +196,7 @@ class SubagentStream:
             return []
         out = self._close_reasoning(invocation)
         if invocation.text_id is None:
-            invocation.text_id = invocation.step_id or _new_id()
+            invocation.text_id = _new_id()
             invocation.step_id = invocation.text_id
             invocation.text = ""
             out.append(
@@ -224,6 +225,7 @@ class SubagentStream:
         out = self._close_text(invocation)
         if invocation.reasoning_id is None:
             invocation.reasoning_id = _new_id()
+            invocation.step_id = None
             out.append(
                 ReasoningStartEvent(
                     type=AGUIEventType.REASONING_START,
@@ -531,6 +533,9 @@ class RunEvents:
     out as sub-agent events on the response queue, in the order they happened.
     Each event leaving the queue goes through :meth:`emit`, which, at the end,
     closes the sub-agents still open and adds their token counts to the run's.
+    :meth:`emit` also lets each agent extend only its newest message, so a
+    client that appends events in arrival order draws the run in the order it
+    happened.
     """
 
     def __init__(
@@ -542,6 +547,7 @@ class RunEvents:
         browser_tools: Collection[str] = (),
     ) -> None:
         self._merged = merged
+        self._order = AppendOnly()
         self.stream = SubagentStream(carried) if subagents else None
         self._browser_tools = frozenset(browser_tools)
         self._browser_calls: dict[str, None] = {}
@@ -563,6 +569,9 @@ class RunEvents:
         self._merged.put_nowait(StateDeltaEvent(type=AGUIEventType.STATE_DELTA, delta=operations))
 
     def emit(self, item: Any) -> list[Any]:
+        return [self._order.place(event) for event in self._emit(item)]
+
+    def _emit(self, item: Any) -> list[Any]:
         etype = getattr(item, "type", None)
         stream = self.stream
         if etype == AGUIEventType.TOOL_CALL_START:

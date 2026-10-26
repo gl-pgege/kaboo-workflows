@@ -4955,6 +4955,14 @@ invocation:
   [structured output](structured-outputs.md), the `outputSchema` name.
 - **`SUBAGENT_ERROR`** closes it when it fails.
 
+Each agent's messages only grow at the end: the entry agent, and each
+invocation, extends only the newest message it started. Text continues text, a
+tool call joins the text or calls just before it, and anything else starts a new
+message. A client that appends events as they arrive therefore draws every agent
+in the order it worked, whether its model reasoned before or after it spoke. A
+call made after reasoning gets an assistant message of its own instead of
+joining the text from before that reasoning.
+
 A paused invocation keeps its `subagentRunId`, so the run that resumes it opens
 a new segment of the same card. The events are stored and replayed like any
 others, so a reload draws the same cards. `RUN_FINISHED.usage` counts every
@@ -6781,6 +6789,7 @@ runs out, the model replies with `final_text`.
 | `{text: "..."}` | Answers with this text and ends the turn |
 | `{tool: lookup, input: "42"}` | Calls a tool. A string input fills the tool's first parameter; a mapping is passed as the full input |
 | `{tools: [{tool: a, input: ...}, {tool: b, input: ...}]}` | Calls several tools in one message, as a model making parallel calls does |
+| `{tool: lookup, input: "42", before: [{text: "..."}, {reasoning: "..."}]}` | Streams these text and reasoning blocks, in order, ahead of the call in the same message; `before` works on a `tools` step too |
 | `{handoff: reviewer, message: "..."}` | Hands off to another agent in a swarm |
 | `{error: "..."}` | Raises mid-turn, to test how a failure surfaces |
 

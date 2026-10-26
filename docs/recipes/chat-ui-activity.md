@@ -30,6 +30,14 @@ invocation:
   [structured output](structured-outputs.md), the `outputSchema` name.
 - **`SUBAGENT_ERROR`** closes it when it fails.
 
+Each agent's messages only grow at the end: the entry agent, and each
+invocation, extends only the newest message it started. Text continues text, a
+tool call joins the text or calls just before it, and anything else starts a new
+message. A client that appends events as they arrive therefore draws every agent
+in the order it worked, whether its model reasoned before or after it spoke. A
+call made after reasoning gets an assistant message of its own instead of
+joining the text from before that reasoning.
+
 A paused invocation keeps its `subagentRunId`, so the run that resumes it opens
 a new segment of the same card. The events are stored and replayed like any
 others, so a reload draws the same cards. `RUN_FINISHED.usage` counts every
