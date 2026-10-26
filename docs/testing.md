@@ -70,6 +70,7 @@ runs out, the model replies with `final_text`.
 | `{text: "..."}` | Answers with this text and ends the turn |
 | `{tool: lookup, input: "42"}` | Calls a tool. A string input fills the tool's first parameter; a mapping is passed as the full input |
 | `{tools: [{tool: a, input: ...}, {tool: b, input: ...}]}` | Calls several tools in one message, as a model making parallel calls does |
+| `{tool: lookup, input: "42", before: [{text: "..."}, {reasoning: "..."}]}` | Streams these text and reasoning blocks, in order, ahead of the call in the same message; `before` works on a `tools` step too |
 | `{handoff: reviewer, message: "..."}` | Hands off to another agent in a swarm |
 | `{error: "..."}` | Raises mid-turn, to test how a failure surfaces |
 

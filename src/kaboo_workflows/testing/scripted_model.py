@@ -28,6 +28,9 @@ stay deterministic. Each step is one of:
   triggers a delegation.
 - ``{"tools": [<tool-action>, ...]}`` — call several tools in ONE assistant
   message (parallel tool calls), each with its own tool-use id.
+- ``"before": [{"text": "..."}, {"reasoning": "..."}]`` on either tool step —
+  stream these text and reasoning blocks, in order, ahead of the calls in the
+  same message, as a model that talks or thinks before it calls does.
 - ``{"handoff": "<agent>", "message": "<text>"}`` — sugar for the swarm
   ``handoff_to_agent`` tool; fills the target/message against its live schema.
 - ``{"text": "<final answer>"}`` — stream text and end the turn.
@@ -213,22 +216,17 @@ class ScriptedModel(Model):
                 await self._pause()
             yield {"contentBlockStop": {}}
             yield {"messageStop": {"stopReason": "end_turn"}}
-        elif "tools" in action:
-            for sub in action["tools"]:
+        else:
+            for event in _lead_events(action.get("before") or [], self._stream_chunk):
+                yield event
+                await self._pause()
+            for sub in action["tools"] if "tools" in action else [action]:
                 spec = _resolve_tool_spec(sub, tool_specs or [])
                 for event in _tool_use_events(
                     spec, _build_tool_input(sub, spec), self._stream_chunk
                 ):
                     yield event
                     await self._pause()
-            yield {"messageStop": {"stopReason": "tool_use"}}
-        else:
-            spec = _resolve_tool_spec(action, tool_specs or [])
-            for event in _tool_use_events(
-                spec, _build_tool_input(action, spec), self._stream_chunk
-            ):
-                yield event
-                await self._pause()
             yield {"messageStop": {"stopReason": "tool_use"}}
 
         yield {
@@ -255,6 +253,19 @@ def _pieces(text: str, size: int) -> list[str]:
     if size <= 0 or len(text) <= size:
         return [text]
     return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+def _lead_events(blocks: list[dict[str, Any]], chunk: int = 0) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for block in blocks:
+        if "reasoning" in block:
+            deltas = [{"reasoningContent": {"text": p}} for p in _pieces(block["reasoning"], chunk)]
+        else:
+            deltas = [{"text": p} for p in _pieces(block.get("text", ""), chunk)]
+        events.append({"contentBlockStart": {"start": {}}})
+        events.extend({"contentBlockDelta": {"delta": delta}} for delta in deltas)
+        events.append({"contentBlockStop": {}})
+    return events
 
 
 def _tool_use_events(
