@@ -19,8 +19,9 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Collection
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, override
 
 from ag_ui.core import (
     BaseEvent,
@@ -47,11 +48,17 @@ from ag_ui.core import (
     ToolCallStartEvent,
 )
 from ag_ui.core import EventType as AGUIEventType
+from strands.hooks import AfterToolCallEvent, HookProvider, HookRegistry
 
+from ..hooks.event_publisher import tool_outcome
 from ..tools._browser import browser_wait_call
 from ..types import EventType, StreamEvent
 from ._interrupts import kaboo_reason, lift_interrupt
 from ._order import AppendOnly
+
+_OUTCOMES: ContextVar[dict[str, dict[str, str]] | None] = ContextVar(
+    "kaboo_tool_outcomes", default=None
+)
 
 _OPENING = frozenset(
     {
@@ -557,6 +564,8 @@ class RunEvents:
             if (run := getattr(message, "subagent_run_id", None))
             for call in getattr(message, "tool_calls", None) or []
         }
+        self._outcomes: dict[str, dict[str, str]] = {}
+        _OUTCOMES.set(self._outcomes)
 
     def sink(self, event: Any) -> None:
         if self.stream is None or not isinstance(event, StreamEvent):
@@ -581,6 +590,9 @@ class RunEvents:
                 self._call_runs[item.tool_call_id] = run
         elif etype == AGUIEventType.TOOL_CALL_RESULT:
             self._browser_calls.pop(item.tool_call_id, None)
+            outcome = self._outcomes.pop(item.tool_call_id, None)
+            if outcome and "status" not in (getattr(item, "metadata", None) or {}):
+                item = item.model_copy(update={"metadata": {**(item.metadata or {}), **outcome}})
         if etype == AGUIEventType.RUN_FINISHED and isinstance(item, RunFinishedEvent):
             outcome = getattr(item, "outcome", None)
             if isinstance(outcome, RunFinishedInterruptOutcome):
@@ -610,6 +622,23 @@ class RunEvents:
                 )
             return [*closing, item.model_copy(update=update) if update else item]
         return [item]
+
+
+class ToolOutcomes(HookProvider):
+    """Records how the entry agent's tool calls end, for their AG-UI results.
+
+    ag-ui-strands emits the entry agent's results without a status; the run's
+    :class:`RunEvents` adds the one recorded here.
+    """
+
+    @override
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(AfterToolCallEvent, self._ended)
+
+    def _ended(self, event: AfterToolCallEvent) -> None:
+        outcomes = _OUTCOMES.get()
+        if outcomes is not None:
+            outcomes[str(event.tool_use.get("toolUseId", ""))] = tool_outcome(event)
 
 
 def _is_browser_wait(interrupt: Any) -> bool:

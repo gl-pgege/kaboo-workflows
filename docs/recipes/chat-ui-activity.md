@@ -8,8 +8,10 @@ wire as AG-UI's own sub-agent events, and kaboo-react folds them into cards.
 ## What the client receives
 
 The entry agent's stream *is* the chat reply: its text and tool calls arrive as
-ordinary AG-UI events. Each agent it delegates to, at any depth, arrives as one
-invocation:
+ordinary AG-UI events, and each of its `TOOL_CALL_RESULT`s carries the same
+`metadata.status` (`success` or `error`, with the `error` and any `fix` for a
+failed call) as a sub-agent's below. Each agent it delegates to, at any depth,
+arrives as one invocation:
 
 - **`SUBAGENT_STARTED`** opens it, with a `subagentRunId`, the agent's `name`,
   the `parentToolCallId` of the delegating call and the

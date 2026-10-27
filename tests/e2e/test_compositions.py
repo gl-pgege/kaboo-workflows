@@ -262,3 +262,37 @@ entry: team
         "fix": "Use one of: bar, line, table",
     }
     assert results["run_query"] == {"status": "success"}
+
+
+async def test_the_entry_agents_tool_results_say_whether_they_failed_and_why() -> None:
+    config = """
+agents:
+  builder:
+    tools:
+      - "tests.fakes.failing_tools:create_panel"
+      - "tests.fakes.data_tools:run_query"
+    model:
+      provider: kaboo_workflows.testing:ScriptedModel
+      model_id: scripted
+      params:
+        script:
+          - {tool: create_panel, input: {kind: "pie3d"}}
+          - {tool: run_query, input: {sql: "select region"}}
+        final_text: "Built."
+entry: builder
+"""
+    r = await run_pipeline(config, "go")
+
+    assert not r.errored()
+    names = {
+        e.tool_call_id: e.tool_call_name for e in r.events if e.type.value == "TOOL_CALL_START"
+    }
+    results = {
+        names[e.tool_call_id]: e.metadata for e in r.events if e.type.value == "TOOL_CALL_RESULT"
+    }
+    assert results["create_panel"] == {
+        "status": "error",
+        "error": "Unknown panel type: pie3d",
+        "fix": "Use one of: bar, line, table",
+    }
+    assert results["run_query"] == {"status": "success"}

@@ -110,7 +110,7 @@ from ._client_tools import (
 )
 from ._interrupts import browser_resume_entries
 from ._sessions import inbound_sessions, sessions_delta
-from ._subagents import RunEvents, split_subagent_messages
+from ._subagents import RunEvents, ToolOutcomes, split_subagent_messages
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
@@ -766,6 +766,7 @@ def _build_session(
             ForwardedPropsHook(
                 apply_agent_config=bool(getattr(runtime_def, "allow_invocation_overrides", False))
             ),
+            ToolOutcomes(),
             *forwarded_hooks,
         ]
 

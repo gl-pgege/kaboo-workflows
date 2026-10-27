@@ -195,6 +195,14 @@ def _result_failure(result: Any) -> dict[str, str] | None:
     return failure
 
 
+def tool_outcome(event: AfterToolCallEvent) -> dict[str, str]:
+    """Return how a tool call ended: its ``status`` and, when it failed, ``error`` and ``fix``."""
+    failure = _result_failure(event.result) or {}
+    if event.exception:
+        failure["error"] = str(event.exception)[:_MAX_ERROR_LEN]
+    return {"status": "error" if failure else "success", **failure}
+
+
 def _literal_dict(text: str) -> dict[str, Any]:
     """Return ``text`` read as a Python dict literal, or ``{}`` when it is not one."""
     if not text.startswith("{"):
@@ -525,10 +533,8 @@ class EventPublisher(HookProvider):
         tool_label = _resolve_tool_label(raw_name, self._tool_labels) or raw_name
         tool_use_id = event.tool_use.get("toolUseId", "")
 
-        failure = _result_failure(event.result) or {}
-        if event.exception:
-            failure["error"] = str(event.exception)[:_MAX_ERROR_LEN]
-        status = "error" if failure else "success"
+        outcome = tool_outcome(event)
+        status = outcome["status"]
 
         logger.debug(
             "TOOL_END agent=%s tool=%s tool_use_id=%s status=%s",
@@ -542,8 +548,8 @@ class EventPublisher(HookProvider):
             "tool_label": tool_label,
             "tool_use_id": tool_use_id,
             "status": status,
-            "error": failure.get("error") or None,
-            "fix": failure.get("fix"),
+            "error": outcome.get("error") or None,
+            "fix": outcome.get("fix"),
             "tool_result": _extract_result_text(event.result, self._max_result_len),
         }
         approvals = (getattr(event, "invocation_state", None) or {}).get(APPROVALS_STATE_KEY)
