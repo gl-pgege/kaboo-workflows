@@ -858,6 +858,14 @@ class AppConfig(BaseModel):
     """
     attachments: AttachmentsDef = Field(default_factory=AttachmentsDef)
     """Global reference/attachment policy (manifest + optional resolver tool)."""
+    browser_actions: list[str] = Field(default_factory=list)
+    """Browser tools that act without answering, such as opening a canvas.
+
+    An agent whose ``client_tools`` names one gets a real tool with the name and
+    schema the client declared, which answers at once, so the agent goes on with
+    its turn in the same run. The client carries the call out from the stream,
+    as it does ``render_a2ui``. Every other browser tool waits for its answer.
+    """
     runtime: RuntimeDef = Field(default_factory=RuntimeDef)
     """Runtime behavior toggles (per-invocation agent overrides, …)."""
     telemetry: TelemetryDef = Field(default_factory=TelemetryDef)

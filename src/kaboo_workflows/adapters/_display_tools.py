@@ -6,6 +6,10 @@ appears, delegates' calls included. An agent whose ``client_tools`` names it
 gets a real tool that checks the components against the client's catalog and
 answers at once, so the agent goes on with its turn; a malformed surface comes
 back as an error the model corrects.
+
+A browser action (``browser_actions`` in the config) works the same way: the
+client declares the tool, the agent gets a real tool with that name and schema
+that answers at once, and the client carries the call out as it streams.
 """
 
 from __future__ import annotations
@@ -22,9 +26,11 @@ from ag_ui_a2ui_toolkit import (
     validate_a2ui_components,
 )
 from strands import Agent, tool
+from strands.tools.tools import PythonAgentTool
 
 RENDER_A2UI: str = RENDER_A2UI_TOOL_DEF["function"]["name"]
 DISPLAY_TOOLS = frozenset({RENDER_A2UI})
+ACTION_RESULT = "Done: the browser carried out this call as it arrived."
 
 _TRACKED = "_kaboo_display_tools"
 
@@ -70,8 +76,31 @@ def render_a2ui_tool(catalog: dict[str, Any]) -> Any:
     return render_a2ui
 
 
+def browser_action_tool(declared: Any) -> Any:
+    data = declared.model_dump() if hasattr(declared, "model_dump") else dict(declared)
+    name = str(data["name"])
+    spec = {
+        "name": name,
+        "description": str(data.get("description") or ""),
+        "inputSchema": {"json": data.get("parameters") or {"type": "object", "properties": {}}},
+    }
+
+    def answer(tool_use: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "toolUseId": tool_use["toolUseId"],
+            "status": "success",
+            "content": [{"text": ACTION_RESULT}],
+        }
+
+    answer.__name__ = name
+    return PythonAgentTool(tool_name=name, tool_spec=spec, tool_func=answer)  # ty: ignore[invalid-argument-type]
+
+
 def offer_display_tools(
-    agent: Agent, client_tools: Collection[str], catalog: dict[str, Any] | None
+    agent: Agent,
+    client_tools: Collection[str],
+    catalog: dict[str, Any] | None,
+    actions: Iterable[Any] = (),
 ) -> None:
     registry = agent.tool_registry
     wanted = (
@@ -79,6 +108,9 @@ def offer_display_tools(
         if catalog is not None and RENDER_A2UI in client_tools
         else {}
     )
+    for declared in actions:
+        if declared.name in client_tools:
+            wanted[declared.name] = browser_action_tool(declared)
     for name in getattr(agent, _TRACKED, set()) | set(wanted):
         registry.registry.pop(name, None)
         registry.dynamic_tools.pop(name, None)

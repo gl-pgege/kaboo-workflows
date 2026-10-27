@@ -2,12 +2,14 @@
 
 A browser tool is one the client declares in ``RunAgentInput.tools`` and runs
 itself: a question panel, a file request, opening a canvas. An agent may call
-the ones its ``client_tools`` lists. Every call waits: the run ends with the
-call in ``pendingToolCallIds``, the browser answers it with a tool message, and
-the next run hands the answer to the agent that asked. The entry agent waits on
+the ones its ``client_tools`` lists. A call waits: the run ends with the call
+in ``pendingToolCallIds``, the browser answers it with a tool message, and the
+next run hands the answer to the agent that asked. The entry agent waits on
 ag-ui-strands' own proxies; a delegated agent on the same proxies, whose wait
 the delegate wrapper forwards to the entry (see
-:func:`~kaboo_workflows.tools.wrappers.node_as_tool`).
+:func:`~kaboo_workflows.tools.wrappers.node_as_tool`). The config's
+``browser_actions`` never wait: each agent allowed one gets a real tool that
+answers at once (see :mod:`._display_tools`).
 
 The run's context (``RunAgentInput.context``) reaches every agent's model calls
 through :class:`~kaboo_workflows.hooks.ContextHook`. An item whose description
@@ -18,6 +20,7 @@ agents allowed it.
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable
+from contextvars import ContextVar
 from typing import Any
 
 from ag_ui.core import RunAgentInput
@@ -34,6 +37,7 @@ from ._strands_bridge import ensure_thread_agent
 
 _TRACKED = "_kaboo_client_tools"
 OPEN_GENERATIVE_UI = "generateSandboxedUi"
+_ACTIONS: ContextVar[tuple[Any, ...]] = ContextVar("kaboo_browser_actions", default=())
 
 
 def waiting(names: Iterable[str]) -> dict[str, ToolBehavior]:
@@ -139,15 +143,19 @@ def prepare_run(input_data: RunAgentInput, session: Any) -> list[str]:
             for key, value in input_data.forwarded_props.items()
             if key != "injectA2UITool"
         }
-    offered = [tool for tool in input_data.tools or [] if tool.name not in DISPLAY_TOOLS]
+    declared = [tool for tool in input_data.tools or [] if tool.name not in DISPLAY_TOOLS]
     resolved = session.resolved
+    names = set(getattr(resolved.app_config, "browser_actions", None) or [])
+    actions = tuple(tool for tool in declared if tool.name in names)
+    offered = [tool for tool in declared if tool.name not in names]
+    _ACTIONS.set(actions)
     entry_def = entry_agent_def(resolved.app_config)
     input_data.tools = allowed(offered, entry_def.client_tools) if entry_def else []
     for agent, agent_def in running_agents(resolved.app_config, resolved):
         if agent is not resolved.entry:
-            offer_display_tools(agent, agent_def.client_tools, catalog)
+            offer_display_tools(agent, agent_def.client_tools, catalog, actions)
             offer_client_tools(agent, allowed(offered, agent_def.client_tools))
-    return [tool.name for tool in offered]
+    return [tool.name for tool in declared]
 
 
 async def equip_entry_agent(input_data: RunAgentInput, session: Any) -> None:
@@ -161,7 +169,9 @@ async def equip_entry_agent(input_data: RunAgentInput, session: Any) -> None:
     if session.orchestrated or entry_def is None:
         return
     agent = await ensure_thread_agent(session.agui_agent, input_data)
-    offer_display_tools(agent, entry_def.client_tools, a2ui_catalog(get_run_context()))
+    offer_display_tools(
+        agent, entry_def.client_tools, a2ui_catalog(get_run_context()), _ACTIONS.get()
+    )
 
 
 def take_browser_answers(

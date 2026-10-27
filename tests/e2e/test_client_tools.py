@@ -52,6 +52,29 @@ async def test_the_entry_agent_waits_for_the_browser_and_reads_its_answer() -> N
     assert "Looking at Europe." in r2.text()
 
 
+SHOW_CANVAS = Tool(
+    name="show_canvas",
+    description="Open a canvas beside the chat.",
+    parameters={
+        "type": "object",
+        "properties": {"canvas": {"type": "string"}, "ref": {"type": "string"}},
+    },
+)
+
+
+async def test_a_browser_action_goes_on_at_once_and_the_run_ends_with_nothing_pending() -> None:
+    pipe = Pipeline(str(CONFIGS / "client_tools_action.yaml"))
+    r = await pipe.turn("show me", thread_id="b-action", run_id="r1", tools=[ASK_USER, SHOW_CANVAS])
+
+    assert r.finished() and not r.errored()
+    assert not r.run_outcome().pending_tool_call_ids
+    [call] = r.of_type(AGUIEventType.TOOL_CALL_START)
+    assert call.tool_call_name == "show_canvas"
+    [result] = r.of_type(AGUIEventType.TOOL_CALL_RESULT)
+    assert result.tool_call_id == call.tool_call_id
+    assert "revenue rose 12%" in r.text()
+
+
 async def test_a_delegated_agent_asks_the_browser_and_its_answer_comes_back_to_it() -> None:
     pipe = Pipeline(str(CONFIGS / "client_tools_delegate.yaml"))
     r1 = await pipe.turn("go", thread_id="b2", run_id="r1", tools=[ASK_USER])

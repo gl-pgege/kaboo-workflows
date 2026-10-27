@@ -1,0 +1,17 @@
+# The entry agent opens a canvas, a browser action, and goes on with its answer.
+x-model: &m kaboo_workflows.testing:ScriptedModel
+
+browser_actions: [show_canvas]
+
+agents:
+  analyst:
+    client_tools: [ask_user, show_canvas]
+    model:
+      provider: *m
+      model_id: scripted
+      params:
+        script:
+          - {tool: show_canvas, input: {canvas: dashboard, ref: d-1}}
+        final_text: "Opened the dashboard; revenue rose 12%."
+
+entry: analyst

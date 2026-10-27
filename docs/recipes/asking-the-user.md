@@ -70,6 +70,27 @@ function BrowserTools() {
   and the agent answers the message
   ([The person can move on](../workflows/human-in-the-loop.md#the-person-can-move-on)).
 
+## A browser tool that acts without answering
+
+Some browser tools do something rather than ask: opening a canvas beside the
+chat, say. Nothing comes back for the agent to wait for, so list them under
+`browser_actions` at the top level:
+
+```yaml
+browser_actions: [show_canvas]
+
+agents:
+  assistant:
+    client_tools: [ask_user, show_canvas]
+```
+
+An agent whose `client_tools` names one gets a real tool, with the name,
+description and schema the client declared, that answers at once. The run
+never pauses on it: the agent goes on with its turn in the same run, and the
+client carries the call out when it arrives, typically when the call's status
+turns `complete`. A thread reloaded later shows the call already complete, so
+the client acts only on that transition, not on every render.
+
 ## A request that needs the server
 
 When answering a request takes server logic — checking the person may use a
