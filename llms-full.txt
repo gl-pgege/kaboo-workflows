@@ -2033,6 +2033,7 @@ agents:
 |-----|---------|---------|
 | `trigger` | *(required)* | Estimated input tokens (system prompt plus messages, four characters a token) above which results are cleared before a model call. The `structuredContent` strands keeps beside an MCP tool's result isn't counted, since no model is sent it. |
 | `keep_last` | `3` | How many of the most recent turns keep their results; at least 1. A turn is every result of one model response, so a batch of parallel calls stays or goes together, and the newest batch, which the model has not read yet, is always sent whole. |
+| `step` | `keep_last` | How many turns are cleared at once. Results are cleared in whole steps, so between two steps the copy sent to the model changes only at its end and a cached prompt prefix keeps applying; the most recent turns that keep their results number from `keep_last` to `keep_last + step - 1`. `1` clears a turn as soon as it leaves the last `keep_last`. |
 | `min_chars` | `1500` | Results shorter than this many characters always stay. |
 | `keep_tools` | `[]` | Tools whose results always stay. |
 
@@ -2074,6 +2075,7 @@ and its error, which is what lets it correct the name.
 >
 > - Conversation managers are per-agent. Different agents in the same config can use different strategies.
 > - For orchestration coordinators that do a lot of delegating, `SlidingWindowConversationManager` with a generous `window_size` prevents context overflow from long delegate tool results.
+> - Behind the AG-UI adapter, the entry agent's messages are rebuilt from the chat on every run, so its conversation manager is also applied as each run starts, not only after it: a window holds from the run's first model call.
 > - Unlike session managers, there's no "global" conversation manager — set it on each agent that needs one.
 
 ---
@@ -2414,7 +2416,9 @@ A **server** is a process, so it belongs to the process that started it. A **cli
 - Serving one fixed config (`create_agui_app("config.yaml")`), clients are opened once and held for the process, so every run reuses them.
 - Serving runs that submit their own config (`session_config_key=`, see [Chapter 17](Chapter_17.md)), each run resolves its own clients and they are closed when its stream ends.
 
-Per-run clients cost a handshake per client per turn, which is small beside a model call, and they buy two things worth more than that. `MCPClientError: the client session is not running` stops being possible rather than being retried, because a session that cannot outlive its run cannot be found dead at the start of the next one. And `relay` auth becomes reachable, because strands captures the ambient identity when a client *starts* — a client started at boot has no caller to relay.
+A run's clients that differ only in their `tool_filters` share one session: a config that splits one gateway into a dozen clients, so each agent gets its own slice of the tools, opens one session per run and lists the gateway's tools once, and each client offers its agents the tools its own filters keep.
+
+Per-run clients cost a handshake per connection per turn, which is small beside a model call, and they buy two things worth more than that. `MCPClientError: the client session is not running` stops being possible rather than being retried, because a session that cannot outlive its run cannot be found dead at the start of the next one. And `relay` auth becomes reachable, because strands captures the ambient identity when a client *starts* — a client started at boot has no caller to relay.
 
 Servers are still shared either way, so a `server:` client declared by a run binds to the process's already-running server.
 
@@ -4794,6 +4798,27 @@ function BrowserTools() {
   and the agent answers the message
   ([The person can move on](../workflows/human-in-the-loop.md#the-person-can-move-on)).
 
+## A browser tool that acts without answering
+
+Some browser tools do something rather than ask: opening a canvas beside the
+chat, say. Nothing comes back for the agent to wait for, so list them under
+`browser_actions` at the top level:
+
+```yaml
+browser_actions: [show_canvas]
+
+agents:
+  assistant:
+    client_tools: [ask_user, show_canvas]
+```
+
+An agent whose `client_tools` names one gets a real tool, with the name,
+description and schema the client declared, that answers at once. The run
+never pauses on it: the agent goes on with its turn in the same run, and the
+client carries the call out when it arrives, typically when the call's status
+turns `complete`. A thread reloaded later shows the call already complete, so
+the client acts only on that transition, not on every render.
+
 ## A request that needs the server
 
 When answering a request takes server logic — checking the person may use a
@@ -4933,8 +4958,10 @@ wire as AG-UI's own sub-agent events, and kaboo-react folds them into cards.
 ## What the client receives
 
 The entry agent's stream *is* the chat reply: its text and tool calls arrive as
-ordinary AG-UI events. Each agent it delegates to, at any depth, arrives as one
-invocation:
+ordinary AG-UI events, and each of its `TOOL_CALL_RESULT`s carries the same
+`metadata.status` (`success` or `error`, with the `error` and any `fix` for a
+failed call) as a sub-agent's below. Each agent it delegates to, at any depth,
+arrives as one invocation:
 
 - **`SUBAGENT_STARTED`** opens it, with a `subagentRunId`, the agent's `name`,
   the `parentToolCallId` of the delegating call and the
