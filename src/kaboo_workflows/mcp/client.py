@@ -6,8 +6,12 @@ No wrapping — full strands functionality is available.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from re import Pattern
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
+
+from strands.tools.tool_provider import ToolProvider
 
 from .transports import (
     DEFAULT_TRANSPORT,
@@ -19,8 +23,54 @@ from .transports import (
 
 if TYPE_CHECKING:
     from strands.tools.mcp import MCPClient
+    from strands.types.tools import AgentTool
 
     from .server import MCPServer
+
+
+class ToolView(ToolProvider):
+    """One configured client's tools, served from a connection it shares.
+
+    Clients that differ only in their ``tool_filters`` connect the same way, so
+    they share one :class:`MCPClient`: one session, and one tool listing, which
+    the client caches. Each view applies its own client's filters to that list.
+    """
+
+    def __init__(self, shared: MCPClient, tool_filters: dict[str, Any] | None = None) -> None:
+        self.shared = shared
+        self._filters = tool_filters or {}
+
+    async def load_tools(self, **kwargs: Any) -> Sequence[AgentTool]:
+        tools = await self.shared.load_tools(**kwargs)
+        return [tool for tool in tools if self._keeps(tool)]
+
+    def add_consumer(self, consumer_id: Any, **kwargs: Any) -> None:
+        self.shared.add_consumer(consumer_id, **kwargs)
+
+    def remove_consumer(self, consumer_id: Any, **kwargs: Any) -> None:
+        self.shared.remove_consumer(consumer_id, **kwargs)
+
+    def stop(self, exc_type: Any = None, exc_val: Any = None, exc_tb: Any = None) -> None:
+        self.shared.stop(exc_type, exc_val, exc_tb)
+
+    def _keeps(self, tool: Any) -> bool:
+        allowed = self._filters.get("allowed")
+        rejected = self._filters.get("rejected")
+        return (allowed is None or _matches(tool, allowed)) and not (
+            rejected and _matches(tool, rejected)
+        )
+
+
+def _matches(tool: Any, patterns: list[Any]) -> bool:
+    name = tool.mcp_tool.name
+    return any(
+        pattern(tool)
+        if callable(pattern)
+        else pattern.match(name)
+        if isinstance(pattern, Pattern)
+        else pattern == name
+        for pattern in patterns
+    )
 
 
 def create_mcp_client(

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from ...exceptions import ConfigurationError
 from ...hooks._transcript import DEFAULT_MIN_CHARS
 from ...hooks.history_hook import HistoryPolicy
 from ...manifest import build_manifest
+from ...mcp.client import ToolView
 from ...mcp.lifecycle import MCPLifecycle
 from ...wire import make_event_queue
 from .mcp import resolve_mcp_client, resolve_mcp_server
@@ -542,6 +544,10 @@ def resolve_run_clients(config: AppConfig, infra: ResolvedInfra) -> MCPLifecycle
     lifecycle in ``infra`` — so a ``stdio`` client in ``config`` binds to the
     already-running server of the same name.
 
+    Clients that differ only in their ``tool_filters`` share one connection, so
+    a run opens one session and lists tools once per server it reaches; each
+    named client is a :class:`~kaboo_workflows.mcp.client.ToolView` over it.
+
     Args:
         config: The config for this run, which may declare clients the base
             config does not.
@@ -556,7 +562,14 @@ def resolve_run_clients(config: AppConfig, infra: ResolvedInfra) -> MCPLifecycle
     """
     servers = infra.mcp_lifecycle.servers
     lifecycle = MCPLifecycle()
+    shared: dict[str, StrandsMCPClient] = {}
     for name, client_def in config.mcp_clients.items():
-        lifecycle.add_client(name, resolve_mcp_client(client_def, servers, name=name))
+        params = dict(client_def.params)
+        filters = params.pop("tool_filters", None)
+        connection = client_def.model_copy(update={"params": params})
+        key = json.dumps(connection.model_dump(), sort_keys=True, default=repr)
+        if key not in shared:
+            shared[key] = resolve_mcp_client(connection, servers, name=name)
+        lifecycle.add_client(name, cast("Any", ToolView(shared[key], filters)))
         logger.debug("client=<%s> | resolved MCP client for this run", name)
     return lifecycle

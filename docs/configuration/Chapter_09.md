@@ -330,7 +330,9 @@ A **server** is a process, so it belongs to the process that started it. A **cli
 - Serving one fixed config (`create_agui_app("config.yaml")`), clients are opened once and held for the process, so every run reuses them.
 - Serving runs that submit their own config (`session_config_key=`, see [Chapter 17](Chapter_17.md)), each run resolves its own clients and they are closed when its stream ends.
 
-Per-run clients cost a handshake per client per turn, which is small beside a model call, and they buy two things worth more than that. `MCPClientError: the client session is not running` stops being possible rather than being retried, because a session that cannot outlive its run cannot be found dead at the start of the next one. And `relay` auth becomes reachable, because strands captures the ambient identity when a client *starts* — a client started at boot has no caller to relay.
+A run's clients that differ only in their `tool_filters` share one session: a config that splits one gateway into a dozen clients, so each agent gets its own slice of the tools, opens one session per run and lists the gateway's tools once, and each client offers its agents the tools its own filters keep.
+
+Per-run clients cost a handshake per connection per turn, which is small beside a model call, and they buy two things worth more than that. `MCPClientError: the client session is not running` stops being possible rather than being retried, because a session that cannot outlive its run cannot be found dead at the start of the next one. And `relay` auth becomes reachable, because strands captures the ambient identity when a client *starts* — a client started at boot has no caller to relay.
 
 Servers are still shared either way, so a `server:` client declared by a run binds to the process's already-running server.
 
