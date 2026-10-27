@@ -205,6 +205,7 @@ def clear_tool_results(
     min_chars: int,
     kept: Collection[str],
     tools: Collection[str],
+    step: int = 1,
 ) -> list[dict[str, Any]]:
     """Replace every ``toolResult`` outside the last ``keep_last`` turns with a placeholder.
 
@@ -229,6 +230,9 @@ def clear_tool_results(
         kept: Tools whose results are never cleared (``keep_tools`` plus the
             agent's delegates).
         tools: Names of the tools the agent has.
+        step: Turns clear this many at a time: the cleared count is rounded
+            down to a multiple of ``step``, so the cleared turns change once
+            every ``step`` new turns.
 
     Returns:
         The conversation with the older results cleared.
@@ -241,7 +245,8 @@ def clear_tool_results(
         if "toolResult" in block
     ]
     turns = sorted({i for i, _ in places})
-    recent = set(turns[max(len(turns) - keep_last, 0) :])
+    clearable = max(len(turns) - keep_last, 0)
+    recent = set(turns[clearable - clearable % max(step, 1) :])
     cleared = list(messages)
     for i, j in places:
         if i in recent:

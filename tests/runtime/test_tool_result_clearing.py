@@ -126,6 +126,17 @@ def _batches(*sizes: int) -> list[Any]:
     return messages
 
 
+def test_turns_clear_a_step_at_a_time_so_the_cached_prefix_changes_once_per_step() -> None:
+    def cleared_count(turns: int) -> int:
+        messages = _transcript(*[("athena___run_query", f"{n}{BIG}") for n in range(turns)])
+        sent = clear_tool_results(
+            messages, keep_last=2, step=3, min_chars=1500, kept=set(), tools=TOOLS
+        )
+        return sum(text.startswith("Result cleared") for text in _results(sent))
+
+    assert [cleared_count(turns) for turns in range(2, 11)] == [0, 0, 0, 3, 3, 3, 6, 6, 6]
+
+
 def test_a_batch_of_parallel_results_stays_or_goes_as_one_turn() -> None:
     messages = _batches(2, 3, 9)
 
@@ -273,7 +284,7 @@ async def test_the_hook_clears_only_past_its_trigger_and_the_agent_keeps_every_r
     agent = Agent(
         model=model,
         tools=[query],
-        hooks=[ContextHook(clear_trigger=trigger)],
+        hooks=[ContextHook(clear_trigger=trigger, clear_step=1)],
         messages=copy.deepcopy(history),
         callback_handler=None,
     )

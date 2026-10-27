@@ -123,6 +123,7 @@ class ContextHook(HookProvider):
         *,
         clear_trigger: int | None = None,
         keep_last: int = 3,
+        clear_step: int | None = None,
         min_chars: int = DEFAULT_MIN_CHARS,
         keep_tools: Collection[str] = (),
         client_tools: Collection[str] = (),
@@ -141,6 +142,8 @@ class ContextHook(HookProvider):
                 cleared before a model call. ``None`` never clears.
             keep_last: How many of the most recent turns of tool results always
                 stay; a turn is every result of one model response.
+            clear_step: How many turns clear at once (``keep_last`` when
+                ``None``), so a cached prefix changes once per step.
             min_chars: Tool results shorter than this always stay.
             keep_tools: Tools whose results always stay. A delegate's always do.
             client_tools: The browser tools the agent may call; context items
@@ -154,6 +157,7 @@ class ContextHook(HookProvider):
         """
         self._clear_trigger = clear_trigger
         self._keep_last = keep_last
+        self._clear_step = clear_step or keep_last
         self._min_chars = min_chars
         self._keep_tools = frozenset(keep_tools)
         self._client_tools = frozenset(client_tools)
@@ -203,6 +207,7 @@ class ContextHook(HookProvider):
             messages = clear_tool_results(
                 messages,
                 keep_last=self._keep_last,
+                step=self._clear_step,
                 min_chars=self._min_chars,
                 kept=self._keep_tools | delegate_tool_names(cast("Agent", context.agent)),
                 tools=tools,

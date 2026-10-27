@@ -206,6 +206,7 @@ def build_agent_from_def(
             ContextHook(
                 clear_trigger=clearing.trigger,
                 keep_last=clearing.keep_last,
+                clear_step=clearing.step,
                 min_chars=clearing.min_chars,
                 keep_tools=clearing.keep_tools,
                 client_tools=agent_def.client_tools,

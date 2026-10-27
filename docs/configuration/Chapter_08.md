@@ -88,6 +88,7 @@ agents:
 |-----|---------|---------|
 | `trigger` | *(required)* | Estimated input tokens (system prompt plus messages, four characters a token) above which results are cleared before a model call. The `structuredContent` strands keeps beside an MCP tool's result isn't counted, since no model is sent it. |
 | `keep_last` | `3` | How many of the most recent turns keep their results; at least 1. A turn is every result of one model response, so a batch of parallel calls stays or goes together, and the newest batch, which the model has not read yet, is always sent whole. |
+| `step` | `keep_last` | How many turns are cleared at once. Results are cleared in whole steps, so between two steps the copy sent to the model changes only at its end and a cached prompt prefix keeps applying; the most recent turns that keep their results number from `keep_last` to `keep_last + step - 1`. `1` clears a turn as soon as it leaves the last `keep_last`. |
 | `min_chars` | `1500` | Results shorter than this many characters always stay. |
 | `keep_tools` | `[]` | Tools whose results always stay. |
 

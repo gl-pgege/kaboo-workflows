@@ -382,10 +382,16 @@ class ClearToolResultsDef(BaseModel):
     always sent whole. Results under ``min_chars`` characters, results of tools
     in ``keep_tools`` and results of delegates are never cleared, and the calls
     themselves always stay. Only the copy sent to the model changes.
+
+    Turns clear ``step`` at a time (``keep_last`` when unset), so the messages a
+    prompt cache covers change once every ``step`` turns rather than on every
+    call: between clearings the kept turns grow from ``keep_last`` to
+    ``keep_last + step - 1``.
     """
 
     trigger: int = Field(gt=0)
     keep_last: int = Field(default=3, ge=1)
+    step: int | None = Field(default=None, ge=1)
     min_chars: int = Field(default=1500, ge=0)
     keep_tools: list[str] = Field(default_factory=list)
 
