@@ -213,9 +213,15 @@ class ContextHook(HookProvider):
         for text in (*bases, view, block):
             if text:
                 messages = with_context(messages, text)
+        trailing = context.dynamic_trailing_blocks
         if changes:
             messages = with_tail(messages, "\n\n".join(changes))
-        return replace(context, messages=cast("Messages", settle_cache_points(messages)))
+            trailing += 1
+        return replace(
+            context,
+            messages=cast("Messages", settle_cache_points(messages)),
+            dynamic_trailing_blocks=trailing,
+        )
 
     def _working_views(self, context: InvokeModelContext) -> tuple[list[str], list[str]]:
         if not self._views:

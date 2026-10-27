@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from strands import Agent, tool
+from strands.models.bedrock import BedrockModel, CacheConfig
 
 from kaboo_workflows._context import StateChannel, set_activity_context, set_state_channel
 from kaboo_workflows.config.resolvers.agents import build_agent_from_def
@@ -66,6 +67,45 @@ async def test_the_base_stays_on_the_human_message_and_changes_end_the_latest_on
     assert [request.first_call for request in seen] == [True, False, False]
     assert (seen[0].thread_id, seen[0].run_id) == ("thread-1", "run-1")
     assert agent.messages[0]["content"] == [{"text": "build it"}]
+
+
+class _TrailingModel(ScriptedModel):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.trailing: list[int] = []
+
+    async def stream(
+        self, messages: Any, tool_specs: Any = None, system_prompt: Any = None, **kwargs: Any
+    ):
+        self.trailing.append(kwargs.get("dynamic_trailing_blocks", 0))
+        async for event in super().stream(messages, tool_specs, system_prompt, **kwargs):
+            yield event
+
+
+async def test_changes_sit_after_the_cache_point_so_the_conversation_before_them_is_read_back() -> (
+    None
+):
+    seen: list[ViewRequest] = []
+    model = _TrailingModel(script=[{"tool": "lookup", "input": {"n": 1}}], final_text="done")
+    agent = Agent(
+        model=model,
+        tools=[lookup],
+        hooks=[ContextHook(views=[_recording_view(seen)])],
+        callback_handler=None,
+    )
+    await agent.invoke_async("build it")
+
+    assert model.trailing == [0, 1]
+    bedrock = BedrockModel(
+        model_id="us.anthropic.claude-sonnet-4-6",
+        region_name="us-east-1",
+        cache_config=CacheConfig(strategy="auto"),
+    )
+    calls: list[Any] = model.calls
+    last = bedrock.format_request(calls[1], dynamic_trailing_blocks=1)["messages"][-1]["content"]
+    assert last[-1] == {"text": "since v1: call 2"}
+    assert "cachePoint" in last[-2]
+    assert "toolResult" in last[0]
 
 
 async def test_a_failing_view_is_left_out() -> None:

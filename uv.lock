@@ -1447,9 +1447,9 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'telemetry'", specifier = ">=1.30.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyyaml", specifier = ">=6.0.0" },
-    { name = "strands-agents", specifier = ">=1.55.0,<2.0.0" },
+    { name = "strands-agents", specifier = ">=1.62.0,<2.0.0" },
     { name = "strands-agents", extras = ["gemini"], marker = "extra == 'gemini'", specifier = ">=1.55.0,<2.0.0" },
-    { name = "strands-agents", extras = ["ollama"], marker = "extra == 'ollama'", specifier = ">=1.55.0,<2.0.0" },
+    { name = "strands-agents", extras = ["ollama"], marker = "extra == 'ollama'", specifier = ">=1.62.0,<2.0.0" },
     { name = "strands-agents", extras = ["openai"], marker = "extra == 'openai'", specifier = ">=1.55.0,<2.0.0" },
     { name = "uvicorn", specifier = ">=0.20.0" },
 ]
