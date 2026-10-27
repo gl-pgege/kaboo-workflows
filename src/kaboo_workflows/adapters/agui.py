@@ -108,6 +108,7 @@ from ._client_tools import (
     take_browser_answers,
     waiting,
 )
+from ._entry_window import WindowOnStart
 from ._interrupts import browser_resume_entries
 from ._sessions import inbound_sessions, sessions_delta
 from ._subagents import RunEvents, ToolOutcomes, split_subagent_messages
@@ -767,6 +768,7 @@ def _build_session(
                 apply_agent_config=bool(getattr(runtime_def, "allow_invocation_overrides", False))
             ),
             ToolOutcomes(),
+            WindowOnStart(),
             *forwarded_hooks,
         ]
 

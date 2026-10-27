@@ -122,6 +122,41 @@ async def test_a_foreign_call_in_loaded_memory_reaches_the_model_as_a_note_and_i
     assert _turns(r.state()["kaboo_sessions"]["history"]["finance"][: len(memory)]) == memory
 
 
+async def test_the_entry_agents_window_holds_from_the_first_model_call_of_a_run():
+    pipe = Pipeline(
+        """
+models:
+  chat:
+    provider: kaboo_workflows.testing:ScriptedModel
+    model_id: scripted
+    params: {final_text: "ok"}
+agents:
+  assistant:
+    model: chat
+    conversation_manager:
+      type: strands.agent:SlidingWindowConversationManager
+      params: {window_size: 4}
+entry: assistant
+"""
+    )
+    chat = pipe.infra.models["chat"]
+    assert isinstance(chat, ScriptedModel)
+    transcript: list[Any] = []
+    for n in range(5):
+        transcript += [
+            UserMessage(id=f"u{n}", content=f"question {n}"),
+            AssistantMessage(id=f"a{n}", content=f"answer {n}"),
+        ]
+    transcript.append(UserMessage(id="u5", content="question 5"))
+
+    r = await pipe.turn(thread_id="w1", run_id="r1", messages=transcript)
+
+    assert not r.errored()
+    sent = chat.calls[0]
+    assert len(sent) <= 4
+    assert sent[-1]["content"][-1]["text"] == "question 5"
+
+
 async def test_a_bedrock_sub_agent_caches_its_loaded_memory_without_writing_the_point_back():
     pipe = Pipeline(str(CONFIGS / "memory_cache_point.yaml"))
     claude = pipe.infra.models["claude"]

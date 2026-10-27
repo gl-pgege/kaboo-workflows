@@ -130,6 +130,7 @@ and its error, which is what lets it correct the name.
 >
 > - Conversation managers are per-agent. Different agents in the same config can use different strategies.
 > - For orchestration coordinators that do a lot of delegating, `SlidingWindowConversationManager` with a generous `window_size` prevents context overflow from long delegate tool results.
+> - Behind the AG-UI adapter, the entry agent's messages are rebuilt from the chat on every run, so its conversation manager is also applied as each run starts, not only after it: a window holds from the run's first model call.
 > - Unlike session managers, there's no "global" conversation manager — set it on each agent that needs one.
 
 ---
