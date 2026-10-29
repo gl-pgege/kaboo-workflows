@@ -27,6 +27,8 @@ _CLEARED_PREFIX = "Result cleared ("
 _CLEARED_SUFFIX = "): call it again to see it."
 _ID_SUFFIXES = ("id", "Id", "ID")
 _MAX_IDS = 10
+_MEDIA_BLOCKS = ("image", "document", "video")
+_MEDIA_TOKENS = 1600
 _REMEMBER = re.compile(
     r"^[ \t]*(?:(#{1,6})[ \t]+)?(?:\*\*|__)?to remember\b", re.IGNORECASE | re.MULTILINE
 )
@@ -42,16 +44,42 @@ def estimate_tokens(messages: list[dict[str, Any]], system_prompt: Any = None) -
     """Estimate the tokens of ``messages`` and ``system_prompt`` at four characters each.
 
     A tool result's ``structuredContent`` is not counted: strands keeps it beside
-    the ``content`` of an MCP tool's result, and no model is sent it.
+    the ``content`` of an MCP tool's result, and no model is sent it. An image,
+    document or video counts as 1,600 tokens, about what a model charges for a
+    screenshot, rather than as the characters of its bytes.
     """
-    text = json.dumps(_as_sent(messages), ensure_ascii=False, default=str)
+    sent, media = _without_media(_as_sent(messages))
+    text = json.dumps(sent, ensure_ascii=False, default=str)
     if system_prompt:
         text += (
             system_prompt
             if isinstance(system_prompt, str)
             else json.dumps(system_prompt, ensure_ascii=False, default=str)
         )
-    return len(text) // 4
+    return len(text) // 4 + media * _MEDIA_TOKENS
+
+
+def _without_media(messages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """``messages`` without their media blocks, tool results' included, and how many."""
+    count = 0
+
+    def kept(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        nonlocal count
+        out: list[dict[str, Any]] = []
+        for block in blocks:
+            if any(kind in block for kind in _MEDIA_BLOCKS):
+                count += 1
+                continue
+            result = block.get("toolResult")
+            if result and result.get("content"):
+                inner = kept(result["content"])
+                if len(inner) != len(result["content"]):
+                    block = {**block, "toolResult": {**result, "content": inner}}
+            out.append(block)
+        return out
+
+    stripped = [{**m, "content": kept(m["content"])} if m.get("content") else m for m in messages]
+    return stripped, count
 
 
 def _as_sent(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

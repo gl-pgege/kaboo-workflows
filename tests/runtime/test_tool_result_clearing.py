@@ -193,6 +193,41 @@ def test_the_estimate_leaves_out_what_no_model_is_sent() -> None:
     assert estimate_tokens(_with_structured(messages, {"rows": BIG})) == estimate_tokens(messages)
 
 
+def _with_screenshot(messages: list[Any], size: int = 800_000) -> list[Any]:
+    """``messages`` with an image of ``size`` bytes added to the last tool result."""
+    shot = copy.deepcopy(messages)
+    last = [b for m in shot for b in m["content"] if "toolResult" in b][-1]
+    last["toolResult"]["content"].append(
+        {"image": {"format": "png", "source": {"bytes": b"\x89PNG" + bytes(size)}}}
+    )
+    return shot
+
+
+def test_an_image_counts_as_a_fixed_cost_rather_than_its_bytes() -> None:
+    messages = _transcript(("dashboard-studio___screenshot", "The page."))
+
+    assert estimate_tokens(_with_screenshot(messages)) == estimate_tokens(messages) + 1600
+    assert estimate_tokens(_with_screenshot(messages, size=10)) == estimate_tokens(
+        _with_screenshot(messages)
+    )
+
+
+async def test_a_screenshot_alone_does_not_push_the_hook_past_its_trigger() -> None:
+    history = _with_screenshot(_transcript(*[("query", BIG)] * 4))
+    model = ScriptedModel(final_text="done")
+    agent = Agent(
+        model=model,
+        tools=[query],
+        hooks=[ContextHook(clear_trigger=50_000, clear_step=1)],
+        messages=copy.deepcopy(history),
+        callback_handler=None,
+    )
+
+    await agent.invoke_async("next")
+
+    assert _results(model.calls[-1]) == [BIG] * 4
+
+
 def test_keep_last_below_one_is_rejected() -> None:
     with pytest.raises(ValueError, match="keep_last"):
         agent_def(model="m", context={"clear_tool_results": {"trigger": 100, "keep_last": 0}})
