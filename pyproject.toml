@@ -59,7 +59,7 @@ eval-deepeval = [
     "deepeval>=3.0.0",
 ]
 langfuse = [
-    "langfuse>=3.0.0,<5",
+    "langfuse>=3.0.0,<6",
 ]
 
 [project.urls]
