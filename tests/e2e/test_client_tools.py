@@ -163,6 +163,14 @@ A2UI_CATALOG = Context(
     description=A2UI_SCHEMA_CONTEXT_DESCRIPTION,
     value=json.dumps({"catalogId": "lab", "components": {"Text": {"type": "object"}}}),
 )
+A2UI_CAPABILITIES = Context(
+    description="A2UI catalog capabilities: available catalog IDs and custom component definitions the client can render.",
+    value="Available A2UI catalog: lab-capabilities",
+)
+A2UI_GUIDELINES = Context(
+    description="A2UI generation guidelines — protocol rules, tool arguments, path rules, data model format, and form/two-way-binding instructions.",
+    value="lab-guidelines",
+)
 
 
 async def test_a_delegate_renders_a2ui_without_waiting_and_corrects_a_malformed_surface() -> None:
@@ -245,12 +253,20 @@ async def test_an_action_on_a_surface_reaches_the_agent_as_the_persons_turn() ->
 async def test_render_a2ui_and_its_catalog_reach_only_the_agents_allowed_it() -> None:
     RecordingModel.seen.clear()
     pipe = Pipeline(str(CONFIGS / "client_tools_context.yaml"))
-    r = await pipe.turn("go", thread_id="a2", run_id="r1", tools=[ASK_USER], context=[A2UI_CATALOG])
+    r = await pipe.turn(
+        "go",
+        thread_id="a2",
+        run_id="r1",
+        tools=[ASK_USER],
+        context=[A2UI_CATALOG, A2UI_CAPABILITIES, A2UI_GUIDELINES],
+    )
 
     assert r.finished() and not r.errored()
     coordinator, worker = RecordingModel.seen["coordinator"][0], RecordingModel.seen["worker"][0]
-    assert A2UI_SCHEMA_CONTEXT_DESCRIPTION not in coordinator
-    assert A2UI_SCHEMA_CONTEXT_DESCRIPTION not in worker
+    for seen in (coordinator, worker):
+        assert A2UI_SCHEMA_CONTEXT_DESCRIPTION not in seen
+        assert "lab-capabilities" not in seen
+        assert "lab-guidelines" not in seen
 
 
 async def test_context_reaches_every_agent_and_a_tools_context_only_its_agents() -> None:

@@ -88,9 +88,7 @@ def allowed(tools: Iterable[Any], client_tools: Collection[str]) -> list[Any]:
 
 
 def _owning_tool(description: str) -> str | None:
-    if description == A2UI_SCHEMA_CONTEXT_DESCRIPTION or description.startswith(
-        "A2UI render tool usage guide"
-    ):
+    if description == A2UI_SCHEMA_CONTEXT_DESCRIPTION or description.startswith("A2UI "):
         return RENDER_A2UI
     if OPEN_GENERATIVE_UI in description or "Websandbox" in description:
         return OPEN_GENERATIVE_UI
